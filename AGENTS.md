@@ -5,6 +5,7 @@
 ## 먼저 읽을 문서
 
 - [구조와 흐름](docs/architecture.md): 개념, 구성 요소, 단계별 경계.
+- [코딩 컨벤션](docs/coding-conventions.md): 가독성, 이름, 함수 책임, 함수 표현식과 주석 작성 기준.
 - [보안과 승인](docs/security-and-approval.md): 데이터 접근, 실행, 외부 전송의 필수 조건.
 - [구현 계획](docs/implementation-plan.md): 기존 계획서를 이 경로에 두며, 구현 순서와 상세 수용 기준의 기준 문서로 사용한다.
 
