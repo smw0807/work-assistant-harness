@@ -1,0 +1,13 @@
+[
+  {
+    "event_id": "Ev_redaction",
+    "team_id": "W_LOCAL",
+    "event": {
+      "type": "message",
+      "user": "U_REQUESTER",
+      "channel": "C_ALLOWED",
+      "ts": "1700000000.000001",
+      "text": "<@U_OWNER> API_KEY=SYNTHETIC_NOT_A_REAL_CREDENTIAL 입력 마스킹을 확인해 주세요."
+    }
+  }
+]

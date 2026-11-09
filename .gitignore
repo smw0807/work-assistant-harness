@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.pnpm-store/
+.env
+.env.*
+!.env.example
+config/local.json
+*.sqlite*
+reports/
+runtime/
+logs/
+worktrees/
+coverage/
+.DS_Store

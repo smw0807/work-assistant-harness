@@ -1,0 +1,13 @@
+[
+  {
+    "event_id": "Ev_self",
+    "team_id": "W_LOCAL",
+    "event": {
+      "type": "message",
+      "user": "U_OWNER",
+      "channel": "C_ALLOWED",
+      "ts": "1700000000.000001",
+      "text": "<@U_OWNER> 소유자의 자기 메시지입니다."
+    }
+  }
+]

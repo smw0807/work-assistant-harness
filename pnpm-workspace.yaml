@@ -1,0 +1,4 @@
+minimumReleaseAgeExclude:
+  - '@nestjs/common@12.4.2'
+  - '@nestjs/core@12.4.2'
+  - isomorphic-git@1.44.12

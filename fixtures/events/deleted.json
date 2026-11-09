@@ -1,0 +1,14 @@
+[
+  {
+    "event_id": "Ev_deleted",
+    "team_id": "W_LOCAL",
+    "event": {
+      "type": "message",
+      "user": "U_REQUESTER",
+      "channel": "C_ALLOWED",
+      "ts": "1700000000.000001",
+      "text": "<@U_OWNER> 삭제된 메시지입니다.",
+      "subtype": "message_deleted"
+    }
+  }
+]

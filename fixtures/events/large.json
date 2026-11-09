@@ -1,0 +1,13 @@
+[
+  {
+    "event_id": "Ev_large",
+    "team_id": "W_LOCAL",
+    "event": {
+      "type": "message",
+      "user": "U_REQUESTER",
+      "channel": "C_ALLOWED",
+      "ts": "1700000000.000001",
+      "text": "<@U_OWNER> 큰 파일 읽기 제한을 확인해 주세요."
+    }
+  }
+]

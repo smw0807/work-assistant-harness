@@ -4,6 +4,8 @@
 
 이 문서는 `work-assistant-harness`의 **구현 제안**을 설명한다. 폴더, 인터페이스, 상태와 어댑터 이름은 설계안이며, 해당 코드나 명령이 이미 존재한다는 뜻이 아니다.
 
+2026-11-09에 단계 0의 최소 기반과 단계 1의 합성 자료 기반 읽기 전용 CLI를 구현했다. 실제 구현 경계와 검증 결과는 [stage-1-result.md](stage-1-result.md)를 따른다. 승인·실행·외부 연결 부분은 계속 설계안이다.
+
 - 구현 순서와 상세 수용 기준: [implementation-plan.md](implementation-plan.md)
 - 권한과 승인 조건: [security-and-approval.md](security-and-approval.md)
 - Codex 개발 지침: [루트 AGENTS.md](../AGENTS.md)

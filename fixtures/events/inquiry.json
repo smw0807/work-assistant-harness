@@ -1,0 +1,13 @@
+[
+  {
+    "event_id": "Ev_inquiry",
+    "team_id": "W_LOCAL",
+    "event": {
+      "type": "message",
+      "user": "U_REQUESTER",
+      "channel": "C_ALLOWED",
+      "ts": "1700000000.000001",
+      "text": "<@U_OWNER> 중복 주문 요청이 충돌 응답을 반환하는 이유를 알려 주세요."
+    }
+  }
+]
