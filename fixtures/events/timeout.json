@@ -1,0 +1,13 @@
+[
+  {
+    "event_id": "Ev_timeout",
+    "team_id": "W_LOCAL",
+    "event": {
+      "type": "message",
+      "user": "U_REQUESTER",
+      "channel": "C_ALLOWED",
+      "ts": "1700000000.000001",
+      "text": "<@U_OWNER> 고정 모델 시간 초과를 재현합니다."
+    }
+  }
+]

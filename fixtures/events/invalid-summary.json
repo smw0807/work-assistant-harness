@@ -1,0 +1,13 @@
+[
+  {
+    "event_id": "Ev_invalid_summary",
+    "team_id": "W_LOCAL",
+    "event": {
+      "type": "message",
+      "user": "U_REQUESTER",
+      "channel": "C_ALLOWED",
+      "ts": "1700000000.000001",
+      "text": "<@U_OWNER> 확인하지 않은 근거를 사용하는 응답을 재현합니다."
+    }
+  }
+]

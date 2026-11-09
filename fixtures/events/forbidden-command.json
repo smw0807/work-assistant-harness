@@ -1,0 +1,13 @@
+[
+  {
+    "event_id": "Ev_forbidden_command",
+    "team_id": "W_LOCAL",
+    "event": {
+      "type": "message",
+      "user": "U_REQUESTER",
+      "channel": "C_ALLOWED",
+      "ts": "1700000000.000001",
+      "text": "<@U_OWNER> 모델의 미등록 명령 제안 차단을 확인해 주세요."
+    }
+  }
+]
