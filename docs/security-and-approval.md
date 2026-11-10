@@ -4,7 +4,7 @@
 
 이 문서는 구현할 보안 요구사항이다. 문서를 작성하거나 `AGENTS.md`에 규칙을 넣었다는 이유로 보호 장치가 작동한다고 간주하지 않는다. 코드, 권한 설정과 실패 테스트로 검증한 기능만 사용한다.
 
-단계 0·1의 구현과 테스트 결과는 [stage-1-result.md](stage-1-result.md), 단계 2 수신 어댑터·CLI·오프라인 테스트는 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인·취소와 영속 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-A는 실제 실행을 열지 않는다. 현재 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며, 후속 단계의 악성 코드 실행용 보안 격리를 충족했다고 주장하지 않는다.
+단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 합성 Docker 격리 진단과 실제 backend의 검증 결과는 [stage-3b-result.md](stage-3b-result.md)를 따른다. 진단이 통과해도 대상 코드 실행을 열지 않는다. 현재 조사 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
 
 전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 범위는 합성 데이터 기반의 로컬 조사이며 실제 회사 계정과 코드를 연결하지 않는다.
 
@@ -101,6 +101,22 @@ MVP의 승인 경로는 로컬 CLI뿐이다. 현재 OS 사용자와 승인 저�
 
 위 실행 격리는 단계 3-B 이후의 요구사항이다. 지원할 backend와 버전, 준비·검증 실패 시 거부 조건을 정하고 호스트 파일·원본·승인 DB·공유 Git 메타데이터·외부 통신 차단을 실제 환경에서 실증한 뒤 실행 기능을 연다. 단계 3-C는 고정 합성 patch부터 시작하고 명령의 실행 파일·argv·cwd·환경·네트워크·자원 한도와 정책 버전을 승인 계획에 묶는다. 단계 3-D는 실시간 수신과 실행 잠금·요청 무효화 경합, 프로세스 트리 취소와 crash 복구를 검증한다. 상세 순서와 수용 기준은 [단계 3 계획](implementation-plan.md#단계-3-승인-후-코드-변경)을 따른다.
 
+### 단계 3-B의 합성 Docker 진단
+
+`sandbox-check`는 고정 합성 probe를 검증하는 전용 경로다. 초기 지원은 macOS `darwin/arm64`와 Docker Desktop의 Linux `aarch64` daemon, cgroup v2, 기본 seccomp다. 명시한 로컬 Unix socket과 정확한 Engine·이미지·Node·`docker-probe-v1` 정책 identity를 검사한다. 비활성 설정에서는 Docker에 접속하지 않는다. 지원 밖 환경, 준비 실패, 유효 정책 불일치와 정지·제거 미확인은 차단 또는 실패로 기록한다. 로컬 이미지가 없을 때 자동으로 다운로드하거나 다른 backend에서 재시도하지 않는다.
+
+진단 controller는 신뢰하는 하네스 코드이며 `/usr/local/bin/docker`를 shell 없이 고정 argv로 호출한다. 새로운 `0700` Docker 설정 디렉터리가 비었는지 확인하고 명시적인 socket, 최소 환경변수를 사용한다. 기본 사용자 Docker 설정에는 인증된 proxy 주소가 포함될 수 있고 새 container에 자동 주입되므로 읽지 않는다. 이미지의 환경변수와 `VOLUME`도 검사하고, 고정 entrypoint와 비활성 healthcheck로 이미지 기본 동작을 제한한다. [Docker CLI proxy 설정](https://docs.docker.com/engine/cli/proxy/), [Dockerfile의 ENV·VOLUME](https://docs.docker.com/reference/dockerfile/)
+
+container 정책은 nonroot UID/GID `1000:1000`, 읽기 전용 root, 모든 capability 제거, 권한 상승 금지, private cgroup·IPC, 기본 seccomp다. `--network none`으로 loopback만 두고 TCP·DNS 실패를 함께 확인한다. workspace 한 곳만 bind mount하며 원본·하네스·승인 DB·공유 Git·홈·Docker socket은 마운트하지 않는다. `--ipc none`으로 `/dev/shm`의 추가 쓰기 영역을 없애고 daemon의 외부 log driver를 사용하지 않는다. [Docker 실행 옵션](https://docs.docker.com/reference/cli/docker/container/run/), [none 네트워크](https://docs.docker.com/engine/network/drivers/none/), [기본 seccomp](https://docs.docker.com/engine/security/seccomp/)
+
+합성 보호 파일의 절대경로·경로 탈출·symlink·`/proc/1/root` 접근 실패와 전후 hash 동일 여부를 확인한다. 쓰기가 허용된 workspace의 positive control도 필요하다. 호스트의 실제 비밀이나 승인 DB를 검사 자료로 사용하지 않는다. Docker Desktop의 bind mount는 Linux VM을 통해 macOS 경로를 공유하므로 VM을 쓴다는 사실만으로 호스트 경로가 보호된다고 간주하지 않는다. [Docker bind mount 경계](https://docs.docker.com/engine/storage/bind-mounts/)
+
+고정 한도는 메모리 128MiB·swap 0·PID 64개·CPU 0.5개, 시간 probe 1.5초, stdout/stderr 합계 16KiB다. cgroup 값과 실제 PID 생성 거부·OOM을 확인한다. CPU는 quota 값 검증이며 성능 보장은 아니다. 시간·출력 초과 때는 Docker CLI 종료와 별개로 이 진단이 생성한 container를 소유권 확인 후 강제 종료하고, 정지 상태와 제거를 확인한다. detached child의 시작 파일·종료 코드 137·OOM 아님을 확인하고 지연 marker가 남지 않아야 한다. 고정 합성 probe의 7.5초 watchdog은 보조 종료 장치다. 생성 RPC가 불확실하게 끝난 뒤 현재 부재만 확인한 경우에는 정리 완료로 인정하지 않는다. container 이름과 정리 미확인 결과, 합성 작업물과 보고서를 검토용으로 보존한다. [Docker 자원 한도](https://docs.docker.com/engine/containers/resource_constraints/), [container 종료](https://docs.docker.com/reference/cli/docker/container/kill/)
+
+진단 결과의 `executionEnabled`는 항상 `false`다. 보고서를 승인·실행 권한으로 사용하지 않고 `approval-only-v1` 승인도 소비하지 않는다. 읽기 worker의 네트워크·하위 프로세스 차단은 유지한다. 대상 코드 실행·patch·등록 검사·Run 저장과 실행 중 취소·crash 복구는 단계 3-C·3-D에서 따로 구현한다.
+
+신뢰 경계에는 Docker daemon과 Desktop VM·Linux 커널이 포함된다. 이 검증은 알려진 제한과 canary 결과이며 container escape의 완전한 방지나 회사 도입 승인을 보장하지 않는다. 실행 작업의 디스크 quota와 범용 실행기 검증은 후속 단계다. 고정 공식 이미지의 초기 다운로드는 backend 준비이며 회사 자료나 토큰을 전달하지 않는다. 실제 회사 자료·네트워크·비밀 주입은 이번 진단에 포함하지 않는다.
+
 ## 6. Slack과 외부 전송
 
 ### 최소 접근
@@ -173,5 +189,5 @@ Gmail·Calendar·Drive는 후속 선택 기능이다. 연결된 계정이 있다
 - 별도 허가 없는 메시지 전송·push·PR이 없음.
 - 승인 범위 밖 변경과 실패·미실행 검사를 성공으로 보고하지 않음.
 
-단계 3-A의 승인 기록과 아직 구현하지 않은 승인 소비·실행 기능을 구분한다. 실제 격리·patch·대상 검사·실행 취소·복구는 **미구현**이며 항상 거부되는 실행 기본 동작을 검증한다. 후속 단계의 보안 검증을 통과했다고 미리 기록하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
+단계 3-A의 승인 기록, 단계 3-B의 합성 격리 진단과 아직 구현하지 않은 승인 소비·대상 실행을 구분한다. 수용 33의 실제 결과는 3-B 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. patch·대상 검사·실행 취소·복구는 **미구현**이며 항상 거부되는 실행 기본 동작을 유지한다. 후속 단계의 보안 검증을 통과했다고 미리 기록하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
 

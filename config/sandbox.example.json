@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "backend": "docker",
+  "policyVersion": "docker-probe-v1",
+  "dockerPath": "/usr/local/bin/docker",
+  "socketPath": "/absolute/path/to/docker.sock",
+  "serverVersion": "29.4.3",
+  "imageId": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "nodeVersion": "24.22.2"
+}

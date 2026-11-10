@@ -1,6 +1,6 @@
 # work-assistant-harness
 
-Slack 요청을 로컬에 기록하고, 합성 자료로 읽기 전용 조사를 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록**이 구현 범위입니다. 실제 Slack 권한과 회사 환경, 승인 후 격리 실행 검증은 아직 수행하지 않았습니다.
+Slack 요청을 로컬에 기록하고, 합성 자료로 읽기 전용 조사를 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록, 단계 3-B의 Docker 격리 진단**이 구현 범위입니다. 실제 backend 검증 결과는 [단계 3-B 결과](docs/stage-3b-result.md)에 구분해 기록합니다. 실제 Slack 권한·회사 환경과 승인 후 대상 코드 실행은 검증하지 않았습니다.
 
 ```text
 로컬 이벤트 JSON
@@ -72,9 +72,28 @@ pnpm harness cancel <task-id> --data-dir /private/tmp/harness-demo-data
 
 `cancel`은 `AWAITING_APPROVAL` 또는 `APPROVED`인 변경 요청을 `CANCELLED`로 바꾸고 기존 승인을 취소합니다. 만료 승인은 상태 확인 시 취소되고 작업이 다시 승인 대기 상태가 됩니다. 원본 요청의 편집·삭제도 Task 무효화와 같은 트랜잭션에서 승인을 취소하며, Task 계획·보고가 제거돼도 별도 승인 스냅샷은 보존합니다.
 
-이 단계의 승인은 `executionPolicy: approval-only-v1`, `usedAt: null`인 기록입니다. 후속 실제 실행 정책의 승인으로 재사용하지 않습니다. 현재 기준 커밋 검증은 Task·계획·CLI 입력의 일치 검사이며 대상 저장소의 실행 직전 상태 검증은 후속 단계입니다. 승인 소비·Run 생성·실제 patch·대상 검사·격리 실행은 `not_run`입니다. `pnpm harness run <task-id>`는 `UNKNOWN_COMMAND`로 거부됩니다.
+이 단계의 승인은 `executionPolicy: approval-only-v1`, `usedAt: null`인 기록입니다. 후속 실제 실행 정책의 승인으로 재사용하지 않습니다. 현재 기준 커밋 검증은 Task·계획·CLI 입력의 일치 검사이며 대상 저장소의 실행 직전 상태 검증은 후속 단계입니다. 승인 소비·Run 생성·실제 patch·대상 검사는 `not_run`입니다. `pnpm harness run <task-id>`는 `UNKNOWN_COMMAND`로 거부됩니다.
 
 승인·취소는 기존 전역 프로세스 잠금을 사용합니다. 같은 데이터 디렉터리에서 `slack-listen`이 실행 중이면 거부되므로 수신과 동시에 승인하는 기능은 제공하지 않습니다. 수신 중단 구간의 Slack 편집·삭제 감지도 보장하지 않습니다. 실제 실행 전에는 수신·무효화·실행의 잠금과 취소 흐름을 추가 검증해야 합니다.
+
+## 단계 3-B Docker 격리 진단
+
+`sandbox-check`는 하네스에 고정한 합성 진단 코드 5개만 실행합니다. 작업 ID·대상 저장소·patch·임의 명령은 입력받지 않으며, 성공해도 `executionEnabled: false`를 유지합니다. 승인 기록을 소비하거나 `ExecutionPort`를 활성화하지 않습니다.
+
+```sh
+pnpm harness sandbox-check --data-dir /private/tmp/harness-sandbox-data
+pnpm harness sandbox-check --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-sandbox-data
+```
+
+기본값인 `config/sandbox.example.json`은 `enabled: false`입니다. 첫 명령은 Docker에 접속하지 않고 차단 결과를 남깁니다. 두 번째 명령은 비공개 설정에서 `enabled: true`를 명시하고 Docker Desktop이 실행 중이며 지정 이미지가 로컬에 준비된 경우에 사용합니다. 설정에는 `/usr/local/bin/docker`, 실제 로컬 Unix socket의 절대 경로, 정확한 Engine 버전·Node 버전·이미지 전체 `sha256` ID와 `policyVersion: docker-probe-v1`을 고정합니다. 예제의 socket과 0으로 채운 이미지 ID는 자리표시자입니다. 자동 image pull·build·설치와 다른 backend 대체는 하지 않습니다. 실제 설정은 저장소 밖에 두며 `config/sandbox.local.json`도 Git에서 제외합니다.
+
+지원 범위는 macOS `darwin/arm64` 호스트와 Docker Desktop의 Linux `aarch64` backend, cgroup v2, 기본 seccomp입니다. 이번 검증 환경은 Engine **29.4.3**, 컨테이너 Node **24.22.2**, 공식 `node:24.22.2-alpine3.23`의 이미지 ID `sha256:0efee1e068d21f6edcab7fa8c962fc4ecd50d4e28727bc23963379b63ee318ab`입니다. 하네스의 Node 26 요구사항과 컨테이너의 Node 버전을 구분합니다. 설정·daemon·image·유효 권한이 맞지 않으면 진단을 차단합니다.
+
+진단은 workspace 한 곳만 쓰기 마운트하고, 호스트·원본·승인 DB·공유 Git을 나타내는 합성 canary를 그 밖에 둡니다. 경로·symlink·환경변수·Docker socket·root 파일시스템·외부 통신 접근 실패와 호스트 canary 전후 해시를 확인합니다. nonroot·capability 제거·seccomp·권한 상승 금지, 메모리 128MiB·swap 금지·PID 64개·CPU 0.5개 한도도 검사합니다. 별도 probe가 PID 생성 거부, OOM 종료, 1.5초 시간 초과, stdout/stderr 합계 16KiB 초과를 확인합니다. 시간·출력 검사는 하위 프로세스의 시작 증거와 종료 코드, 지연 파일 미생성까지 요구합니다. CPU 검사는 cgroup quota 값 확인이며 성능 벤치마크가 아닙니다.
+
+결과는 `<data-dir>/sandbox-checks/<verificationId>/report.json`에 기록합니다. backend identity·한도·probe별 종료와 정리 결과·보호 영역 전후 해시를 남깁니다. 상태 `passed`는 종료 코드 0, `failed`·`blocked`는 1입니다. 생성한 probe container만 소유권을 확인해 종료·제거하고, 합성 workspace와 보고서는 검토용으로 보존합니다. Docker CLI를 종료하는 것과 container 종료를 구분해 잔존 여부를 확인합니다. 생성 응답이 불확실한 상태에서 현재 부재만 확인되면 정리 미확인으로 기록합니다. 이 진단용 controller만 Docker 호출 권한을 가지며 기존 읽기 worker의 네트워크·하위 프로세스 제한은 유지합니다.
+
+Docker daemon과 Linux VM·커널을 신뢰하는 경계입니다. container escape의 완전한 방지나 회사 보안 검토 통과를 뜻하지 않습니다. 범용 실행기, 실행 작업의 디스크 quota, 승인 소비와 patch·검사 연결은 단계 3-C 이후입니다. 자세한 정책과 근거는 [보안과 승인](docs/security-and-approval.md#단계-3-b의-합성-docker-진단)을 따릅니다.
 
 ## 모의 입력과 오류 재현
 
@@ -110,7 +129,7 @@ CLI는 매번 OS 임시 경로에 합성 Git 저장소를 준비한 뒤 읽기 �
 - 초기 reader는 크기를 제한한 **loose Git 객체만 지원**합니다. pack 객체와 임의의 회사 저장소 연결은 지원하지 않습니다.
 - 조회 전후 전체 파일·미추적 파일·Git 메타데이터·권한·symlink 대상을 해시로 비교합니다. 차이가 있으면 성공 처리하지 않고 변경물을 보존합니다.
 
-Node 권한 모델은 신뢰하는 하네스 코드의 실수를 제한하는 장치입니다. 악성 코드를 실행하는 보안 sandbox가 아니며, 같은 OS 사용자의 동시 파일 변조까지 방어한다고 주장하지 않습니다. 현재는 저장소 파일을 실행·import하지 않습니다. 별도 worktree와 실행 환경은 단계 3에서 검증해야 합니다.
+Node 권한 모델은 신뢰하는 하네스 코드의 실수를 제한하는 장치입니다. 악성 코드를 실행하는 보안 sandbox가 아니며, 같은 OS 사용자의 동시 파일 변조까지 방어한다고 주장하지 않습니다. 현재는 저장소 파일을 실행·import하지 않습니다. 단계 3-B의 Docker 진단도 합성 코드만 사용하며 대상 저장소 실행 권한을 만들지 않습니다. worktree만으로 보안 격리가 되지는 않습니다.
 
 합성 저장소 경로는 실행 기록의 `repository.root`에 남깁니다. CLI는 검토를 위해 이 임시 자료를 자동 삭제하지 않습니다. 테스트는 자신이 만든 임시 자료만 종료 후 정리합니다. 보고서의 `passed`, `failed`, `not_run`은 구분되며 대상 설치·테스트·외부 전송·승인 후 실행은 `not_run`입니다.
 
@@ -164,4 +183,4 @@ pnpm build
 
 `test`는 컴파일 후 Node 내장 test runner로 단위·통합·CLI 수용 테스트를 실행합니다. 합성 저장소는 별도 임시 경로에 준비합니다. 하네스 테스트가 통과해도 실제 Slack 권한·회사 보안·격리 실행기의 검증을 통과한 것은 아닙니다.
 
-전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1 결과](docs/stage-1-result.md), [단계 2 결과](docs/stage-2-result.md), [단계 3-A 결과](docs/stage-3a-result.md)에 정리했습니다. 단계 3 전체 완료는 승인 기록뿐 아니라 실제 격리 실증·고정 patch와 검사·실행 취소 및 복구까지 확인한 뒤 판단합니다.
+전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1 결과](docs/stage-1-result.md), [단계 2 결과](docs/stage-2-result.md), [단계 3-A 결과](docs/stage-3a-result.md), [단계 3-B 결과](docs/stage-3b-result.md)에 정리했습니다. 단계 3 전체 완료는 승인 기록뿐 아니라 실제 격리 실증·고정 patch와 검사·실행 취소 및 복구까지 확인한 뒤 판단합니다.

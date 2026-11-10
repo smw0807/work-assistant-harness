@@ -4,7 +4,7 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 핵심 방향은 Slack에서 나를 부른 메시지를 모아 저장소를 읽고, 답변 초안이나 수정 계획을 나에게 보여 주는 것이다. 코드 변경은 내가 승인한 뒤에만 격리된 작업 공간에서 수행한다. 첫 버전은 실제 회사 계정 없이 로컬에서 검증할 수 있게 만든다.
 
-현재 구현 상태: 단계 0·1의 합성 자료 기반 읽기 전용 CLI와 단계 2의 수신 어댑터·오프라인 수집에 이어 2026-11-10에 단계 3-A의 로컬 승인·취소와 승인 기록을 구현했다. lint·typecheck·전체 138개 테스트·build를 통과했으며 실제 실행은 열지 않는다. 실제 Slack·AI·회사 저장소는 연결하지 않았다. 범위·검증·미구현 항목은 [단계 1 구현 결과](stage-1-result.md), [단계 2 구현 결과](stage-2-result.md), [단계 3-A 구현 결과](stage-3a-result.md), 실제 명령은 [README](../README.md)를 따른다. 단계 3-B 이후 실행 기능과 아래 실행 명령 예시는 후속 계획이다.
+현재 구현 상태: 단계 0·1의 모의 조사, 단계 2의 수신·오프라인 검증과 단계 3-A의 로컬 승인 기록에 이어 2026-11-10에 단계 3-B의 고정 합성 Docker 격리 진단을 구현했다. 지원 backend의 실제 probe 5개와 수용 33, 회귀 테스트 171개·lint·typecheck·build가 통과했다. 근거와 지원 범위는 [단계 3-B 결과](stage-3b-result.md)에 기록하며 진단 통과가 대상 실행 권한을 만들지는 않는다. 실제 Slack·AI·회사 저장소는 연결하지 않았다. 기존 범위는 [단계 1 결과](stage-1-result.md), [단계 2 결과](stage-2-result.md), [단계 3-A 결과](stage-3a-result.md), 사용 가능한 명령은 [README](../README.md)를 따른다. 단계 3-C 이후 실행 기능과 아래 실행 명령 예시는 후속 계획이다.
 
 ### 하네스가 맡을 역할
 
@@ -150,11 +150,14 @@ Socket Mode의 app-level 토큰에는 연결용 `connections:write`를 사용한
 
 #### 단계 3-B 실제 격리 backend 선정·실증
 
-- 지원할 OS와 격리 backend 하나를 정하고 실행 환경·이미지 또는 정책 버전을 고정한다. Node 권한 모델과 worktree만으로 악성 코드 실행 격리를 충족했다고 간주하지 않는다.
-- 실행 프로세스에서 원본 작업 디렉터리, 하네스·승인 DB와 공유 Git 메타데이터를 보호한다. 승인된 작업 영역만 쓰기 허용하고 호스트 비밀정보를 상속하지 않는다. 기본 네트워크 차단과 시간·메모리·출력 한도, 하위 프로세스 종료를 실제 환경에서 확인한다.
-- backend 준비·권한·네트워크 검사 실패 시 실행을 거부한다. 호스트 파일 읽기·쓰기, 승인 DB 변경, 공유 `.git` 쓰기, 외부 통신과 프로세스 잔존 시도를 실패 테스트로 검증한다.
+- 첫 backend는 macOS `darwin/arm64` 호스트와 Docker Desktop Linux `aarch64`, cgroup v2·기본 seccomp로 제한한다. 정확한 Engine·Node 버전과 로컬 이미지 전체 ID, `docker-probe-v1` 정책을 설정에 고정한다. 검증 환경은 Engine 29.4.3과 공식 `node:24.22.2-alpine3.23`의 `sha256:0efee1e068d21f6edcab7fa8c962fc4ecd50d4e28727bc23963379b63ee318ab`다. Node 권한 모델과 worktree를 실행 sandbox로 취급하지 않는다.
+- `sandbox-check` 전용 CLI를 만들고 기본 `enabled: false`에서는 Docker 접속을 0회로 유지한다. 활성 설정은 로컬 Unix socket만 받으며 `/usr/local/bin/docker`에 shell 없는 고정 argv와 새 private Docker 설정·최소 환경을 적용한다. image pull·build·설치와 임의 명령·대상 저장소 입력을 제공하지 않는다. 준비·버전·유효 권한·네트워크 검사 실패 시 거부하며 다른 환경으로 대체하지 않는다.
+- workspace 한 곳만 마운트하고 읽기 전용 root, nonroot UID, capability 제거, 권한 상승 금지, private IPC·cgroup, 기본 seccomp와 네트워크 차단을 강제한다. host proxy·credential·SSH agent·Docker socket과 이미지의 추가 환경·volume이 유입되지 않도록 확인한다.
+- `boundary`, `pids`, `memory`, `timeout`, `output` 5개 고정 probe를 실제 backend에서 실행한다. 합성 보호 파일의 절대경로·symlink·경로 탈출·`/proc/1/root` 접근 실패와 전후 hash, 작업 영역 쓰기의 양성 대조군, TCP·DNS 실패·loopback만 있는 인터페이스, cgroup 한도·실제 PID 생성 거부와 OOM을 확인한다. 실제 호스트 비밀이나 회사 코드·승인 DB를 실험 자료로 사용하지 않는다.
+- stdout/stderr 합계·실행 시간·메모리·CPU·PID를 제한한다. 시간·출력 초과 때 Docker CLI와 container 종료를 구분하고 이 진단이 만든 container만 소유권 확인 후 kill·정지 확인·제거한다. detached child의 실제 시작과 코드 137·OOM 아님, 지연 파일 생성이 없는지 검증한다. 생성 응답 불확실 후 단순 부재는 정리 성공으로 인정하지 않는다. CPU는 cgroup quota 값으로 실증하며 성능 벤치마크로 해석하지 않는다.
+- `<data-dir>/sandbox-checks/<verificationId>/report.json`에 `passed`·`failed`·`not_run`과 실패 이유를 기록하고 합성 작업물을 보존한다. 결과의 `executionEnabled`는 항상 `false`다. 승인 소비·Run 생성·patch·대상 검사·외부 전송은 연결하지 않는다. 범용 실행기와 실행 작업의 디스크 quota는 단계 3-C 이후에 정한다.
 
-**완료 기준:** 수용 테스트 33을 실제 backend에서 통과한다. 단순 mock 결과만으로 격리 기능을 활성화하지 않는다. 검증되지 않은 OS·backend는 차단한다.
+**완료 기준:** 수용 테스트 33을 실제 backend에서 통과하고 backend identity·합성 probe·보호 영역 전후 상태·정지와 제거 근거를 결과 문서에 남긴다. 단순 mock 결과를 실제 격리 실증으로 표시하지 않는다. 검증되지 않은 OS·backend는 차단한다. 성공한 진단 결과도 대상 코드 실행 승인을 대신하지 않는다. Docker daemon·VM·Linux 커널은 신뢰 경계이며 container escape의 완전한 방지나 회사 도입 승인으로 설명하지 않는다.
 
 #### 단계 3-C 고정 합성 patch와 허용 검사
 
@@ -400,7 +403,7 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 30 | 승인 후 요청 편집·삭제 (3-A) | 기존 Task 무효화와 승인 취소가 같은 트랜잭션. Task 계획·보고 제거 뒤에도 승인 스냅샷은 유지. |
 | 31 | 승인 기록과 실행의 분리 (3-A) | executionPolicy는 approval-only-v1, usedAt은 null. ExecutionPort 항상 거부, run은 UNKNOWN_COMMAND. 대상 변경·검사·승인 소비·Run·외부 전송 없음. |
 | 32 | 실시간 수신과 승인 CLI의 잠금 (3-A) | 같은 데이터 디렉터리의 수신 lease가 있으면 approve/cancel 거부. 잠금 실패 시 상태·승인 변경 없음. |
-| 33 | 실제 격리 backend의 실패 검사 (3-B) | 호스트·원본·승인 DB·공유 Git 메타데이터 접근과 외부 통신 차단, 자원 한도·하위 프로세스 종료 실증. backend 불가·검증 실패 시 실행 거부. |
+| 33 | 실제 격리 backend의 실패 검사 (3-B) | 고정 local Docker identity·유효 정책, 합성 호스트·원본·승인 DB·공유 Git 접근 차단과 전후 hash, 환경·socket 미노출, 외부 TCP·DNS 차단, cgroup·실제 PID/OOM 한도, timeout·출력 초과와 detached child 종료·container 제거 실증. disabled 접속 0회, backend 불가·검증 실패 거부. 보고서는 실행 권한이 아니며 executionEnabled=false 유지. |
 | 34 | 고정 합성 patch 계약 (3-C) | 원본 해시·허용 파일·지원 파일 동작 검증. 범위 초과·미지원 파일 동작·경로 탈출을 적용 전에 거부. |
 | 35 | 명령·실행 정책 변경 (3-C) | 실행 파일·argv·cwd·환경·네트워크·한도·정책 버전이 승인에 결합. 변경 시 재승인, approval-only-v1 재사용 불가. |
 | 36 | 실행 중 무효화·취소·crash (3-D) | 승인 소비 전후·patch·검사 중 변경과 종료를 검증. 프로세스 트리 종료, 자동 재실행 없음, 불변 승인·Run·잔여 diff 보존과 정확한 결과 보고. |
