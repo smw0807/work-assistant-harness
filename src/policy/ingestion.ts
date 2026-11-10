@@ -38,6 +38,7 @@ export const normalizeMessage = (input: unknown, policy: IngestionPolicy): Messa
   return {
     eventId, workspaceId, channelId, requesterId,
     threadTs: threadTimestamp,
+    messageTs: timestamp,
     revision: timestamp,
     text: redactSensitiveText(text),
   };

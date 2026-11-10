@@ -24,3 +24,11 @@ export const transitionTask = (task: Task, status: TaskStatus): Task => {
     history: [...task.history, status],
   };
 };
+
+/** 저장소가 원본 메시지와 revision을 검증한 뒤 호출하는 별도 취소 경로다. */
+export const invalidateTaskRequest = (task: Task, reason: 'REQUEST_CHANGED' | 'REQUEST_DELETED', at: string): Task => {
+  return {
+    ...task, status: 'CANCELLED', plan: null, report: null, failureCode: reason, updatedAt: at,
+    history: task.status === 'CANCELLED' ? task.history : [...task.history, 'CANCELLED'],
+  };
+};

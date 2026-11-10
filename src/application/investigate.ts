@@ -109,6 +109,7 @@ export class InvestigationService {
     return {
       taskId: randomUUID(), eventId: event.eventId, workspaceId: event.workspaceId,
       channelId: event.channelId, threadTs: event.threadTs, requesterId: event.requesterId,
+      messageTs: event.messageTs ?? event.threadTs,
       requestRevision: event.revision, classification: null, status: 'RECEIVED',
       repoId: this.repository.repoId, baseCommit: this.repository.baseCommit,
       createdAt: now, updatedAt: now, history: ['RECEIVED'], plan: null, report: null, failureCode: null,

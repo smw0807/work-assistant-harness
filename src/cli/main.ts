@@ -8,6 +8,7 @@ import { HarnessError } from '../domain/errors.js';
 import type { IngestionPolicy } from '../domain/types.js';
 import type { WorkerOptions } from './harness.module.js';
 import { acquireRuntimeLease, assertSafeEventFile, defaultDataDirectory, isInside, prepareDataDirectory, safeReadFlag } from './runtime.js';
+import { runSlackCommand, slackUsage } from './slack.js';
 
 const scenarios = new Set([
   'inquiry', 'change', 'unclear', 'invalid-json', 'invalid-summary', 'hallucinated-file',
@@ -92,8 +93,8 @@ const run = async (): Promise<void> => {
   }
 };
 
-if (process.argv.includes('--help')) process.stdout.write(`${usage}\n`);
-else run().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n`);
+if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n`);
+else (process.argv[2]?.startsWith('slack-') ? runSlackCommand(process.argv.slice(2)) : run()).catch((error: unknown) => {
+  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n`);
   process.exitCode = 1;
 });

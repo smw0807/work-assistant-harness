@@ -17,7 +17,7 @@ const runWorker = async (): Promise<void> => {
     const recovered = store.recoverInterrupted();
     // SQLite를 원본으로 삼아 직전 종료 때 빠진 로컬 보고서만 복구한다.
     const reporter = application.get<ReportSink>(REPORT_SINK);
-    for (const task of store.list()) if (task.report) await reporter.write(task);
+    for (const task of store.list()) if (task.report || task.status === 'CANCELLED') await reporter.write(task);
     if (options.command === 'inspect') {
       const task = store.find(options.taskId);
       if (!task) throw new HarnessError('TASK_NOT_FOUND');

@@ -1,0 +1,9 @@
+{
+  "workspaceId": "W_LOCAL",
+  "channelIds": ["C_ALLOWED"],
+  "targetUserId": "U_OWNER",
+  "retentionHours": 24,
+  "maxPending": 100,
+  "thread": { "maxMessages": 30, "maxPages": 3, "maxBytes": 16384 },
+  "liveReadEnabled": false
+}

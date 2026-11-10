@@ -18,7 +18,7 @@ const envelope = (text = '<@U_OWNER> 중복 주문 요청 동작을 알려 주�
 });
 const message: MessageEvent = {
   eventId: 'Ev_test', workspaceId: 'W_LOCAL', channelId: 'C_ALLOWED', requesterId: 'U_REQUESTER',
-  threadTs: '1700000000.000001', revision: '1700000000.000001', text: '<@U_OWNER> 조사해 주세요.',
+  threadTs: '1700000000.000001', messageTs: '1700000000.000001', revision: '1700000000.000001', text: '<@U_OWNER> 조사해 주세요.',
 };
 const decision: TriageDecision = {
   kind: 'inquiry', objective: '요청 동작 조사',

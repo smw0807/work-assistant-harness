@@ -1,0 +1,9 @@
+{
+  "display_information": { "name": "Work Assistant Read Only" },
+  "features": { "bot_user": { "display_name": "Work Assistant Read Only", "always_online": false } },
+  "oauth_config": { "scopes": { "bot": ["channels:history"] } },
+  "settings": {
+    "event_subscriptions": { "bot_events": ["message.channels"] },
+    "socket_mode_enabled": true
+  }
+}

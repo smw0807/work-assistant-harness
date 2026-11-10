@@ -73,6 +73,16 @@ export const assertWorkerPermissions = (sourceRoot: string, dataDirectory: strin
   }
 };
 
+export const assertSlackReceiverPermissions = (sourceRoot: string, dataDirectory: string, live: boolean): void => {
+  const permissions = process.permission;
+  if (!permissions || permissions.has('fs.write', sourceRoot)
+    || !permissions.has('fs.write', dataDirectory) || permissions.has('child') || permissions.has('worker')
+    || permissions.has('addons') || permissions.has('wasi') || permissions.has('inspector')
+    || permissions.has('net') !== live) {
+    throw new HarnessError('SLACK_UNSAFE_RECEIVER_PERMISSIONS');
+  }
+};
+
 export const assertSafeEventFile = async (requested: string): Promise<string> => {
   const absolute = resolve(requested);
   const canonical = await realpath(absolute);

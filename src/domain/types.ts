@@ -8,6 +8,7 @@ export interface MessageEvent {
   workspaceId: string;
   channelId: string;
   threadTs: string;
+  messageTs?: string;
   requesterId: string;
   revision: string;
   text: string;
@@ -93,6 +94,7 @@ export interface Task {
   workspaceId: string;
   channelId: string;
   threadTs: string;
+  messageTs?: string;
   requesterId: string;
   requestRevision: string;
   classification: Classification | null;

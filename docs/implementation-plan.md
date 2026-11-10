@@ -4,7 +4,7 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 핵심 방향은 Slack에서 나를 부른 메시지를 모아 저장소를 읽고, 답변 초안이나 수정 계획을 나에게 보여 주는 것이다. 코드 변경은 내가 승인한 뒤에만 격리된 작업 공간에서 수행한다. 첫 버전은 실제 회사 계정 없이 로컬에서 검증할 수 있게 만든다.
 
-현재 구현 상태(2026-11-09): 단계 0의 최소 기반과 단계 1의 합성 자료 기반 읽기 전용 CLI를 구현했다. 범위·검증·미구현 항목은 [단계 1 구현 결과](stage-1-result.md), 실제 명령은 [README](../README.md)를 따른다. 아래 단계 2 이후 기능과 승인·실행 명령 예시는 후속 계획이다.
+현재 구현 상태: 단계 0의 최소 기반과 단계 1의 합성 자료 기반 읽기 전용 CLI에 이어 2026-11-10에 단계 2의 수신 어댑터·수집 CLI·오프라인 테스트를 구현하고 lint·typecheck·전체 110개 테스트·build를 통과했다. 실제 Slack·AI·회사 저장소는 연결하지 않았다. 범위·검증·미구현 항목은 [단계 1 구현 결과](stage-1-result.md), [단계 2 구현 결과](stage-2-result.md), 실제 명령은 [README](../README.md)를 따른다. 단계 3 이후 기능과 승인·실행 명령 예시는 후속 계획이다.
 
 ### 하네스가 맡을 역할
 
@@ -88,10 +88,49 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 ### 단계 2 Slack 읽기 연결
 
-- 허가받은 워크스페이스와 최소 채널에서만 수신한다. 사용자 멘션 감지, 스레드 수집, 중복 제거, 속도 제한을 검증한다.
-- 결과는 우선 로컬 CLI에서 확인한다. 내 Slack DM으로 보내려면 해당 전송 경로와 내용을 별도로 허용한다.
+이번 개발은 **수신·보관·로컬 확인과 오프라인 검증**까지다. 실환경은 `liveReadEnabled: false`를 기본값으로 두고, 별도로 승인된 계정·워크스페이스·채널 및 회사 데이터 정책을 로컬 설정에 기록한 뒤에만 연결할 수 있게 만든다. 설정을 켜는 행위가 회사 승인 자체를 증명하지는 않는다. 실제 연결, Slack 설치와 권한 발급은 이번 작업에서 실행하지 않는다.
 
-**완료 기준:** 승인되지 않은 채널과 멘션이 없는 메시지는 작업으로 만들지 않는다. 외부 메시지를 보내지 않는다.
+#### 수신부와 조사 경계
+
+- Socket Mode 수신부만 Slack 토큰과 네트워크를 갖는다. Node의 기본 `fetch`·`WebSocket`으로 고정 `auth.test`·`apps.connections.open`·`conversations.replies`와 ACK만 제공하고, 새 SDK 의존성은 추가하지 않는다. 실수신 시작 전 `auth.test` 응답의 workspace가 설정과 다르면 연결을 거부한다. HTTP 서버와 대시보드, Redis는 추가하지 않는다. [토큰 identity 확인](https://docs.slack.dev/reference/methods/auth.test/)
+- 기존 조사 worker의 네트워크·child process 차단을 유지한다. 토큰을 조사 worker, fixture 모델, SQLite, 보고서나 오류 메시지에 전달하지 않는다.
+- 단계 2 수신 결과는 메시지와 제한된 스레드의 **수집 기록**이다. 모델 분석은 `not_run`과 이유를 표시한다. 실제 메시지를 기존 고정 모델에 넘겨 합성 저장소의 답변을 업무 답변처럼 만들지 않는다.
+- 실제 AI와 회사 저장소 연결, 승인 서비스와 실행기는 이 단계에 포함하지 않는다. `ApprovalPort`·`ExecutionPort`는 계속 거부하며, 요청자 답장·소유자 DM·push·PR 어댑터도 비활성화한다.
+
+#### 영속 수신과 ACK
+
+처리 순서는 `프레임 크기·구조 확인 → 허용 workspace/channel·유형 확인 → 최소 이벤트와 중복 키를 SQLite inbox에 commit → ACK → 제한된 스레드 수집·로컬 보고`다. ACK 전에 분석이나 스레드 조회를 기다리지 않는다.
+
+- Socket Mode의 `envelope_id`는 해당 전달의 ACK용이고, Events API의 `event_id`는 이벤트 중복 제거용이다. 같은 이벤트가 다른 envelope로 재전달되어도 inbox·후속 결과는 한 번만 만들고 각 envelope는 ACK한다. [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/), [Events API 이벤트 필드](https://docs.slack.dev/apis/events-api/)
+- 비허용 채널·멘션 없는 새 메시지·봇·자기 메시지·지원하지 않는 이벤트는 작업으로 만들지 않는다. 거부한 본문은 보관하지 않고 ACK하여 불필요한 재전달을 막는다. 허용된 기존 메시지의 편집·삭제는 멘션이 없어도 무효화에 필요한 범위만 처리한다.
+- 저장 실패나 inbox 포화로 새 메시지를 보존할 수 없으면 성공 ACK하지 않는다. 편집은 포화 상태에서도 기존 계획 무효화와 최신 요청의 `BLOCKED`·`SLACK_INBOX_FULL`을 commit한 뒤 ACK하고 후속 문맥 수집만 차단한다. 이미 commit한 뒤 ACK가 실패하면 재시작·재전달 시 중복 키를 확인하여 다시 ACK한다.
+- 재시작 시 pending inbox를 이어 처리하되 완료 수집을 중복 실행하지 않는다. 프로세스 잠금과 inbox 크기 한도를 두고, 저장 실패·ACK 전후 종료·포화를 실패 테스트로 검증한다.
+
+#### 메시지 revision과 무효화
+
+- 원본 메시지는 `(workspaceId, channelId, messageTs)`로 식별한다. `threadTs`는 스레드 위치이며 원본 식별자를 대신하지 않는다. 최초 작성·편집·삭제의 revision을 비교하여 늦게 온 이벤트가 최신 내용을 되살리지 못하게 한다. timestamp는 Slack 문자열의 정밀도를 보존한다.
+- `message_changed`·`message_deleted`, 멘션 제거와 내용 변경은 연결된 기존 작업을 `CANCELLED`로 만들고 기존 계획·보고 자료를 제거한다. 승인 기능이 붙기 전에도 오래된 계획이 유효한 결과로 남지 않게 한다. [편집 이벤트](https://docs.slack.dev/reference/events/message/message_changed/), [삭제 이벤트](https://docs.slack.dev/reference/events/message/message_deleted/)
+- 같은 스레드의 다른 reply가 편집·삭제되면 확인된 cached·pending·진행 중 문맥과 연결된 기존 작업도 무효화한다. root를 알 수 없으면 같은 채널의 `RECEIVED`이면서 pending·processing인 수집을 보수적으로 차단하며, 관련성이 확인되지 않은 완료 수집은 유지한다. 이 때문에 무관한 진행 중 수집도 중단될 수 있다. 큐가 가득 차도 삭제·멘션 제거와 편집의 기존 계획 무효화는 반영한다. 보고서 파일은 DB의 취소 상태로 다시 쓰며, 쓰기 중 종료되면 다음 명령에서 복구한다.
+- 삭제·멘션 제거가 원문보다 먼저 도착해도 필요한 최소 tombstone을 남겨 오래된 원문을 거부한다. 변경 전 revision으로 시작한 스레드 수집의 늦은 결과도 최신 기록을 덮어쓰지 못하게 한다.
+- 마스킹한 본문·스레드 payload는 보관 기한 후 제거하되 이벤트 중복 키, 메시지 identity·revision과 삭제 marker는 DB 수명 동안 유지한다. 만료 뒤 같은 이벤트가 재전달되어도 본문을 되살리지 않는다. 최소 marker까지 삭제하거나 DB를 교체한 뒤에는 과거 이벤트의 중복 제거·순서 보존을 보장하지 않는다.
+
+#### 문맥·개인정보·운영 한도
+
+- 스레드는 허용된 채널과 해당 thread만 조회한다. 페이지 수, 메시지 수, 본문·응답 바이트, 요청 시간과 재시도 횟수에 상한을 둔다. 한도·권한 부족·오류로 중단하면 불완전 수집임을 로컬 결과에 남긴다. [스레드 조회와 cursor](https://docs.slack.dev/reference/methods/conversations.replies/)
+- `429`의 `Retry-After`를 지키고 무한 재시도를 하지 않는다. 허용된 대기 한도보다 길거나 헤더가 잘못되면 안전하게 중단하여 사유를 기록한다. [Slack 속도 제한](https://docs.slack.dev/apis/web-api/rate-limits/)
+- 재연결에는 횟수·대기 한도를 둔다. 최근 100개 연결·공백 상태를 DB에 보관하고 disconnect부터 재연결까지는 누락 가능 구간으로 기록하며 전량 수집을 주장하지 않는다. 채널 전체 history를 자동 backfill하지 않는다. 종료 시 HTTP·대기·Socket·후속 작업을 취소·정리한 뒤 DB를 닫는다.
+- 알려진 비밀 패턴과 이메일·전화번호 등 지원하는 개인정보 패턴을 저장 전에 마스킹한다. 원문 프레임 전체나 불필요한 blocks·첨부파일은 보관하지 않는다. 패턴 마스킹을 모든 개인정보 판별이나 회사 정책 준수 검증으로 설명하지 않는다.
+- 마스킹한 메시지·스레드의 보관 기간은 `retentionHours` 1~168시간, 기본 24시간으로 제한하고 수신·조회·정리 시 만료 payload를 제거한다. 최소 marker는 계속 남으므로 DB 전체 크기는 보관 기한만으로 제한되지 않는다. 실제 보관 값과 DB 폐기 정책은 회사 정책에 맞추며, 예시 설정값을 운영 정책으로 간주하지 않는다. SQLite의 논리적 삭제는 백업·파일시스템·디스크에서의 물리적 완전 삭제를 보장하지 않는다. 별도로 내보내 저장한 CLI 출력은 사용자의 보관 정책을 따른다.
+
+#### 앱 권한과 연결 전 확인
+
+공개 채널만 사용하는 최소 manifest 예시는 `message.channels`와 `channels:history`를 사용한다. 비공개 채널이 별도로 허용된 경우에만 `message.groups`와 `groups:history`를 추가한다. DM·그룹 DM 이벤트, 쓰기 scope, 자동 채널 참여는 초기 범위에서 제외한다. 사용자 멘션은 message 본문의 고정 ID로 확인한다. [공개 채널 이벤트](https://docs.slack.dev/reference/events/message.channels/), [비공개 채널 이벤트](https://docs.slack.dev/reference/events/message.groups/)
+
+Socket Mode의 app-level 토큰에는 연결용 `connections:write`를 사용한다. 메시지 읽기 토큰과 역할을 구분하고 자격증명을 설정 파일이나 manifest에 넣지 않는다. 설치된 앱의 채널 멤버십, 읽기 토큰 종류·scope와 스레드 API 사용 가능 여부는 승인된 테스트 워크스페이스에서 별도로 검증한다. [연결 scope](https://docs.slack.dev/reference/scopes/connections.write/), [토큰 종류](https://docs.slack.dev/authentication/tokens/)
+
+공식 문서는 2026-11-10에 확인했다. 수신 프로세스의 Node 네트워크 권한은 프로세스 전체에 적용되므로 호스트별 OS 격리로 설명하지 않는다. 어댑터가 고정 Slack HTTPS API, redirect 거부, 정확히 허용한 WSS 호스트 검증으로 목적지를 제한한다. 하네스 자체를 신뢰하는 권한 경계이며 악성 코드 실행 sandbox는 아니다.
+
+**구현 완료 기준:** 합성 프레임과 가짜 네트워크로 아래 수용 테스트 17~26을 통과하고, 단계 1의 무변경·권한 제한을 유지한다. 실제 Slack 수신·토큰 권한·회사 보안 검토는 `not_run`으로 분리한다. 실환경 완료 기준은 별도 승인된 테스트 워크스페이스에서 최소 채널의 수신·편집·삭제·재시도·재연결과 외부 메시지 전송 0을 확인하는 것이다.
 
 ### 단계 3 승인 후 코드 변경
 
@@ -126,6 +165,7 @@ MessageSource, ModelPort, RepoReadPort, ExecutionPort, ApprovalPort, ReportSink�
 ### 최소 데이터
 
 - Task: taskId, eventId, workspaceId, channelId, threadTs, requesterId, 분류, 상태, repoId, baseCommit, createdAt.
+- Slack inbox와 메시지 수집 기록: eventId, 원본 messageTs, revision, 수집 상태, 마스킹한 최소 본문·스레드, 보관 기한. envelopeId는 ACK용이며 이벤트나 원본 메시지의 식별자를 대신하지 않는다.
 - Plan: planId, version, 원문 revision, 목적, 허용 파일과 변경 범위, testCommandIds, 위험, planHash.
 - Approval: approvalId, ownerId, taskId, planHash, baseCommit, 허용 동작, 만료 시각, 사용 시각, 취소 여부.
 - Evidence와 Run: 파일 경로와 줄, 커밋, diff 요약, 검사별 passed 또는 failed 또는 not\_run, 실패 사유.
@@ -196,12 +236,12 @@ MVP의 승인은 로컬 CLI에서만 받는다. 원격 서버를 열지 않고 �
 
 Slack의 app\_mention은 앱의 봇 사용자가 언급되는 이벤트다. 내 계정이 언급되는 경우를 잡으려면 접근이 승인된 채널의 message 이벤트를 수신하고, \<@TARGET\_USER\_ID\>를 검사하는 방식을 검토한다. 이름 문자열 검색은 이름 변경이나 동명이인 때문에 쓰지 않는다.
 
-초기 연결 방식은 Socket Mode를 후보로 둔다. 공개 수신 서버가 없어도 되지만 앱 설치, 필요한 토큰과 권한, 네트워크 연결은 필요하다. 공개 채널, 비공개 채널, DM은 접근 범위가 다르다. 실제 scope와 이벤트 종류 및 스레드 조회 권한은 현재 Slack 공식 문서와 회사 관리 설정으로 검증한다.
+단계 2 연결 방식은 Socket Mode로 한정한다. 공개 수신 서버가 없어도 앱 설치, 필요한 토큰과 권한, 네트워크 연결은 필요하다. 최소 manifest는 공개 채널만 대상으로 하며 비공개 채널은 별도 허용 시 추가한다. DM은 이번 범위 밖이다. 실제 토큰·scope·멤버십 및 스레드 조회 권한은 회사 관리 설정과 승인된 테스트 워크스페이스에서 검증한다.
 
 ### 이벤트 처리
 
 - 허용된 workspaceId와 channelId를 먼저 검사한다. 앱이 접근할 수 있는 범위 이상을 읽지 않는다.
-- ACK는 빨리 보내고 분석은 큐에서 처리한다. Slack 재시도와 중복 이벤트는 한 번만 처리한다.
+- 수락한 이벤트는 최소 자료와 중복 키를 SQLite inbox에 commit한 뒤 빠르게 ACK한다. 스레드 수집과 로컬 보고는 ACK 이후 처리한다. 저장 실패를 성공 수신으로 표시하지 않는다.
 - 봇과 자기 메시지에 대한 루프를 막는다. 편집과 삭제 이벤트는 별도 처리하고, 내용이 바뀐 계획의 승인은 무효화한다.
 - 내 ID 멘션 자체를 승인으로 보지 않는다. 결과 보고는 로컬이 기본이며, Slack DM 전송도 별도 설정한다.
 
@@ -305,6 +345,16 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 14 | 실행 중 취소와 프로세스 재시작 | 자동 재실행 없음. 중단 상태와 잔여 diff 보존. |
 | 15 | Slack 답장과 push와 PR 시도 | 별도 승인 없이 전송 또는 원격 변경 없음. |
 | 16 | 토큰과 환경변수와 로그 검사 | Git 추적 파일과 모델 입력 및 보고서에 비밀 없음. |
+| 17 | 같은 eventId가 다른 envelopeId로 전달됨 | inbox·수집 결과는 하나이며 전달별 ACK. ACK에 업무 답변 payload 없음. |
+| 18 | inbox 저장 실패·포화·commit 후 ACK 실패 | 미보관 새 메시지는 성공 ACK 없음. 포화 편집은 무효화·BLOCKED를 commit 후 ACK하고 수집 생략. commit 이벤트는 재전달·재시작에도 중복 수집 없음. |
+| 19 | 원본과 스레드 reply의 편집·삭제·멘션 제거 | messageTs·확인한 스레드로 연결된 작업·문맥 무효화. root 불명 변경은 같은 채널의 진행 중 수집을 보수 차단하고 무관한 완료 기록 유지. 취소 보고서 복구. 큐 포화여도 기존 계획 무효화 반영. |
+| 20 | 편집·삭제가 원문보다 먼저 도착하거나 수집 중 변경 | 오래된 revision과 늦은 스레드 결과가 최신 내용·삭제 상태를 덮어쓰지 않음. |
+| 21 | 스레드 cursor·과대 응답·수집 한도 | 허용된 thread만 조회. 페이지·메시지·바이트·시간 한도 준수와 불완전 사유 표시. |
+| 22 | 429와 Retry-After·권한 부족·오류 | 지정 대기와 재시도 상한 준수. 헤더 오류·과도한 대기는 실패 사유. 무한 재시도 없음. |
+| 23 | Socket disconnect·재연결·재시작·종료 | pending 후속 처리·processing 차단 복구, 재연결 한도, 최근 100개 연결·공백 이력. 취소 후 후속 작업 정리·DB 종료. 자동 채널 전체 backfill 없음. |
+| 24 | 마스킹·보관 만료·만료 후 재전달 | 본문·스레드·수집 출력에 지원 비밀·개인정보 패턴 없음. payload 제거 후 최소 중복·revision marker 유지로 같은 이벤트가 내용을 되살리지 않음. |
+| 25 | liveReadEnabled 기본 설정·토큰 분리·workspace 불일치 | 기본 외부 접속 0. 설정 오류·읽기 토큰 workspace 불일치 시 연결 거부. 조사 worker는 토큰·네트워크 없음. |
+| 26 | 실제 형식 메시지 수집 결과 | 분석 not_run과 이유 표시. 고정 모델의 합성 답변·코드 조사·승인·실행·외부 메시지 전송 없음. |
 
 ### 최종 검증 묶음
 
@@ -336,4 +386,4 @@ README에 개념과 실행 방법을, docs에 구조와 보안 경계 및 회사
 
 ### 이후 작업을 요청하는 순서
 
-첫 결과를 검토한 뒤 승인 모델과 상태 전이 테스트를 추가한다. 그다음 실제 Slack 읽기 연결을 검증하고, 마지막으로 격리 실행기와 worktree 수정을 연결한다. 각 단계의 권한 경계와 실패 테스트가 통과하기 전에는 다음 단계로 넓히지 않는다.
+단계 1 이후에는 단계 2의 수신 계약·오프라인 복구 테스트와 기본 비활성 연결 어댑터를 만든다. 실제 Slack 연결은 별도 회사 승인과 승인된 테스트 워크스페이스가 준비된 뒤 검증한다. 승인 모델·로컬 승인 명령과 격리 실행은 단계 3 기능이다. 실행 연결 없는 만료·취소·1회 소비·계획 및 커밋 불일치 테스트만 선택적으로 선행 보강할 수 있다. 각 단계의 권한 경계와 실패 테스트가 통과하기 전에는 다음 단계로 넓히지 않는다.
