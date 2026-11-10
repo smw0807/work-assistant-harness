@@ -1,6 +1,6 @@
 # work-assistant-harness
 
-가짜 Slack 이벤트를 받아 합성 저장소의 고정 커밋을 읽고, 답변 초안이나 수정 계획을 로컬에 보관하는 업무 하네스입니다. 현재 구현 범위는 **단계 0의 최소 기반과 단계 1의 읽기 전용 조사**입니다.
+Slack 요청을 로컬에 기록하고, 합성 자료로 읽기 전용 조사를 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록**이 구현 범위입니다. 실제 Slack 권한과 회사 환경, 승인 후 격리 실행 검증은 아직 수행하지 않았습니다.
 
 ```text
 로컬 이벤트 JSON
@@ -14,7 +14,7 @@
       불명확: NEEDS_CLARIFICATION
 ```
 
-실제 Slack, 외부 AI, 회사 저장소는 연결하지 않습니다. 승인 후 수정, 대상 스크립트 실행, 외부 메시지, Git 원격 작업도 구현하지 않았습니다. `ApprovalPort`와 `ExecutionPort`의 기본 구현은 항상 거부합니다.
+기본 실행은 합성 자료만 사용합니다. Slack 수신은 명시적으로 켜는 별도 경로이며 모델·제품 저장소와 연결하지 않습니다. 단계 3-A는 로컬 승인과 취소를 저장하며 `APPROVED`에서 멈춥니다. 승인 후 수정, 대상 스크립트 실행, 외부 메시지, Git 원격 작업은 구현하지 않았습니다. `ExecutionPort`의 기본 구현은 항상 거부하고 `run` 명령은 제공하지 않습니다.
 
 ## 설치와 실행
 
@@ -47,12 +47,34 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 
 데이터 폴더는 소스와 겹치지 않는 비공개 디렉터리여야 합니다. 새 폴더는 `0700`, SQLite와 보고서는 `0600`으로 만듭니다. 기존 폴더가 다른 사용자에게 열려 있으면 거부하며 임의로 권한을 바꾸지 않습니다. DB·저널의 symlink와 hardlink도 거부합니다.
 
-- `tasks.sqlite`: 작업, 이벤트 중복 제약, 상태 이력, 근거와 계획. 원문 메시지와 모델 원문은 저장하지 않습니다.
+- `tasks.sqlite`: 작업, 이벤트 중복 제약, 상태 이력, 근거와 계획, 별도 승인 테이블의 불변 계획 스냅샷과 승인·취소 이력. 모의 조사 작업은 원문 메시지와 모델 원문을 저장하지 않습니다. Slack 수집 자료의 별도 보관 범위는 아래 단계 2를 따릅니다.
 - `harness-lock.sqlite`: 동시 CLI 실행 방지용 SQLite 잠금. 프로세스 종료 시 OS가 잠금을 해제합니다.
 - `reports/`: 작업별 JSON 보고서. DB에 저장된 자료로 누락된 보고서를 재생성합니다.
 - `runs/`: 명령별 결과와 대상 전후 해시를 기록한 JSON 실행 기록.
 
-같은 이벤트는 재시작 후에도 다시 분석하지 않습니다. 중간에 종료된 `RECEIVED`, `TRIAGED`, `ANALYZED` 작업은 `BLOCKED`와 `INTERRUPTED_REVIEW_REQUIRED`로 남기고 자동 재실행하지 않습니다. 승인 대기 상태도 그대로 유지합니다. 자동 보관 기간·삭제·재처리 기능은 아직 없습니다.
+같은 이벤트는 재시작 후에도 다시 분석하지 않습니다. 중간에 종료된 `RECEIVED`, `TRIAGED`, `ANALYZED` 작업은 `BLOCKED`와 `INTERRUPTED_REVIEW_REQUIRED`로 남기고 자동 재실행하지 않습니다. 승인 대기 상태도 그대로 유지합니다. 만료된 승인은 상태 확인 시 취소 기록을 남기고 `AWAITING_APPROVAL`로 되돌립니다. 조사 작업과 승인 이력의 자동 보관 기간·삭제·재처리 기능은 아직 없습니다.
+
+## 단계 3-A 로컬 승인·취소
+
+변경 요청의 계획을 `inspect`로 확인하고, 표시된 해시와 기준 커밋을 그대로 승인 입력에 사용합니다. 유효기간은 1~1440분의 정수를 반드시 지정합니다.
+
+```sh
+pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
+pnpm harness approve <task-id> --plan-hash <sha256> --base-commit <sha1> --expires-in-minutes 30 --data-dir /private/tmp/harness-demo-data
+pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
+pnpm harness inspect <task-id> --approval-offset 1 --data-dir /private/tmp/harness-demo-data
+pnpm harness cancel <task-id> --data-dir /private/tmp/harness-demo-data
+```
+
+`--data-dir`를 생략하면 기본 데이터 위치를 사용합니다. `approve`는 `AWAITING_APPROVAL`인 변경 요청의 계획·요청 revision·저장소·기준 커밋을 검증하고, 불변 계획 스냅샷과 승인 기록을 `APPROVED` 상태 변경과 같은 트랜잭션으로 저장합니다. 활성 승인을 중복 생성하지 않습니다. 소유자는 `process.getuid()`로 확인한 `os-user:<uid>`이며 소유자 CLI 옵션이나 Slack 사용자 ID로 바꿀 수 없습니다. UID를 확인할 수 없는 OS에서는 거부합니다.
+
+`inspect`는 취소·만료 기록을 포함한 승인 이력을 최신순으로 한 번에 1개씩 반환합니다. 선택 옵션 `--approval-offset <0..1000000000>`의 기본값은 `0`입니다. `result.approvals`는 해당 페이지이고 `result.approvalPage`는 `{ offset, total, nextOffset }`입니다. `nextOffset`이 있으면 그 값을 다음 `--approval-offset`에 넣어 이어 조회합니다. `approve`·`cancel` 응답도 최신 승인 1개와 같은 페이지 정보를 반환하며, 전체 이력은 DB에 보존합니다. worker 출력은 최대 1MiB로 제한합니다.
+
+`cancel`은 `AWAITING_APPROVAL` 또는 `APPROVED`인 변경 요청을 `CANCELLED`로 바꾸고 기존 승인을 취소합니다. 만료 승인은 상태 확인 시 취소되고 작업이 다시 승인 대기 상태가 됩니다. 원본 요청의 편집·삭제도 Task 무효화와 같은 트랜잭션에서 승인을 취소하며, Task 계획·보고가 제거돼도 별도 승인 스냅샷은 보존합니다.
+
+이 단계의 승인은 `executionPolicy: approval-only-v1`, `usedAt: null`인 기록입니다. 후속 실제 실행 정책의 승인으로 재사용하지 않습니다. 현재 기준 커밋 검증은 Task·계획·CLI 입력의 일치 검사이며 대상 저장소의 실행 직전 상태 검증은 후속 단계입니다. 승인 소비·Run 생성·실제 patch·대상 검사·격리 실행은 `not_run`입니다. `pnpm harness run <task-id>`는 `UNKNOWN_COMMAND`로 거부됩니다.
+
+승인·취소는 기존 전역 프로세스 잠금을 사용합니다. 같은 데이터 디렉터리에서 `slack-listen`이 실행 중이면 거부되므로 수신과 동시에 승인하는 기능은 제공하지 않습니다. 수신 중단 구간의 Slack 편집·삭제 감지도 보장하지 않습니다. 실제 실행 전에는 수신·무효화·실행의 잠금과 취소 흐름을 추가 검증해야 합니다.
 
 ## 모의 입력과 오류 재현
 
@@ -92,6 +114,45 @@ Node 권한 모델은 신뢰하는 하네스 코드의 실수를 제한하는 �
 
 합성 저장소 경로는 실행 기록의 `repository.root`에 남깁니다. CLI는 검토를 위해 이 임시 자료를 자동 삭제하지 않습니다. 테스트는 자신이 만든 임시 자료만 종료 후 정리합니다. 보고서의 `passed`, `failed`, `not_run`은 구분되며 대상 설치·테스트·외부 전송·승인 후 실행은 `not_run`입니다.
 
+## 단계 2 Slack 읽기 수신
+
+수신 경로는 `Socket Mode → 허용 범위 검사 → SQLite commit → ACK → 제한된 스레드 조회 → 로컬 기록`입니다. 이 경로는 모델을 호출하거나 대상 저장소를 읽지 않습니다. 결과의 `analysis`는 `not_run`이며, 고정 모델의 답변을 실제 요청의 답변으로 만들지 않습니다.
+
+토큰 없이 합성 Socket Mode envelope를 재생할 수 있습니다.
+
+```sh
+pnpm harness slack-replay --data-dir /private/tmp/harness-slack-demo
+pnpm harness slack-list --data-dir /private/tmp/harness-slack-demo
+pnpm harness slack-inspect C_ALLOWED 1700000000.000001 --data-dir /private/tmp/harness-slack-demo
+pnpm harness slack-replay --events /absolute/path/to/synthetic-envelopes.json --data-dir /private/tmp/harness-slack-demo
+```
+
+기본 예제는 최초 메시지, 다른 envelope의 동일 이벤트 재전달, 편집, 비허용 채널을 포함합니다. `slack-replay`는 합성 입력 전용이며 실제 스레드를 조회하지 않아 `OFFLINE_NO_THREAD_SOURCE`를 기록합니다. 조사용 `replay` 명령은 단계 1의 동작을 그대로 사용합니다.
+
+`slack-list`는 최근 100개 요청의 상태·ID와 연결 이력을 표시하고 `slack-inspect`는 해당 요청의 마스킹된 본문·문맥을 표시합니다. 장시간 수신 중에도 이 두 조회 명령을 사용할 수 있습니다. 수신·모의 조사 변경 명령끼리는 기존 프로세스 잠금으로 겹치지 않게 합니다.
+
+실연결 준비에는 다음 값이 필요합니다. 실제 토큰·회사 설정은 저장소 밖에서 관리합니다.
+
+- `config/slack.example.json`: 허용 workspace·채널·소유자 ID, 보관 기간, 큐·스레드 상한. 기본 `liveReadEnabled`는 `false`입니다.
+- `config/slack-app-manifest.example.json`: 공개 채널의 `message.channels`와 `channels:history`만 사용하는 앱 예시. 앱을 허가된 최소 채널에만 초대합니다. DM·비공개 채널·메시지 쓰기 권한은 예시에 없습니다.
+- `SLACK_APP_TOKEN`: Socket Mode 연결용 app-level token, `connections:write`.
+- `SLACK_WEB_TOKEN`: 스레드 조회용 최소 읽기 권한 토큰. 별도의 승인된 비밀 저장소에서 실행 환경에 주입합니다.
+
+개인 테스트 또는 회사에서 승인받은 계정·자료·실행 환경에서 설정을 준비하고 `liveReadEnabled: true`를 명시한 경우에 사용할 명령입니다. 이번 구현에서는 실행하지 않았습니다.
+
+```sh
+pnpm harness slack-listen --config /absolute/path/to/approved-slack.json --data-dir /absolute/path/to/private-slack-data
+pnpm harness slack-list --config /absolute/path/to/approved-slack.json --data-dir /absolute/path/to/private-slack-data
+```
+
+수신부는 별도 Node 권한 프로세스에서 필요한 Slack 토큰만 받으며 대상 저장소를 읽는 권한이나 하위 프로세스 권한을 받지 않습니다. 조사 worker에는 토큰·네트워크 권한을 추가하지 않았습니다. 수신부의 Node `--allow-net`은 프로세스 전체 네트워크 허용이며 호스트별 OS 격리가 아닙니다. 어댑터가 고정 API와 정확한 WSS 호스트 목록을 검사하고 HTTP redirect를 거부합니다. 회사의 네트워크·데이터 정책 검증은 별도입니다.
+
+실연결은 먼저 `auth.test`로 Web API 토큰의 workspace를 확인합니다. 스레드 조회 가능 여부는 선택한 token·scope·채널 멤버십으로 직접 검증해야 합니다. 조회 시간·응답 크기·페이지·메시지 수를 제한하고 `429 Retry-After`를 상한 안에서 처리합니다. 제한·조회 실패는 불완전 문맥으로 표시합니다. 재연결은 누락 없는 재생을 보장하지 않으며 최근 100개 연결·공백 상태를 보관합니다. 과거 메시지 자동 조회로 공백을 메우는 기능은 없습니다. [Slack Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/), [스레드 조회](https://docs.slack.dev/reference/methods/conversations.replies/), [토큰 workspace 확인](https://docs.slack.dev/reference/methods/auth.test/)
+
+`tasks.sqlite`의 `slack_*` 테이블에 이벤트·요청·연결 이력을 저장합니다. 이벤트 ID는 중복 제거용이고 원본 메시지는 workspace·채널·message ts로 식별합니다. 편집·삭제·멘션 제거는 이전 문맥과 연계된 계획을 무효화합니다. 기존 조사 계획이 같은 메시지에 연결되어 있으면 DB에서 취소하고 로컬 보고서도 취소 상태로 다시 씁니다. DB가 원본이며, 보고서 쓰기 중 종료되면 다음 명령에서 복구합니다. 진행 중 중단된 수집은 `BLOCKED`로 보존하고 자동 재수집하지 않습니다.
+
+본문과 스레드는 비밀 패턴, 지원 이메일·국내 휴대전화 패턴을 마스킹한 뒤 보관합니다. 보관 기간은 1~168시간이며 예시는 24시간입니다. 명령 시작·수신·처리 시점과 실수신 중 매분 만료 본문을 제거합니다. 중지된 앱의 DB는 다음 실행 전까지 남습니다. 최소 event ID·메시지 revision·삭제 marker는 오래된 이벤트의 부활을 막기 위해 DB 수명 동안 남고 저장량이 늘어날 수 있습니다. 삭제는 백업·로그·파일시스템의 물리적 완전 삭제를 보장하지 않습니다. 모든 개인정보·비밀 형식을 판별하는 기능도 아닙니다.
+
 ## 개발 검증
 
 ```sh
@@ -103,4 +164,4 @@ pnpm build
 
 `test`는 컴파일 후 Node 내장 test runner로 단위·통합·CLI 수용 테스트를 실행합니다. 합성 저장소는 별도 임시 경로에 준비합니다. 하네스 테스트가 통과해도 실제 Slack 권한·회사 보안·격리 실행기의 검증을 통과한 것은 아닙니다.
 
-전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 이번 변경과 미구현 항목은 [단계 1 구현 결과](docs/stage-1-result.md)에 정리했습니다.
+전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1 결과](docs/stage-1-result.md), [단계 2 결과](docs/stage-2-result.md), [단계 3-A 결과](docs/stage-3a-result.md)에 정리했습니다. 단계 3 전체 완료는 승인 기록뿐 아니라 실제 격리 실증·고정 patch와 검사·실행 취소 및 복구까지 확인한 뒤 판단합니다.

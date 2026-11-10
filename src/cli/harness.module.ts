@@ -1,15 +1,17 @@
 import { Module, type DynamicModule } from '@nestjs/common';
 import { InvestigationService } from '../application/investigate.js';
+import { LocalApprovalService } from '../application/approve.js';
 import { FixtureModel } from '../adapters/fixture-model.js';
 import { LocalGitReader } from '../adapters/local-git-reader.js';
 import { LocalReportSink } from '../adapters/local-report-sink.js';
 import { SqliteTaskStore } from '../adapters/sqlite-task-store.js';
 import type { IngestionPolicy, RepositoryPolicy } from '../domain/types.js';
+import type { ApprovalRequest } from '../domain/approval.js';
 import { JsonModelOutputValidator } from '../policy/model-output.js';
 import { join } from 'node:path';
 
 export interface WorkerOptions {
-  command: 'replay' | 'inspect' | 'list';
+  command: 'replay' | 'inspect' | 'list' | 'approve' | 'cancel';
   sourceRoot: string;
   dataDirectory: string;
   scenario: string;
@@ -17,6 +19,8 @@ export interface WorkerOptions {
   repository: RepositoryPolicy;
   ingestion: IngestionPolicy;
   taskId: string;
+  approvalRequest: ApprovalRequest | null;
+  approvalOffset: number;
 }
 
 export const TASK_STORE = Symbol('TaskStore');
@@ -32,6 +36,11 @@ export class HarnessModule {
       providers: [
         { provide: TASK_STORE, useFactory: () => new SqliteTaskStore(join(options.dataDirectory, 'tasks.sqlite')) },
         { provide: REPORT_SINK, useFactory: () => new LocalReportSink(join(options.dataDirectory, 'reports')) },
+        {
+          provide: LocalApprovalService,
+          inject: [TASK_STORE, REPORT_SINK],
+          useFactory: (store: SqliteTaskStore, reporter: LocalReportSink) => new LocalApprovalService(store, reporter),
+        },
         {
           provide: InvestigationService,
           inject: [TASK_STORE, REPORT_SINK],

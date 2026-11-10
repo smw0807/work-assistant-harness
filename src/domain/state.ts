@@ -7,7 +7,8 @@ const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   ANALYZED: ['REPORTED', 'AWAITING_APPROVAL', 'BLOCKED', 'FAILED'],
   REPORTED: [],
   NEEDS_CLARIFICATION: [],
-  AWAITING_APPROVAL: [],
+  AWAITING_APPROVAL: ['APPROVED', 'CANCELLED'],
+  APPROVED: ['AWAITING_APPROVAL', 'CANCELLED'],
   BLOCKED: [],
   FAILED: [],
   CANCELLED: [],
@@ -22,5 +23,13 @@ export const transitionTask = (task: Task, status: TaskStatus): Task => {
     status,
     updatedAt: new Date().toISOString(),
     history: [...task.history, status],
+  };
+};
+
+/** 저장소가 원본 메시지와 revision을 검증한 뒤 호출하는 별도 취소 경로다. */
+export const invalidateTaskRequest = (task: Task, reason: 'REQUEST_CHANGED' | 'REQUEST_DELETED', at: string): Task => {
+  return {
+    ...task, status: 'CANCELLED', plan: null, report: null, failureCode: reason, updatedAt: at,
+    history: task.status === 'CANCELLED' ? task.history : [...task.history, 'CANCELLED'],
   };
 };

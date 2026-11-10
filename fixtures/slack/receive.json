@@ -1,0 +1,33 @@
+[
+  {
+    "type": "events_api", "envelope_id": "Envelope_first",
+    "payload": {
+      "type": "event_callback", "team_id": "W_LOCAL", "event_id": "Ev_socket_first",
+      "event": { "type": "message", "channel": "C_ALLOWED", "user": "U_REQUESTER", "ts": "1700000000.000001", "text": "<@U_OWNER> 합성 수신 확인 요청입니다." }
+    }
+  },
+  {
+    "type": "events_api", "envelope_id": "Envelope_retry",
+    "payload": {
+      "type": "event_callback", "team_id": "W_LOCAL", "event_id": "Ev_socket_first",
+      "event": { "type": "message", "channel": "C_ALLOWED", "user": "U_REQUESTER", "ts": "1700000000.000001", "text": "<@U_OWNER> 합성 수신 확인 요청입니다." }
+    }
+  },
+  {
+    "type": "events_api", "envelope_id": "Envelope_edit",
+    "payload": {
+      "type": "event_callback", "team_id": "W_LOCAL", "event_id": "Ev_socket_edit",
+      "event": {
+        "type": "message", "subtype": "message_changed", "channel": "C_ALLOWED", "event_ts": "1700000002.000001",
+        "message": { "type": "message", "user": "U_REQUESTER", "ts": "1700000000.000001", "text": "<@U_OWNER> 합성 요청의 내용을 고쳤습니다.", "edited": { "user": "U_REQUESTER", "ts": "1700000002.000001" } }
+      }
+    }
+  },
+  {
+    "type": "events_api", "envelope_id": "Envelope_ignored",
+    "payload": {
+      "type": "event_callback", "team_id": "W_LOCAL", "event_id": "Ev_socket_denied",
+      "event": { "type": "message", "channel": "C_DENIED", "user": "U_REQUESTER", "ts": "1700000003.000001", "text": "<@U_OWNER> 비허용 채널입니다." }
+    }
+  }
+]

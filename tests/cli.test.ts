@@ -124,8 +124,8 @@ test('CLI는 로컬 이벤트 파일의 중복과 역순 시각을 안전하게 
   assert.equal(receipt.result.duplicates, 1);
 });
 
-test('미구현 승인·실행 명령과 소스에 겹치는 출력 경로를 거부한다', () => {
-  for (const args of [['approve', 'unused'], ['run', 'unused'], ['list', '--data-dir', process.cwd()]]) {
+test('미구현 실행 명령과 소스에 겹치는 출력 경로를 거부한다', () => {
+  for (const args of [['run', 'unused'], ['list', '--data-dir', process.cwd()]]) {
     assert.throws(() => execFileSync(process.execPath, [resolve('dist/src/cli/main.js'), ...args], {
       encoding: 'utf8', env: { LANG: 'C.UTF-8', TZ: 'UTC' }, stdio: ['ignore', 'pipe', 'pipe'],
     }), (error: unknown) => error instanceof Error && 'stderr' in error

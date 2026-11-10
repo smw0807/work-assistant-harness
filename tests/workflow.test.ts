@@ -343,6 +343,9 @@ test('중단된 조사 상태는 재시작 시 차단하고 재전달된 이벤�
 test('초기 승인·실행 포트는 작업 ID와 계획 해시가 주어져도 항상 거부한다', () => {
   const taskId = randomUUID();
   const planHash = createHash('sha256').update('synthetic plan').digest('hex');
-  assert.throws(() => new DeniedApproval().approve(taskId, planHash), { code: 'APPROVAL_NOT_IMPLEMENTED' });
+  assert.throws(() => new DeniedApproval().approve(
+    { taskId, planHash, baseCommit: 'a'.repeat(40), expiresInMinutes: 30 },
+    { ownerId: 'U_OWNER', repoId: 'sample', baseCommit: 'a'.repeat(40), now: new Date() },
+  ), { code: 'APPROVAL_NOT_IMPLEMENTED' });
   assert.throws(() => new DeniedExecution().execute(taskId), { code: 'EXECUTION_DISABLED' });
 });
