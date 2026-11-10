@@ -4,7 +4,7 @@ import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { HarnessError } from '../domain/errors.js';
 import { EXECUTION_LIMITS } from '../domain/execution.js';
-import type { ExecutionCommandResult, ExecutionPolicy, IsolatedExecutionPort, RegisteredExecutionCommand } from '../domain/execution.js';
+import type { ExecutionCleanupResult, ExecutionCommandResult, ExecutionContainerIntent, ExecutionLifecycleHooks, ExecutionPolicy, IsolatedExecutionPort, RegisteredExecutionCommand } from '../domain/execution.js';
 import type { SandboxConfig } from '../domain/sandbox.js';
 import { DockerSandboxVerifier, type DockerCommandOptions, type DockerCommandResult, type DockerSandboxFileSystem } from './docker-sandbox.js';
 import { assertExecutionCommand, assertExecutionPolicy, createExecutionPolicy, getExecutionCommand } from '../policy/execution-policy.js';
@@ -24,8 +24,10 @@ const hostFileSystem: DockerSandboxFileSystem = {
 };
 
 const containerPattern = /^[a-f0-9]{64}$/;
+const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const metadataBytes = 65_536;
 const labelKey = 'work-assistant-harness.execution';
+const runLabelKey = 'work-assistant-harness.run';
 const scratchOptions = 'rw,noexec,nosuid,nodev,size=16777216,mode=1777';
 const imagePath = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 const workspaceFiles = ['README.md', 'checks/check.mjs', 'checks/output.mjs', 'checks/timeout.mjs', 'src/message.mjs'];
@@ -123,35 +125,52 @@ export class DockerIsolatedExecution implements IsolatedExecutionPort {
     this.verified = true;
   }
 
-  async execute(command: RegisteredExecutionCommand, workspaceRoot: string, signal?: AbortSignal): Promise<ExecutionCommandResult> {
+  async execute(command: RegisteredExecutionCommand, workspaceRoot: string, signal?: AbortSignal, hooks?: ExecutionLifecycleHooks): Promise<ExecutionCommandResult> {
     const result: ExecutionCommandResult = {
       commandId: command.commandId, containerName: null, termination: 'failed', exitCode: null,
       stopped: true, removed: true, oomKilled: false, outputBytes: 0,
       outputHash: createHash('sha256').digest('hex'), failureCode: null,
     };
-    if (signal?.aborted) return { ...result, termination: 'aborted' };
     const token = randomUUID();
     const name = `harness-execution-${token}`;
     let creationAttempted = false;
     let creationConfirmed = false;
+    let createdId: string | null = null;
+    const preflightVerified = this.verified;
+    this.verified = false;
     try {
-      if (!this.verified) throw new HarnessError('EXECUTION_PREFLIGHT_REQUIRED');
-      this.verified = false;
+      if (signal?.aborted) throw new HarnessError('EXECUTION_ABORTED');
+      if (!preflightVerified) throw new HarnessError('EXECUTION_PREFLIGHT_REQUIRED');
       assertExecutionCommand(command);
+      if (hooks !== undefined && !uuidPattern.test(hooks.runId)) throw new HarnessError('EXECUTION_INVALID_CONTAINER_INTENT');
       const registeredCommand = getExecutionCommand(command.commandId);
       const workspace = await this.validateWorkspace(workspaceRoot);
-      if (signal?.aborted) return { ...result, termination: 'aborted' };
-      creationAttempted = true;
+      if (signal?.aborted) throw new HarnessError('EXECUTION_ABORTED');
       result.containerName = name;
-      const created = await this.command(this.createArguments(name, token, workspace, registeredCommand), 10_000, metadataBytes, signal);
+      const intent: ExecutionContainerIntent | undefined = hooks === undefined ? undefined : {
+        runId: hooks.runId, name, token, id: null, commandId: registeredCommand.commandId,
+      };
+      if (hooks !== undefined && intent !== undefined) await this.lifecycle(() => hooks.beforeCreate(intent));
+      if (signal?.aborted) throw new HarnessError('EXECUTION_ABORTED');
+      const create = (): Promise<DockerExecutionCommandResult> => {
+        creationAttempted = true;
+        return this.command(this.createArguments(name, token, workspace, registeredCommand, hooks?.runId), 10_000, metadataBytes, signal);
+      };
+      const created = await (hooks?.dispatch ? hooks.dispatch(create) : create());
       if (created.termination !== 'completed' || created.exitCode !== 0 || !containerPattern.test(created.stdout.trim())) {
         throw new HarnessError('EXECUTION_CREATE_FAILED');
       }
       creationConfirmed = true;
-      const owned = await this.inspectOwned(name, token);
-      if (owned === null || owned.id !== created.stdout.trim()) throw new HarnessError('EXECUTION_CONTAINER_ID_MISMATCH');
+      createdId = created.stdout.trim();
+      // 취소가 도착했더라도 생성된 ID는 먼저 영속하고 이 소유 컨테이너를 정리한다.
+      if (hooks !== undefined && intent !== undefined) await this.lifecycle(() => hooks.created({ ...intent, id: createdId }));
+      const owned = await this.inspectOwned(name, token, hooks?.runId, createdId);
+      if (owned === null) throw new HarnessError('EXECUTION_CONTAINER_ID_MISMATCH');
       this.verifyCreatedContainer(owned.inspection, workspace, registeredCommand);
-      const executed = await this.command(['start', '--attach', owned.id], EXECUTION_LIMITS.timeoutMs, EXECUTION_LIMITS.outputBytes, signal);
+      if (hooks !== undefined) await this.lifecycle(() => hooks.beforeStart());
+      if (signal?.aborted) throw new HarnessError('EXECUTION_ABORTED');
+      const start = (): Promise<DockerExecutionCommandResult> => this.command(['start', '--attach', owned.id], EXECUTION_LIMITS.timeoutMs, EXECUTION_LIMITS.outputBytes, signal);
+      const executed = await (hooks?.dispatch ? hooks.dispatch(start) : start());
       result.termination = executed.termination;
       result.exitCode = executed.exitCode;
       result.outputBytes = executed.outputBytes ?? Buffer.byteLength(executed.stdout);
@@ -163,7 +182,7 @@ export class DockerIsolatedExecution implements IsolatedExecutionPort {
     } finally {
       if (creationAttempted) {
         try {
-          const cleanup = await this.cleanup(name, token);
+          const cleanup = await this.cleanup(name, token, hooks?.runId, createdId);
           const confirmed = creationConfirmed || cleanup.found;
           result.stopped = confirmed && cleanup.stopped;
           result.removed = confirmed && cleanup.removed;
@@ -181,7 +200,40 @@ export class DockerIsolatedExecution implements IsolatedExecutionPort {
         }
       }
     }
+    if (hooks !== undefined) {
+      try { await this.lifecycle(() => hooks.finished({ ...result })); }
+      catch { result.termination = 'failed'; result.failureCode = 'EXECUTION_LIFECYCLE_RECORD_FAILED'; }
+    }
     return result;
+  }
+
+  /** 새 코드를 실행하지 않고 영속한 소유 컨테이너만 정지·제거한다. */
+  async recover(intent: ExecutionContainerIntent): Promise<ExecutionCleanupResult> {
+    const failed: ExecutionCleanupResult = {
+      found: false, stopped: false, removed: false, exitCode: null, oomKilled: false, failureCode: null,
+    };
+    try {
+      if (!this.verified) throw new HarnessError('EXECUTION_PREFLIGHT_REQUIRED');
+      this.verified = false;
+      this.validateIntent(intent);
+      const cleanup = await this.cleanup(intent.name, intent.token, intent.runId, intent.id);
+      if (intent.id === null && !cleanup.found) return { ...failed, failureCode: 'EXECUTION_CREATE_OUTCOME_UNKNOWN' };
+      return { ...cleanup, failureCode: null };
+    } catch (error: unknown) {
+      return { ...failed, failureCode: error instanceof HarnessError ? error.code : 'EXECUTION_RECOVERY_FAILED' };
+    }
+  }
+
+  private validateIntent(intent: ExecutionContainerIntent): void {
+    if (typeof intent !== 'object' || intent === null || !uuidPattern.test(intent.runId) || !uuidPattern.test(intent.token)
+      || intent.name !== `harness-execution-${intent.token}` || (intent.id !== null && !containerPattern.test(intent.id))) {
+      throw new HarnessError('EXECUTION_INVALID_CONTAINER_INTENT');
+    }
+    getExecutionCommand(intent.commandId);
+  }
+
+  private async lifecycle(callback: () => Promise<void>): Promise<void> {
+    try { await callback(); } catch { throw new HarnessError('EXECUTION_LIFECYCLE_RECORD_FAILED'); }
   }
 
   private async validateWorkspace(workspaceRoot: string): Promise<string> {
@@ -226,10 +278,11 @@ export class DockerIsolatedExecution implements IsolatedExecutionPort {
     return workspace;
   }
 
-  private createArguments(name: string, token: string, workspace: string, command: RegisteredExecutionCommand): string[] {
+  private createArguments(name: string, token: string, workspace: string, command: RegisteredExecutionCommand, runId?: string): string[] {
     if (workspace.includes(',') || workspace.includes('\n') || workspace.includes('\r')) throw new HarnessError('EXECUTION_UNSAFE_WORKSPACE');
     return [
       'create', '--pull', 'never', '--name', name, '--label', `${labelKey}=${token}`,
+      ...(runId === undefined ? [] : ['--label', `${runLabelKey}=${runId}`]),
       '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges=true',
       '--user', '1000:1000', '--ipc', 'none', '--pids-limit', String(EXECUTION_LIMITS.pids),
       '--memory', String(EXECUTION_LIMITS.memoryBytes), '--memory-swap', String(EXECUTION_LIMITS.memoryBytes),
@@ -309,44 +362,50 @@ export class DockerIsolatedExecution implements IsolatedExecutionPort {
       || !isRecord(mount.BindOptions) || mount.BindOptions.Propagation !== 'rprivate' || mount.BindOptions.NonRecursive !== true) unsafe();
   }
 
-  private async inspectOwned(name: string, token: string): Promise<OwnedContainer | null> {
+  private async inspectOwned(name: string, token: string, runId?: string, expectedId: string | null = null): Promise<OwnedContainer | null> {
     const response = await this.command(['container', 'inspect', name], 10_000, metadataBytes);
     if (response.termination !== 'completed' || response.exitCode !== 0) {
-      if (await this.isAbsent(name)) return null;
+      if (await this.isAbsent(name, expectedId)) return null;
       throw new HarnessError('EXECUTION_CONTAINER_INSPECTION_FAILED');
     }
     const inspection = parseInspection(response.stdout);
     const configuration = inspection.Config;
     if (typeof inspection.Id !== 'string' || !containerPattern.test(inspection.Id) || inspection.Name !== `/${name}`
-      || !isRecord(configuration) || !isRecord(configuration.Labels) || configuration.Labels[labelKey] !== token) {
+      || !isRecord(configuration) || !isRecord(configuration.Labels) || configuration.Labels[labelKey] !== token
+      || (runId !== undefined && configuration.Labels[runLabelKey] !== runId)
+      || (expectedId !== null && inspection.Id !== expectedId)) {
       throw new HarnessError('EXECUTION_CONTAINER_OWNERSHIP_MISMATCH');
     }
     return { id: inspection.Id, inspection };
   }
 
-  private async cleanup(name: string, token: string): Promise<CleanupResult> {
-    let owned = await this.inspectOwned(name, token);
+  private async cleanup(name: string, token: string, runId?: string, expectedId: string | null = null): Promise<CleanupResult> {
+    let owned = await this.inspectOwned(name, token, runId, expectedId);
     if (owned === null) return { found: false, stopped: true, removed: true, oomKilled: false, exitCode: null };
+    const originalId = owned.id;
     let state = owned.inspection.State;
     if (!isRecord(state)) throw new HarnessError('EXECUTION_INVALID_METADATA');
     if (state.Running === true || state.Paused === true || state.Restarting === true) {
       await this.command(['kill', '--signal', 'KILL', owned.id], 10_000, metadataBytes);
-      owned = await this.inspectOwned(name, token);
+      owned = await this.inspectOwned(name, token, runId, originalId);
       if (owned === null) throw new HarnessError('EXECUTION_CONTAINER_DISAPPEARED');
       state = owned.inspection.State;
     }
     if (!isRecord(state) || state.Running !== false || state.Paused !== false || state.Restarting !== false
       || typeof state.OOMKilled !== 'boolean' || !Number.isInteger(state.ExitCode)) throw new HarnessError('EXECUTION_STOP_UNCONFIRMED');
     const removed = await this.command(['rm', '--force', owned.id], 10_000, metadataBytes);
-    if (removed.termination !== 'completed' || removed.exitCode !== 0 || !(await this.isAbsent(name))) {
+    if (removed.termination !== 'completed' || removed.exitCode !== 0 || !(await this.isAbsent(name, originalId))) {
       throw new HarnessError('EXECUTION_REMOVAL_UNCONFIRMED');
     }
     return { found: true, stopped: true, removed: true, oomKilled: state.OOMKilled, exitCode: state.ExitCode as number };
   }
 
-  private async isAbsent(name: string): Promise<boolean> {
+  private async isAbsent(name: string, expectedId: string | null = null): Promise<boolean> {
     const response = await this.metadata(['container', 'ls', '--all', '--no-trunc', '--filter', `name=^/${name}$`, '--format', '{{.ID}}']);
-    return response.stdout.trim() === '';
+    if (response.stdout.trim() !== '') return false;
+    if (expectedId === null) return true;
+    const byId = await this.metadata(['container', 'ls', '--all', '--no-trunc', '--filter', `id=${expectedId}`, '--format', '{{.ID}}']);
+    return byId.stdout.trim() === '';
   }
 
   private async metadata(arguments_: string[]): Promise<DockerExecutionCommandResult> {

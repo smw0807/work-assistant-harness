@@ -132,11 +132,11 @@ test('검사 실패·미종료·출력 및 시간 초과는 실패 Run이며 승
     const { service, request, store, task, artifactDirectory } = await setup(t, changes);
     await service.approve({ ...request, expiresInMinutes: 30 }, context());
     const run = await service.run(request, context(), artifactDirectory);
-    assert.equal(run.status, 'FAILED');
+    assert.equal(run.status, changes.stopped === false || changes.removed === false ? 'BLOCKED' : 'FAILED');
     assert.ok(run.diff.length);
     assert.equal(run.checks.find((check) => check.name === 'synthetic-check-v1')?.status, 'failed');
     assert.ok(store.listApprovals(task.taskId)[0]?.usedAt);
-    assert.equal(store.findRun(run.runId)?.status, 'FAILED');
+    assert.equal(store.findRun(run.runId)?.status, run.status);
     await assert.rejects(service.run(request, context(), artifactDirectory));
   }
 });

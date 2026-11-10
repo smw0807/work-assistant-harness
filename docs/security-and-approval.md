@@ -4,7 +4,7 @@
 
 이 문서는 구현할 보안 요구사항이다. 문서를 작성하거나 `AGENTS.md`에 규칙을 넣었다는 이유로 보호 장치가 작동한다고 간주하지 않는다. 코드, 권한 설정과 실패 테스트로 검증한 기능만 사용한다.
 
-단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 Docker 격리 진단은 [stage-3b-result.md](stage-3b-result.md), 단계 3-C의 독립 합성 계획·새 승인·patch·등록 검사는 [stage-3c-result.md](stage-3c-result.md)를 따른다. 진단 보고서는 실행 권한이 아니며 기존 조사 Task나 실제 Slack·회사 저장소의 실행을 열지 않는다. 조사 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
+단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 Docker 격리 진단은 [stage-3b-result.md](stage-3b-result.md), 단계 3-C의 독립 합성 실행은 [stage-3c-result.md](stage-3c-result.md), 단계 3-D의 합성 취소·중단 복구·잔여 관찰은 [stage-3d-result.md](stage-3d-result.md)를 따른다. 진단 보고서는 실행 권한이 아니며 기존 조사 Task나 실제 Slack·회사 저장소의 실행을 열지 않는다. 조사 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
 
 전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 범위는 합성 데이터 기반의 로컬 조사이며 실제 회사 계정과 코드를 연결하지 않는다.
 
@@ -136,7 +136,19 @@ container는 3-B와 같은 nonroot·읽기 전용 root·네트워크 없음·cap
 
 시간·출력 초과나 정상 신호 취소 때 controller는 자기 container만 소유권을 확인해 kill하고 정지·제거 결과를 남긴다. 생성 응답이 불확실하면 단순 부재만으로 정리 성공을 주장하지 않는다. 출력 한도는 수신 chunk에서 감지하므로 관찰 바이트 수가 임계값보다 클 수 있다. 원시 stdout/stderr나 Docker 오류를 저장하지 않고 관찰 바이트 수·출력 해시·고정 오류 코드만 보관한다. 실제 diff는 합성 파일 내용과 전후 해시를 포함하며 원본 전체 전후 해시와 검사별 `passed`·`failed`·`not_run`을 기록한다.
 
-모든 `execution-*` 명령도 기존 전역 lease를 사용한다. 같은 데이터 디렉터리의 실시간 Slack 수신과 동시에 실행하지 않으며 수신 중단 구간의 변경 감지는 보장하지 않는다. SIGINT·SIGTERM 처리와 시간 초과 종료를 controller crash 복구로 확대하지 않는다. 강제 종료로 남은 `RUNNING`은 보존하며 재시작 시 자동 분류·프로세스 조사·정리·재실행하지 않는다. 실행 중 요청 무효화·소유자 취소·crash 경합과 복구는 3-D에서 구현한다. Docker daemon·Desktop VM·Linux 커널과 같은 OS 사용자는 계속 신뢰 경계에 포함되며 범용 악성 코드나 실제 회사 자료의 실행 검증을 완료했다고 주장하지 않는다.
+계획·승인·실행·복구는 전역 lease를 유지해 실제 Slack 수신과 직렬화한다. 아래 합성 제어·조회만 짧은 실행 DB 트랜잭션을 사용한다. Docker daemon·Desktop VM·Linux 커널과 같은 OS 사용자는 계속 신뢰 경계에 포함되며 범용 악성 코드나 실제 회사 자료의 실행 검증을 완료했다고 주장하지 않는다.
+
+### 단계 3-D의 합성 제어·중단 복구
+
+`execution-cancel`·`execution-invalidate`는 OS UID 소유자를 확인하고 합성 요청 `synthetic:<task-id>`의 revision·generation을 갱신한다. 초기 revision은 1이며 편집·삭제는 현재보다 큰 정수 revision(최대 1000000000)만 적용한다. 같은 이벤트 ID·내용은 멱등 처리하고 다른 내용의 ID 재사용은 거부한다. 오래된 이벤트는 기록만 남긴다. 대기 Task의 취소와 미소비 승인 revoke는 제어 기록과 한 트랜잭션이며, 실행 중 제어는 Run을 즉시 완료 처리하지 않는다. 승인 생성·소비와 최종 Run 종료가 같은 트랜잭션에서 요청 fence를 확인한다. 취소된 실행의 정리가 확인되지 않으면 `CANCELLED`로 단정하지 않고 `BLOCKED`로 보존한다.
+
+실행 DB에는 생성 전 container 이름·소유 토큰·Run ID를 기록하고, 생성 뒤 전체 ID를 저장한다. 실제 container에는 소유 토큰과 Run label을 함께 붙인다. 복구는 이름·토큰·Run label·기록한 ID가 일치하는 자기 container만 종료·제거한다. 이름 조회가 실패하면 기록한 ID로도 잔존 여부를 확인한다. 생성 결과가 불확실하고 ID도 없으면 단순 부재를 정리 완료로 인정하지 않는다. 과거 3-C의 미완 Run에 이 정보가 없으면 `legacy_untracked`와 `BLOCKED`로 기록하고 광범위 label 조회·kill로 대신하지 않는다.
+
+파일 변경은 짧은 비동기 FS guard에서 요청 fence를 확인하고 취소 writer와 직렬화한다. 제어 commit이 앞서면 파일 작업을 시작하지 않고, 이미 시작한 짧은 파일 작업이 있으면 그 작업이 끝난 뒤 제어를 commit한다. Docker create/start는 별도 동기 dispatch 트랜잭션에서 generation을 재확인하고 실제 CLI spawn까지 직렬화한다. RPC 완료는 잠금 밖에서 기다린다. 취소 전에 전달된 RPC와 이미 바뀐 파일은 취소로 되돌아가지 않으며 controller의 polling·정리 또는 명시적 복구 대상으로 남는다.
+
+`execution-recover`는 실행을 재개하지 않고 영속한 lifecycle과 작업 영역 증거를 조사한다. 부분 파일·추적/미추적 변경·삭제·권한·Git·실행 view를 새 프로세스에서 확인한다. 링크를 따라가거나 권한을 고치지 않고 파일 수·바이트 한도를 적용한다. 예상 밖 이름은 해시로 보고하며 그 파일의 본문을 읽지 않는다. 정리·관찰이 확인되면 `INTERRUPTED` 또는 `CANCELLED`, 미확인이면 `BLOCKED`다. 소비 승인 `usedAt`은 유지한다. 이미 `BLOCKED`인 Run은 재조사 뒤에도 역사를 덮어쓰지 않고 lifecycle의 cleanup·observation만 갱신한다. 실행 단계 이력과 제어 이벤트는 추가 전용 테이블로 보존한다.
+
+`execution-inspect`는 Task·요청 상태·승인 페이지·Run·lifecycle을 단일 DB snapshot으로 읽고 트랜잭션을 끝낸 뒤 보고서 파일을 다룬다. SQLite를 원본으로 누락된 완료 보고서만 만들고 다른 내용의 기존 보고서는 덮어쓰지 않는다. 제어·조회만 전역 lease를 우회하며 실행·복구는 계속 실시간 Slack 수신과 직렬화한다. 실제 Slack 편집·삭제를 합성 Task에 연결하지 않으며 수신 공백의 변경 감지도 보장하지 않는다. 자동 재실행·승인 복원·commit·push·작업물 삭제는 없다.
 
 ## 6. Slack과 외부 전송
 
@@ -210,5 +222,5 @@ Gmail·Calendar·Drive는 후속 선택 기능이다. 연결된 계정이 있다
 - 별도 허가 없는 메시지 전송·push·PR이 없음.
 - 승인 범위 밖 변경과 실패·미실행 검사를 성공으로 보고하지 않음.
 
-단계 3-A의 기록용 승인, 단계 3-B의 합성 격리 진단과 단계 3-C의 독립 합성 실행을 구분한다. 실제 검증 범위는 3-B·3-C 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. 기존 조사 실행 포트는 항상 거부하며 실제 회사 저장소·Slack 요청 실행과 3-D의 요청 무효화·취소·crash 복구는 미구현이다. 후속 보안 검증을 통과했다고 미리 기록하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
+단계 3-A의 기록용 승인, 단계 3-B의 합성 격리 진단, 단계 3-C의 독립 합성 실행과 단계 3-D의 합성 제어·복구를 구분한다. 실제 검증 범위는 각 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. 기존 조사 실행 포트는 항상 거부하며 실제 회사 저장소·Slack 요청 실행은 연결하지 않는다. 합성 검증을 회사 보안 검토 통과로 표현하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
 

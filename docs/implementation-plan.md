@@ -4,7 +4,7 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 핵심 방향은 Slack에서 나를 부른 메시지를 모아 저장소를 읽고, 답변 초안이나 수정 계획을 나에게 보여 주는 것이다. 코드 변경은 내가 승인한 뒤에만 격리된 작업 공간에서 수행한다. 첫 버전은 실제 회사 계정 없이 로컬에서 검증할 수 있게 만든다.
 
-현재 구현 상태: 단계 0·1의 모의 조사, 단계 2의 수신·오프라인 검증, 단계 3-A의 로컬 승인, 단계 3-B의 Docker 격리 진단에 이어 2026-11-10에 단계 3-C의 독립 합성 patch·등록 검사 실행을 구현했다. 3-B 실제 probe와 진단 권한 경계는 [단계 3-B 결과](stage-3b-result.md), 새 실행 계획·승인·원자적 Run과 실제 Docker 성공·실패 검증은 [단계 3-C 결과](stage-3c-result.md)에 기록한다. 기존 조사 Task와 `approval-only-v1`은 실행에 연결하지 않으며 실제 Slack·AI·회사 저장소도 연결하지 않았다. 기존 범위는 [단계 1 결과](stage-1-result.md), [단계 2 결과](stage-2-result.md), [단계 3-A 결과](stage-3a-result.md), 현재 명령은 [README](../README.md)를 따른다. 다음 구현 단계는 3-D의 요청 무효화·취소·crash 복구다. 아래 범용 실행 명령 예시는 구현 제안이다.
+현재 구현 상태: 단계 0·1의 모의 조사, 단계 2의 수신·오프라인 검증, 단계 3-A의 로컬 승인, 단계 3-B의 Docker 격리 진단과 단계 3-C의 독립 합성 실행에 이어 2026-11-10에 단계 3-D의 합성 요청 무효화·취소·crash 복구·잔여 상태 관찰을 구현했다. 실제 검증은 [단계 3-B](stage-3b-result.md), [단계 3-C](stage-3c-result.md), [단계 3-D 결과](stage-3d-result.md)에 기록한다. 기존 조사 Task와 `approval-only-v1`은 실행에 연결하지 않으며 실제 Slack·AI·회사 저장소도 연결하지 않았다. 기존 범위는 [단계 1](stage-1-result.md), [단계 2](stage-2-result.md), [단계 3-A 결과](stage-3a-result.md), 현재 명령은 [README](../README.md)를 따른다. 회사 도입과 단계 4 선택 기능은 별도 범위다. 아래 범용 실행 명령 예시는 구현 제안이다.
 
 ### 하네스가 맡을 역할
 
@@ -170,16 +170,20 @@ Socket Mode의 app-level 토큰에는 연결용 `connections:write`를 사용한
 
 **완료 기준:** 수용 테스트 06~13과 34~35를 합성 저장소에서 통과한다. 승인 없음·만료·재사용·계획/커밋/revision/정책 변경·범위 초과는 파일 변경 또는 검사 시작 전에 차단한다.
 
-**현재 경계:** 실행 중 요청 변경·소유자 취소·controller crash 경합은 3-D에서 구현한다. 기존 전역 lease로 실시간 Slack 수신과 합성 실행을 직렬화하고, 강제 종료로 남은 `RUNNING`과 소비 승인은 자동 복구·재실행 없이 보존한다. 실제 Docker 성공·실패 결과와 수용 기준별 근거는 [3-C 결과](stage-3c-result.md)를 따른다.
+**후속 보완:** 실행 중 합성 요청 변경·소유자 취소·controller crash 경합은 아래 3-D에서 처리한다. 실시간 Slack 수신과 실행은 계속 전역 lease로 직렬화한다. 3-C 당시의 검증·한계는 [3-C 결과](stage-3c-result.md)에 보존한다.
 
 #### 단계 3-D 실행 취소·복구·diff 보고
 
-- 실행 중 요청 편집·삭제·취소가 새 동작 차단과 프로세스 트리 종료로 이어지게 한다. 중단 후 실제 diff와 남은 영향을 기록하고 승인 당시 계획·Run·작업물을 보존한다.
-- 승인 소비 전후, patch 적용 중, 검사 중의 종료·재시작을 복구한다. 중단 작업은 자동 재실행하지 않으며 현재 상태 조사와 새 승인 필요 여부를 표시한다.
-- 실행 전후 파일·미추적 파일·권한과 Git 상태를 비교하고 검사별 `passed`, `failed`, `not_run`과 이유를 보고한다. 범위 초과와 실패를 성공으로 표시하지 않는다. 자동 commit·push·worktree 삭제·실패 작업물 정리는 하지 않는다.
-- 단계 3-A의 전역 lease 한계를 재설계하거나 실시간 수신과 실행을 명시적으로 직렬화한 후, 요청 무효화와 실행 간 경합을 검증한다. 동시 수신이 없는 동안의 Slack 변경 감지는 보장하지 않는다.
+- `execution-cancel`·`execution-invalidate`·`execution-recover`를 합성 전용으로 제공한다. `synthetic:<task-id>`와 초기 revision 1·generation 0을 저장하고, OS 소유자·이벤트 중복·다른 payload·오래된 revision을 검증한다. 편집·삭제는 정수 revision 2~1000000000을 받는다. 요청 무효화·미소비 승인 revoke·대기 Task 취소를 한 트랜잭션으로 처리하고 승인 생성·소비·Run 종료에서 같은 fence를 확인한다.
+- 승인 소비와 `claimed` lifecycle을 원자 저장한다. 생성 RPC 전에 container 이름·소유 토큰·Run ID를 기록하고 생성 뒤 전체 ID를 추가한다. 작업 영역 경로와 계획/Git/view 해시, 중간 diff·검사·명령 결과도 영속한다. 제어 이벤트와 순번 lifecycle 이력은 추가 전용으로 보존한다.
+- 파일 작업은 짧은 DB guard로, Docker create/start의 실제 CLI spawn은 동기 dispatch gate로 취소 commit과 직렬화한다. RPC 완료는 잠금 밖에서 기다리며 이미 전달된 RPC는 소유권을 확인해 정리한다. controller는 실행 중 제어를 polling으로 감지하고 새 동작을 차단한다.
+- 승인 소비 전후·patch 중·검사 중의 종료를 명시적 `execution-recover`로 조사한다. 이름·토큰·Run label·전체 ID가 일치하는 자기 container만 정지·제거한다. 확인된 취소는 `CANCELLED`, 중단은 `INTERRUPTED`, 정리·관찰 미확인은 `BLOCKED`다. 과거 3-C의 미완 Run에 소유 정보가 없으면 `legacy_untracked`로 보존하고 추측해 kill하지 않는다. 이미 `BLOCKED`인 Run의 재조사는 기존 Run을 유지하고 lifecycle 근거만 갱신한다.
+- 새 프로세스에서 영속 증거로 부분 파일·추적/미추적 변경·삭제·권한·Git·실행 view를 관찰하고 검사별 `passed`·`failed`·`not_run`을 보고한다. 예상 밖 파일의 본문·원래 이름은 노출하지 않는다. `execution-inspect`는 단일 DB snapshot을 읽은 뒤 보고서 I/O를 수행한다. 승인 소비 복원·자동 재실행·commit·push·작업물 삭제는 없다.
+- 취소·무효화·조회만 전역 lease를 우회해 짧은 실행 DB 트랜잭션을 사용한다. 계획·승인·실행·복구는 기존 lease를 유지해 실시간 Slack 수신과 직렬화한다. 실제 Slack Task는 합성 실행에 연결하지 않으며 수신 공백의 변경 감지도 보장하지 않는다.
 
 **완료 기준:** 수용 테스트 14~16과 36을 통과하고 실패·취소·재시작 뒤에도 승인 기록과 잔여 diff가 보존된다. 단계 3 전체 완료는 3-A~3-D의 구현과 격리 실증을 모두 확인한 뒤 판단한다.
+
+**검증 상태:** 합성 단위·통합·CLI와 실제 child-process 강제 종료를 포함한 최종 회귀 271개, 실제 Docker의 정상·3종 제어·SIGKILL 복구·설정 오류 후 재조사 6개 시나리오가 통과했다. lint·typecheck·build와 수용 기준의 구체적인 `passed`·`failed`·`not_run` 근거는 [3-D 결과](stage-3d-result.md)를 따른다. 이 판정은 고정 합성 범위에 한정하며 회사 자료·실제 Slack 요청 실행의 승인을 뜻하지 않는다.
 
 ### 단계 4 선택 확장
 
@@ -225,7 +229,7 @@ RECEIVED → TRIAGED → ANALYZED
 
 상태는 데이터베이스 트랜잭션으로 바꾼다. 이벤트 ID와 승인 사용 기록에는 유일성 제약을 둔다. 재시작은 기록 복구이지, 중단된 수정 작업의 자동 재실행 허가가 아니다.
 
-단계 3-A는 `APPROVED`까지 저장하고 실행하지 않는다. 승인 만료는 취소 기록을 남긴 뒤 `APPROVED → AWAITING_APPROVAL`, 로컬 취소와 요청 무효화는 `CANCELLED`로 전환한다. 불변 승인 스냅샷과 `approval-only-v1` 정책은 Task와 별도로 보존한다. 단계 3-C의 독립 합성 실행은 별도 `execution.sqlite`에서 `AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED`와 새 `synthetic-execution-v1` 승인·Run을 관리한다. 기존 조사 상태 전이와 혼용하지 않는다.
+단계 3-A는 `APPROVED`까지 저장하고 실행하지 않는다. 승인 만료는 취소 기록을 남긴 뒤 `APPROVED → AWAITING_APPROVAL`, 로컬 취소와 요청 무효화는 `CANCELLED`로 전환한다. 불변 승인 스냅샷과 `approval-only-v1` 정책은 Task와 별도로 보존한다. 단계 3-C·3-D의 독립 합성 실행은 별도 `execution.sqlite`에서 `AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED / CANCELLED / INTERRUPTED`와 새 `synthetic-execution-v1` 승인·Run·요청 무효화/lifecycle 기록을 관리한다. 기존 조사 상태 전이와 혼용하지 않는다.
 
 ## 4 승인과 실행 경계
 

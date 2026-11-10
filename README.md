@@ -1,6 +1,6 @@
 # work-assistant-harness
 
-Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 격리 실행을 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록, 단계 3-B의 Docker 격리 진단, 단계 3-C의 고정 합성 patch·등록 검사 실행**을 구현했습니다. 실제 backend 검증 결과는 [단계 3-B 결과](docs/stage-3b-result.md)와 [단계 3-C 결과](docs/stage-3c-result.md)에 기록합니다. 실제 Slack 권한·AI·회사 저장소 연결과 실행은 검증하지 않았습니다.
+Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 격리 실행을 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록, 단계 3-B의 Docker 격리 진단, 단계 3-C의 고정 합성 patch·등록 검사 실행, 단계 3-D의 합성 실행 취소·중단 복구·잔여 변경 관찰**을 구현했습니다. 검증 결과는 [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md)에 기록합니다. 실제 Slack 권한·AI·회사 저장소 연결과 실행은 검증하지 않았습니다.
 
 ```text
 로컬 이벤트 JSON
@@ -48,10 +48,10 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 데이터 폴더는 소스와 겹치지 않는 비공개 디렉터리여야 합니다. 새 폴더는 `0700`, SQLite와 보고서는 `0600`으로 만듭니다. 기존 폴더가 다른 사용자에게 열려 있으면 거부하며 임의로 권한을 바꾸지 않습니다. DB·저널의 symlink와 hardlink도 거부합니다.
 
 - `tasks.sqlite`: 작업, 이벤트 중복 제약, 상태 이력, 근거와 계획, 별도 승인 테이블의 불변 계획 스냅샷과 승인·취소 이력. 모의 조사 작업은 원문 메시지와 모델 원문을 저장하지 않습니다. Slack 수집 자료의 별도 보관 범위는 아래 단계 2를 따릅니다.
-- `harness-lock.sqlite`: 동시 CLI 실행 방지용 SQLite 잠금. 프로세스 종료 시 OS가 잠금을 해제합니다.
+- `harness-lock.sqlite`: 실행 소유권과 실시간 Slack 수신을 직렬화하는 SQLite 잠금. 합성 실행의 `execution-cancel`·`execution-invalidate`·`execution-inspect`는 짧은 별도 실행 DB 트랜잭션을 사용합니다. 프로세스 종료 시 OS가 잠금을 해제합니다.
 - `reports/`: 작업별 JSON 보고서. DB에 저장된 자료로 누락된 보고서를 재생성합니다.
 - `runs/`: 명령별 결과와 대상 전후 해시를 기록한 JSON 실행 기록.
-- `execution.sqlite`, `executions/`: 단계 3-C의 독립 합성 작업·실행 계획·승인·Run과 동결 원본·분리 작업 트리·읽기 전용 실행 view·보고서. 기존 `tasks.sqlite`의 작업과 승인을 실행에 사용하지 않습니다.
+- `execution.sqlite`, `executions/`: 독립 합성 작업·계획·승인·Run, 요청 revision·무효화·실행 단계 이력과 동결 원본·분리 작업 트리·읽기 전용 실행 view·보고서. 기존 `tasks.sqlite`의 작업과 승인을 실행에 사용하지 않습니다.
 
 같은 이벤트는 재시작 후에도 다시 분석하지 않습니다. 중간에 종료된 `RECEIVED`, `TRIAGED`, `ANALYZED` 작업은 `BLOCKED`와 `INTERRUPTED_REVIEW_REQUIRED`로 남기고 자동 재실행하지 않습니다. 승인 대기 상태도 그대로 유지합니다. 만료된 승인은 상태 확인 시 취소 기록을 남기고 `AWAITING_APPROVAL`로 되돌립니다. 조사 작업과 승인 이력의 자동 보관 기간·삭제·재처리 기능은 아직 없습니다.
 
@@ -118,7 +118,27 @@ pnpm harness execution-inspect --task <id> --approval-offset 1 --data-dir /priva
 
 결과는 `executions/<task-id>/run-<artifact-id>/report.json`과 SQLite Run에 저장합니다. 검사별 `passed`·`failed`·`not_run`, 실제 파일 전후 내용·해시, 원본 전후 해시, 명령의 종료 유형·코드·정지·제거 결과를 남깁니다. 실행 성공은 종료 코드 0, 실패는 1입니다. `execution-inspect`는 SQLite를 원본으로 누락된 완료 보고서를 재생성하고 승인 이력을 최신 한 건씩 `{ approvals, approvalPage }`로 반환합니다. `approvalPage.nextOffset`을 다음 조회에 사용합니다. 작업물은 자동 commit·push·정리하지 않습니다.
 
-모든 명령은 기존 전역 lease를 사용하므로 같은 데이터 디렉터리의 실시간 Slack 수신 중에는 거부됩니다. 실행 중 요청 변경·취소·controller 강제 종료 후 복구는 **3-D 미구현 범위**입니다. 강제 종료로 남은 `RUNNING`과 소비 승인은 그대로 보존하며 자동 복구·재실행하지 않습니다. SIGINT·SIGTERM의 정상 처리와 시간·출력 초과 때 생성한 container를 종료·제거하는 기능을 crash 복구 완료로 해석하지 않습니다.
+`execution-plan`·`execution-approve`·`execution-run`·`execution-recover`는 기존 전역 lease를 유지해 같은 데이터 디렉터리의 실시간 Slack 수신과 직렬화합니다. 실행 중 합성 제어·복구는 아래 3-D 경로를 사용합니다. 실제 Slack 요청과 합성 실행 Task는 연결하지 않으며 수신 중단 구간의 Slack 변경 감지를 보장하지 않습니다.
+
+## 단계 3-D 합성 실행 취소와 중단 복구
+
+실행 중인 합성 작업에 소유자 취소 또는 편집·삭제 이벤트를 전달합니다. `execution-cancel`·`execution-invalidate`·`execution-inspect`는 전역 lease를 우회하고 실행 DB의 짧은 트랜잭션을 사용하므로 `execution-run`이 진행 중이어도 호출할 수 있습니다. 기존 조사 작업의 `cancel`과 구분합니다.
+
+```sh
+pnpm harness execution-cancel --task <id> --event-id synthetic-cancel-1 --data-dir /private/tmp/harness-execution-data
+pnpm harness execution-invalidate --task <id> --event edited --revision 2 --event-id synthetic-edit-2 --data-dir /private/tmp/harness-execution-data
+pnpm harness execution-invalidate --task <id> --event deleted --revision 3 --event-id synthetic-delete-3 --data-dir /private/tmp/harness-execution-data
+pnpm harness execution-recover --task <id> --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-execution-data
+pnpm harness execution-inspect --task <id> --data-dir /private/tmp/harness-execution-data
+```
+
+`execution-cancel`의 `--event-id`는 선택 사항이며 생략하면 새 ID를 만듭니다. 편집·삭제는 `--event-id`와 정수 `--revision` 2~1000000000이 필수입니다. 요청은 `synthetic:<task-id>`, 초기 revision 1로 식별합니다. 같은 ID·내용의 이벤트는 멱등 처리하고 다른 내용의 ID 재사용은 거부합니다. 오래되거나 같은 편집·삭제 revision은 무시합니다. 무효화 후 기존 계획은 다시 승인하거나 실행할 수 없으며 새 계획이 필요합니다.
+
+승인 소비 전 제어는 대기 Task를 `CANCELLED`로 바꾸고 미소비 승인을 취소합니다. 실행 중에는 generation fence로 새 patch·view·Docker 생성/시작을 막고, 진행 중인 container를 소유권 확인 후 종료·제거합니다. 짧은 로컬 파일 작업은 취소 commit과 직렬화하며 이미 전달된 Docker RPC는 정리 대상으로 남깁니다. 취소는 파일 변경을 되돌리지 않습니다. 성공 종료와 경합한 취소도 같은 DB 트랜잭션에서 확인하며, 정리나 관찰이 불확실하면 `BLOCKED`를 유지합니다.
+
+강제 종료 뒤 `execution-recover`는 저장된 실행 단계·container 이름·소유 토큰·Run label·전체 ID와 작업 영역 증거를 읽어 정리와 관찰만 수행합니다. 실행을 재개하지 않습니다. 확인된 중단은 `INTERRUPTED`, 확인된 취소는 `CANCELLED`, 정리·파일 상태 미확인은 `BLOCKED`입니다. 과거 3-C의 미완 Run에 소유 정보가 없으면 `legacy_untracked`와 `BLOCKED`로 남기고 다른 container를 추측해 종료하지 않습니다. 이미 `BLOCKED`인 Run을 다시 복구하면 기존 Run·보고서는 유지하고 lifecycle의 정리·관찰 근거만 갱신합니다.
+
+부분 patch·추가·삭제·권한·Git·실행 view 상태는 새 프로세스에서도 관찰합니다. 예상 밖 파일의 본문과 이름은 읽거나 출력하지 않고 이름 해시와 변경 종류를 기록합니다. `execution-inspect`는 Task·제어·승인 페이지·Run·lifecycle을 한 DB snapshot으로 읽은 뒤 누락된 완료 보고서를 만듭니다. 승인 `usedAt`, 불변 계획과 작업물은 유지하며 자동 재실행·승인 복원·commit·push·작업물 삭제는 하지 않습니다. 실제 검증 범위와 한계는 [3-D 결과](docs/stage-3d-result.md)를 따릅니다.
 
 ## 모의 입력과 오류 재현
 
@@ -208,4 +228,4 @@ pnpm build
 
 `test`는 컴파일 후 Node 내장 test runner로 단위·통합·CLI 수용 테스트를 실행합니다. 합성 저장소는 별도 임시 경로에 준비합니다. 하네스 테스트가 통과해도 실제 Slack 권한·회사 보안·격리 실행기의 검증을 통과한 것은 아닙니다.
 
-전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1 결과](docs/stage-1-result.md), [단계 2 결과](docs/stage-2-result.md), [단계 3-A 결과](docs/stage-3a-result.md), [단계 3-B 결과](docs/stage-3b-result.md), [단계 3-C 결과](docs/stage-3c-result.md)에 정리했습니다. 단계 3 전체 완료는 다음 3-D의 실행 중 요청 무효화·취소·crash 복구까지 확인한 뒤 판단합니다.
+전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1](docs/stage-1-result.md), [단계 2](docs/stage-2-result.md), [단계 3-A](docs/stage-3a-result.md), [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D 결과](docs/stage-3d-result.md)에 정리했습니다. 합성 실행 검증과 실제 Slack·회사 도입 승인을 구분합니다.

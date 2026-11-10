@@ -1,6 +1,7 @@
 import type {
   ExecutionApproval, ExecutionApprovalContext, ExecutionApprovalRequest, ExecutionRun,
-  ExecutionRunRequest, ExecutionTask,
+  ExecutionRunRequest, ExecutionTask, ExecutionControlRequest, ExecutionRequestState,
+  ExecutionLifecycle, ExecutionPhase, ExecutionProgress, ExecutionSnapshot,
 } from '../domain/execution.js';
 
 export interface ExecutionStore {
@@ -15,5 +16,13 @@ export interface ExecutionStore {
   finishRun(run: ExecutionRun): void;
   findRun(runId: string): ExecutionRun | null;
   listRuns(taskId: string): ExecutionRun[];
+  requestState(taskId: string): ExecutionRequestState;
+  control(request: ExecutionControlRequest, context: ExecutionApprovalContext): ExecutionRequestState;
+  lifecycle(runId: string): ExecutionLifecycle;
+  assertRunnable(runId: string): ExecutionLifecycle;
+  checkpoint(runId: string, phase: ExecutionPhase, progress?: ExecutionProgress): ExecutionLifecycle;
+  guard<T>(runId: string, phase: ExecutionPhase, operation: () => Promise<T>): Promise<T>;
+  dispatch<T>(runId: string, operation: () => T): T;
+  inspect(taskId: string, approvalOffset: number): ExecutionSnapshot;
   close(): void;
 }

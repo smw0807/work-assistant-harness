@@ -7,6 +7,9 @@ import {
   EXECUTION_POLICY_VERSION,
   type ExecutionApproval, type ExecutionApprovalContext, type ExecutionApprovalRequest,
   type ExecutionRun, type ExecutionRunRequest, type ExecutionTask,
+  type ExecutionControlRequest, type ExecutionRequestState, type ExecutionLifecycle,
+  type ExecutionPhase, type ExecutionProgress, type ExecutionObservation,
+  type ExecutionSnapshot,
 } from '../domain/execution.js';
 import type { ExecutionStore } from '../ports/execution.js';
 import { assertExecutionPlan, sha256 } from '../policy/execution-policy.js';
@@ -21,8 +24,13 @@ const runKeys = [
   'runId', 'taskId', 'approvalId', 'status', 'startedAt', 'finishedAt', 'artifactDirectory', 'worktreeRoot',
   'failureCode', 'checks', 'commands', 'diff', 'sourceBeforeHash', 'sourceAfterHash',
 ];
-const taskStatuses = ['AWAITING_APPROVAL', 'APPROVED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'BLOCKED'];
-const terminalStatuses = ['SUCCEEDED', 'FAILED', 'BLOCKED'];
+const taskStatuses = ['AWAITING_APPROVAL', 'APPROVED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED', 'INTERRUPTED'];
+const terminalStatuses = ['SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED', 'INTERRUPTED'];
+const phases: ExecutionPhase[] = ['claimed', 'workspace_preparing', 'workspace_ready', 'patch_applying', 'patch_applied',
+  'view_preparing', 'view_ready', 'container_creating', 'container_created', 'container_starting', 'command_finished',
+  'finalizing', 'recovering', 'finished', 'legacy_untracked'];
+const actionPhases: ExecutionPhase[] = ['workspace_preparing', 'patch_applying', 'view_preparing', 'container_creating', 'container_starting'];
+const commandIds = ['synthetic-check-v1', 'synthetic-timeout-v1', 'synthetic-output-v1'];
 const digest = /^[a-f0-9]{64}$/;
 const commit = /^[a-f0-9]{40}$/;
 const isText = (value: unknown): value is string => typeof value === 'string' && value.length > 0
@@ -33,6 +41,7 @@ const hasKeys = (value: unknown, keys: string[]): boolean => Boolean(value && ty
   && !Array.isArray(value) && Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key)));
 const isDigestOrNull = (value: unknown): boolean => value === null || (typeof value === 'string' && digest.test(value));
 const isPath = (value: unknown): value is string => isText(value) && isAbsolute(value);
+const isRevision = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= 1_000_000_000;
 const decode = <T>(payload: unknown, code: string): T => {
   if (typeof payload !== 'string' || Buffer.byteLength(payload) > 1_048_576) throw new HarnessError(code);
   try { return JSON.parse(payload) as T; } catch { throw new HarnessError(code); }
@@ -47,6 +56,7 @@ const assertContext = (context: ExecutionApprovalContext): void => {
 /** 승인 소비와 Run 생성은 외부 실행보다 먼저 하나의 SQLite 트랜잭션으로 확정한다. */
 export class SqliteExecutionStore implements ExecutionStore {
   private readonly database: DatabaseSync;
+  private transactionOpen = false;
 
   constructor(private readonly filePath: string) {
     this.protectFiles();
@@ -68,6 +78,28 @@ export class SqliteExecutionStore implements ExecutionStore {
         approval_id TEXT NOT NULL UNIQUE REFERENCES execution_approvals(approval_id),
         status TEXT NOT NULL, payload TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS execution_requests (
+        task_id TEXT PRIMARY KEY REFERENCES execution_tasks(task_id), payload TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS execution_control_events (
+        event_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES execution_tasks(task_id),
+        request TEXT NOT NULL, result TEXT NOT NULL, recorded_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS execution_lifecycles (
+        run_id TEXT PRIMARY KEY REFERENCES execution_runs(run_id), sequence INTEGER NOT NULL, payload TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS execution_lifecycle_history (
+        run_id TEXT NOT NULL REFERENCES execution_runs(run_id), sequence INTEGER NOT NULL, payload TEXT NOT NULL,
+        PRIMARY KEY(run_id, sequence)
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS execution_control_events_immutable_update BEFORE UPDATE ON execution_control_events
+        BEGIN SELECT RAISE(ABORT, 'immutable execution control event'); END;
+      CREATE TRIGGER IF NOT EXISTS execution_control_events_immutable_delete BEFORE DELETE ON execution_control_events
+        BEGIN SELECT RAISE(ABORT, 'immutable execution control event'); END;
+      CREATE TRIGGER IF NOT EXISTS execution_lifecycle_history_immutable_update BEFORE UPDATE ON execution_lifecycle_history
+        BEGIN SELECT RAISE(ABORT, 'immutable execution lifecycle history'); END;
+      CREATE TRIGGER IF NOT EXISTS execution_lifecycle_history_immutable_delete BEFORE DELETE ON execution_lifecycle_history
+        BEGIN SELECT RAISE(ABORT, 'immutable execution lifecycle history'); END;
     `);
     this.protectFiles();
   }
@@ -79,6 +111,7 @@ export class SqliteExecutionStore implements ExecutionStore {
       if (this.find(task.taskId)) throw new HarnessError('EXECUTION_TASK_ALREADY_EXISTS');
       this.database.prepare('INSERT INTO execution_tasks(task_id, status, payload) VALUES (?, ?, ?)')
         .run(task.taskId, task.status, JSON.stringify(task));
+      this.ensureRequestState(task.taskId);
     });
   }
 
@@ -100,6 +133,7 @@ export class SqliteExecutionStore implements ExecutionStore {
     }
     return this.transaction(() => {
       let task = this.requireTask(request.taskId);
+      this.assertRequestActive(task.taskId, context.ownerId);
       const records = this.listApprovals(task.taskId);
       this.assertOwners(records, context.ownerId);
       task = this.expireApproval(task, records, context.now);
@@ -151,6 +185,7 @@ export class SqliteExecutionStore implements ExecutionStore {
     if (!isPath(artifactDirectory)) throw new HarnessError('INVALID_EXECUTION_ARTIFACT_PATH');
     const outcome = this.transaction((): ExecutionRun | HarnessError => {
       const task = this.requireTask(request.taskId);
+      const state = this.assertRequestActive(task.taskId, context.ownerId);
       const records = this.listApprovals(task.taskId);
       this.assertOwners(records, context.ownerId);
       this.assertRequestMatches(task, request);
@@ -182,6 +217,10 @@ export class SqliteExecutionStore implements ExecutionStore {
       if (updated.changes !== 1) throw new HarnessError('APPROVAL_ALREADY_USED');
       this.database.prepare('INSERT INTO execution_runs(run_id, task_id, approval_id, status, payload) VALUES (?, ?, ?, ?, ?)')
         .run(run.runId, run.taskId, run.approvalId, run.status, JSON.stringify(run));
+      this.writeLifecycle({
+        runId: run.runId, taskId: run.taskId, generation: state.generation, sequence: 0,
+        phase: 'claimed', updatedAt: startedAt, workspace: null, container: null, cleanup: null, observation: null, legacy: false,
+      });
       this.writeTask({ ...task, status: 'RUNNING', updatedAt: startedAt });
       return run;
     });
@@ -200,9 +239,27 @@ export class SqliteExecutionStore implements ExecutionStore {
         current[key as keyof ExecutionRun] !== run[key as keyof ExecutionRun])) throw new HarnessError('EXECUTION_RUN_IDENTITY_MISMATCH');
       const task = this.requireTask(run.taskId);
       if (task.status !== 'RUNNING') throw new HarnessError('INVALID_EXECUTION_RUN_TRANSITION');
+      const state = this.ensureRequestState(run.taskId);
+      const lifecycle = this.ensureLifecycle(run.runId);
+      const cancelled = state.invalidatedAt !== null || state.generation !== lifecycle.generation;
+      const recordedCommand = run.commands.find((command) => command.containerName === lifecycle.container?.name);
+      const containerClean = lifecycle.container === null || (lifecycle.cleanup?.stopped && lifecycle.cleanup.removed)
+        || (recordedCommand?.stopped && recordedCommand.removed);
+      const cleanupUnconfirmed = run.status === 'BLOCKED'
+        || run.commands.some((command) => !command.stopped || !command.removed)
+        || !containerClean || lifecycle.legacy;
+      const finished: ExecutionRun = cancelled
+        ? { ...run, status: cleanupUnconfirmed ? 'BLOCKED' : 'CANCELLED',
+          failureCode: cleanupUnconfirmed ? 'EXECUTION_CLEANUP_UNCONFIRMED' : 'EXECUTION_CANCELLED' } : run;
+      this.assertRun(finished);
       this.database.prepare('UPDATE execution_runs SET status = ?, payload = ? WHERE run_id = ? AND status = ?')
-        .run(run.status, JSON.stringify(run), run.runId, 'RUNNING');
-      this.writeTask({ ...task, status: run.status, updatedAt: run.finishedAt as string });
+        .run(finished.status, JSON.stringify(finished), finished.runId, 'RUNNING');
+      this.writeTask({ ...task, status: finished.status, updatedAt: finished.finishedAt as string });
+      this.writeLifecycle({
+        ...lifecycle, sequence: lifecycle.sequence + 1, phase: 'finished',
+        updatedAt: new Date(Math.max(Date.parse(lifecycle.updatedAt), Date.parse(finished.finishedAt as string))).toISOString(),
+        observation: finished.observation ?? lifecycle.observation,
+      });
     });
   }
 
@@ -218,7 +275,306 @@ export class SqliteExecutionStore implements ExecutionStore {
       .map((row) => this.parseRunRow(row));
   }
 
+  inspect(taskId: string, offset: number): ExecutionSnapshot {
+    return this.transaction(() => {
+      const task = this.requireTask(taskId);
+      const requestState = this.ensureRequestState(taskId);
+      const runs = this.listRuns(taskId);
+      const lifecycles = runs.map((run) => this.ensureLifecycle(run.runId));
+      return structuredClone({ task, requestState, ...this.listApprovalHistory(taskId, offset), runs, lifecycles });
+    });
+  }
+
+  requestState(taskId: string): ExecutionRequestState {
+    return this.transaction(() => structuredClone(this.ensureRequestState(taskId)));
+  }
+
+  control(request: ExecutionControlRequest, context: ExecutionApprovalContext): ExecutionRequestState {
+    assertContext(context);
+    if (!hasKeys(request, ['taskId', 'eventId', 'kind', 'revision']) || !isText(request.taskId)
+      || !isText(request.eventId) || !['cancel', 'edited', 'deleted'].includes(request.kind) || !isRevision(request.revision)) {
+      throw new HarnessError('INVALID_EXECUTION_CONTROL_REQUEST');
+    }
+    return this.transaction(() => {
+      const task = this.requireTask(request.taskId);
+      const state = this.ensureRequestState(task.taskId);
+      if (state.ownerId !== context.ownerId) throw new HarnessError('APPROVAL_OWNER_MISMATCH');
+      this.assertOwners(this.listApprovals(task.taskId), context.ownerId);
+      const encodedRequest = JSON.stringify({ taskId: request.taskId, eventId: request.eventId, kind: request.kind, revision: request.revision });
+      const existing = this.database.prepare('SELECT request, result FROM execution_control_events WHERE event_id = ?').get(request.eventId);
+      if (existing) {
+        if (existing.request !== encodedRequest) throw new HarnessError('EXECUTION_CONTROL_EVENT_MISMATCH');
+        this.assertRequestState(decode<ExecutionRequestState>(existing.result, 'INVALID_STORED_EXECUTION_REQUEST'));
+        return state;
+      }
+      if (request.kind === 'cancel' && request.revision > state.revision) throw new HarnessError('EXECUTION_REQUEST_REVISION_MISMATCH');
+      const applicable = request.kind === 'cancel' ? request.revision === state.revision : request.revision > state.revision;
+      let result = state;
+      if (applicable && !(request.kind === 'cancel' && state.invalidatedAt !== null)) {
+        const timestamp = context.now.toISOString();
+        if (timestamp < task.createdAt || this.listApprovals(task.taskId).some((approval) => timestamp < approval.createdAt)) {
+          throw new HarnessError('INVALID_APPROVAL_TIME');
+        }
+        result = {
+          ...state, revision: request.revision, generation: state.generation + 1, invalidatedAt: timestamp,
+          reason: request.kind === 'cancel' ? 'OWNER_CANCELLED' : request.kind === 'edited' ? 'REQUEST_EDITED' : 'REQUEST_DELETED',
+        };
+        this.assertRequestState(result);
+        this.database.prepare('UPDATE execution_requests SET payload = ? WHERE task_id = ?').run(JSON.stringify(result), task.taskId);
+        for (const approval of this.listApprovals(task.taskId)) {
+          if (approval.usedAt !== null || approval.revokedAt !== null) continue;
+          const revoked = { ...approval, revokedAt: timestamp };
+          this.database.prepare('UPDATE execution_approvals SET revoked_at = ?, payload = ? WHERE approval_id = ? AND used_at IS NULL AND revoked_at IS NULL')
+            .run(timestamp, JSON.stringify(revoked), approval.approvalId);
+        }
+        if (['AWAITING_APPROVAL', 'APPROVED'].includes(task.status)) {
+          this.writeTask({ ...task, status: 'CANCELLED', updatedAt: timestamp });
+        }
+      }
+      this.database.prepare('INSERT INTO execution_control_events(event_id, task_id, request, result, recorded_at) VALUES (?, ?, ?, ?, ?)')
+        .run(request.eventId, task.taskId, encodedRequest, JSON.stringify(result), context.now.toISOString());
+      return structuredClone(result);
+    });
+  }
+
+  lifecycle(runId: string): ExecutionLifecycle {
+    return this.transaction(() => structuredClone(this.ensureLifecycle(runId)));
+  }
+
+  assertRunnable(runId: string): ExecutionLifecycle {
+    if (this.transactionOpen) return this.assertRunActive(runId);
+    return this.transaction(() => this.assertRunActive(runId));
+  }
+
+  checkpoint(runId: string, phase: ExecutionPhase, progress: ExecutionProgress = {}): ExecutionLifecycle {
+    return this.transaction(() => this.checkpointWithinTransaction(runId, phase, progress));
+  }
+
+  /** 실제 spawn 호출까지만 직렬화하고 반환된 비동기 RPC는 트랜잭션 밖에서 기다린다. */
+  dispatch<T>(runId: string, operation: () => T): T {
+    return this.transaction(() => {
+      this.assertRunActive(runId);
+      return operation();
+    });
+  }
+
+  /** 짧은 로컬 파일 동작 동안 취소 commit을 직렬화한다. 네트워크·컨테이너 대기는 이 guard에 넣지 않는다. */
+  async guard<T>(runId: string, phase: ExecutionPhase, operation: () => Promise<T>): Promise<T> {
+    if (!actionPhases.includes(phase)) throw new HarnessError('INVALID_EXECUTION_PHASE');
+    this.beginTransaction();
+    try {
+      this.assertRunActive(runId);
+      this.checkpointWithinTransaction(runId, phase, {});
+      const result = await operation();
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    } finally {
+      this.transactionOpen = false;
+      this.protectFiles();
+    }
+  }
+
   close(): void { this.database.close(); }
+
+  private ensureRequestState(taskId: string): ExecutionRequestState {
+    const task = this.requireTask(taskId);
+    const row = this.database.prepare('SELECT payload FROM execution_requests WHERE task_id = ?').get(taskId);
+    if (row) {
+      const state = decode<ExecutionRequestState>(row.payload, 'INVALID_STORED_EXECUTION_REQUEST');
+      this.assertRequestState(state);
+      if (state.taskId !== taskId) throw new HarnessError('INVALID_STORED_EXECUTION_REQUEST');
+      return state;
+    }
+    const approvals = this.listApprovals(taskId);
+    if (typeof process.getuid !== 'function' && approvals.length === 0) throw new HarnessError('APPROVAL_OWNER_UNSUPPORTED');
+    const ownerId = approvals[0]?.ownerId ?? `os-user:${process.getuid?.()}`;
+    this.assertOwners(approvals, ownerId);
+    const state: ExecutionRequestState = {
+      taskId: task.taskId, requestId: `synthetic:${task.taskId}`, ownerId, revision: 1, generation: 0,
+      invalidatedAt: null, reason: null,
+    };
+    this.assertRequestState(state);
+    this.database.prepare('INSERT INTO execution_requests(task_id, payload) VALUES (?, ?)').run(taskId, JSON.stringify(state));
+    return state;
+  }
+
+  private assertRequestState(state: ExecutionRequestState): void {
+    if (!hasKeys(state, ['taskId', 'requestId', 'ownerId', 'revision', 'generation', 'invalidatedAt', 'reason'])
+      || !isText(state.taskId) || state.requestId !== `synthetic:${state.taskId}` || !/^os-user:\d+$/.test(state.ownerId)
+      || !isRevision(state.revision) || !Number.isSafeInteger(state.generation) || state.generation < 0 || state.generation > 1_000_000_000
+      || (state.invalidatedAt !== null && !isTimestamp(state.invalidatedAt))
+      || (state.reason !== null && !['OWNER_CANCELLED', 'REQUEST_EDITED', 'REQUEST_DELETED'].includes(state.reason))
+      || (state.invalidatedAt === null) !== (state.reason === null)
+      || (state.generation === 0) !== (state.invalidatedAt === null)) throw new HarnessError('INVALID_STORED_EXECUTION_REQUEST');
+  }
+
+  private assertRequestActive(taskId: string, ownerId: string): ExecutionRequestState {
+    const state = this.ensureRequestState(taskId);
+    if (state.ownerId !== ownerId) throw new HarnessError('APPROVAL_OWNER_MISMATCH');
+    if (state.invalidatedAt !== null) throw new HarnessError('EXECUTION_CANCELLED');
+    return state;
+  }
+
+  private ensureLifecycle(runId: string): ExecutionLifecycle {
+    const run = this.findRun(runId);
+    if (!run) throw new HarnessError('EXECUTION_RUN_NOT_FOUND');
+    const row = this.database.prepare('SELECT sequence, payload FROM execution_lifecycles WHERE run_id = ?').get(runId);
+    if (row) {
+      const lifecycle = decode<ExecutionLifecycle>(row.payload, 'INVALID_STORED_EXECUTION_LIFECYCLE');
+      this.assertLifecycle(lifecycle);
+      const history = this.database.prepare('SELECT payload FROM execution_lifecycle_history WHERE run_id = ? AND sequence = ?')
+        .get(runId, lifecycle.sequence);
+      if (lifecycle.runId !== runId || lifecycle.taskId !== run.taskId || row.sequence !== lifecycle.sequence) {
+        throw new HarnessError('INVALID_STORED_EXECUTION_LIFECYCLE');
+      }
+      if (history?.payload !== row.payload) throw new HarnessError('INVALID_STORED_EXECUTION_LIFECYCLE');
+      return lifecycle;
+    }
+    const state = this.ensureRequestState(run.taskId);
+    const lifecycle: ExecutionLifecycle = {
+      runId, taskId: run.taskId, generation: state.generation, sequence: 0, phase: 'legacy_untracked',
+      updatedAt: run.finishedAt ?? run.startedAt, workspace: null, container: null, cleanup: null, observation: null, legacy: true,
+    };
+    this.writeLifecycle(lifecycle);
+    return lifecycle;
+  }
+
+  private assertRunActive(runId: string): ExecutionLifecycle {
+    const run = this.findRun(runId);
+    if (!run) throw new HarnessError('EXECUTION_RUN_NOT_FOUND');
+    const lifecycle = this.ensureLifecycle(runId);
+    const task = this.requireTask(run.taskId);
+    const state = this.ensureRequestState(run.taskId);
+    if (run.status !== 'RUNNING' || task.status !== 'RUNNING' || lifecycle.legacy
+      || state.invalidatedAt !== null || state.generation !== lifecycle.generation) throw new HarnessError('EXECUTION_CANCELLED');
+    return structuredClone(lifecycle);
+  }
+
+  private checkpointWithinTransaction(runId: string, phase: ExecutionPhase, progress: ExecutionProgress): ExecutionLifecycle {
+    if (!phases.includes(phase) || !progress || typeof progress !== 'object' || Array.isArray(progress)
+      || Object.keys(progress).some((key) => !['workspace', 'container', 'cleanup', 'observation', 'command', 'sourceBeforeHash', 'worktreeRoot', 'diff', 'checks'].includes(key))) {
+      throw new HarnessError('INVALID_EXECUTION_PROGRESS');
+    }
+    const run = this.findRun(runId);
+    if (!run) throw new HarnessError('EXECUTION_RUN_NOT_FOUND');
+    const current = actionPhases.includes(phase) ? this.assertRunActive(runId) : this.ensureLifecycle(runId);
+    if (run.status !== 'RUNNING' && phase === 'finished' && current.phase === 'finished' && Object.keys(progress).length === 0) {
+      return structuredClone(current);
+    }
+    if (run.status !== 'RUNNING' && !(run.status === 'BLOCKED' && ['recovering', 'finished'].includes(phase))) {
+      throw new HarnessError('EXECUTION_RUN_ALREADY_FINISHED');
+    }
+    if (run.status !== 'RUNNING' && ['command', 'sourceBeforeHash', 'worktreeRoot', 'diff', 'checks'].some((key) => key in progress)) {
+      throw new HarnessError('EXECUTION_RUN_ALREADY_FINISHED');
+    }
+    const workspace = progress.workspace ?? current.workspace;
+    if (current.workspace && progress.workspace
+      && (current.workspace.worktreeRoot !== progress.workspace.worktreeRoot || current.workspace.containerRoot !== progress.workspace.containerRoot
+        || current.workspace.planHash !== progress.workspace.planHash || current.workspace.gitHash !== progress.workspace.gitHash
+        || (current.workspace.viewHash !== null && current.workspace.viewHash !== progress.workspace.viewHash))) {
+      throw new HarnessError('EXECUTION_WORKSPACE_IDENTITY_MISMATCH');
+    }
+    const container = progress.container ?? current.container;
+    if (current.container && progress.container
+      && (current.container.runId !== progress.container.runId || current.container.name !== progress.container.name
+        || current.container.token !== progress.container.token || current.container.commandId !== progress.container.commandId
+        || (current.container.id !== null && current.container.id !== progress.container.id))) {
+      throw new HarnessError('EXECUTION_CONTAINER_IDENTITY_MISMATCH');
+    }
+    const lifecycle: ExecutionLifecycle = {
+      ...current, sequence: current.sequence + 1, phase,
+      updatedAt: new Date(Math.max(Date.now(), Date.parse(current.updatedAt))).toISOString(),
+      workspace, container, cleanup: progress.cleanup ?? current.cleanup, observation: progress.observation ?? current.observation,
+    };
+    this.assertLifecycle(lifecycle);
+    const task = this.requireTask(run.taskId);
+    if (workspace && workspace.planHash !== task.plan.planHash) throw new HarnessError('EXECUTION_WORKSPACE_IDENTITY_MISMATCH');
+    if (container && (container.runId !== runId || !task.plan.commands.some((command) => command.commandId === container.commandId))) {
+      throw new HarnessError('EXECUTION_CONTAINER_IDENTITY_MISMATCH');
+    }
+    const worktreeRoot = progress.worktreeRoot ?? workspace?.worktreeRoot ?? run.worktreeRoot;
+    if ((run.worktreeRoot !== null && worktreeRoot !== run.worktreeRoot)
+      || (workspace && worktreeRoot !== workspace.worktreeRoot)) {
+      throw new HarnessError('EXECUTION_WORKSPACE_IDENTITY_MISMATCH');
+    }
+    if (progress.sourceBeforeHash && run.sourceBeforeHash !== null && progress.sourceBeforeHash !== run.sourceBeforeHash) {
+      throw new HarnessError('EXECUTION_RUN_IDENTITY_MISMATCH');
+    }
+    const commands = [...run.commands];
+    if (progress.command) {
+      const existing = commands.find((command) => command.commandId === progress.command!.commandId);
+      if (existing && JSON.stringify(existing) !== JSON.stringify(progress.command)) throw new HarnessError('EXECUTION_COMMAND_RESULT_MISMATCH');
+      if (!existing) commands.push(progress.command);
+    }
+    const updatedRun: ExecutionRun = {
+      ...run, commands, worktreeRoot,
+      sourceBeforeHash: progress.sourceBeforeHash ?? run.sourceBeforeHash,
+      diff: progress.diff ?? run.diff, checks: progress.checks ?? run.checks,
+      ...(progress.observation ? { observation: progress.observation } : {}),
+    };
+    this.assertRun(updatedRun);
+    if (run.status === 'RUNNING') this.database.prepare('UPDATE execution_runs SET payload = ? WHERE run_id = ?').run(JSON.stringify(updatedRun), runId);
+    this.writeLifecycle(lifecycle);
+    return structuredClone(lifecycle);
+  }
+
+  private writeLifecycle(lifecycle: ExecutionLifecycle): void {
+    this.assertLifecycle(lifecycle);
+    const payload = JSON.stringify(lifecycle);
+    this.database.prepare('INSERT INTO execution_lifecycle_history(run_id, sequence, payload) VALUES (?, ?, ?)')
+      .run(lifecycle.runId, lifecycle.sequence, payload);
+    this.database.prepare(`INSERT INTO execution_lifecycles(run_id, sequence, payload) VALUES (?, ?, ?)
+      ON CONFLICT(run_id) DO UPDATE SET sequence = excluded.sequence, payload = excluded.payload`)
+      .run(lifecycle.runId, lifecycle.sequence, payload);
+  }
+
+  private assertLifecycle(lifecycle: ExecutionLifecycle): void {
+    const code = 'INVALID_STORED_EXECUTION_LIFECYCLE';
+    if (!hasKeys(lifecycle, ['runId', 'taskId', 'generation', 'sequence', 'phase', 'updatedAt', 'workspace', 'container', 'cleanup', 'observation', 'legacy'])
+      || !isText(lifecycle.runId) || !isText(lifecycle.taskId) || !Number.isSafeInteger(lifecycle.generation) || lifecycle.generation < 0
+      || !Number.isSafeInteger(lifecycle.sequence) || lifecycle.sequence < 0 || !phases.includes(lifecycle.phase)
+      || !isTimestamp(lifecycle.updatedAt) || typeof lifecycle.legacy !== 'boolean') throw new HarnessError(code);
+    if (lifecycle.workspace !== null) {
+      const value = lifecycle.workspace;
+      if (!hasKeys(value, ['worktreeRoot', 'containerRoot', 'planHash', 'gitHash', 'viewHash']) || !isPath(value.worktreeRoot)
+        || !isPath(value.containerRoot) || !digest.test(value.planHash) || !digest.test(value.gitHash) || !isDigestOrNull(value.viewHash)) throw new HarnessError(code);
+    }
+    if (lifecycle.container !== null) {
+      const value = lifecycle.container;
+      if (!hasKeys(value, ['runId', 'name', 'token', 'id', 'commandId']) || value.runId !== lifecycle.runId
+        || !/^[a-f0-9-]{36}$/.test(value.token) || value.name !== `harness-execution-${value.token}`
+        || (value.id !== null && !digest.test(value.id)) || !commandIds.includes(value.commandId)) throw new HarnessError(code);
+    }
+    if (lifecycle.cleanup !== null) {
+      const value = lifecycle.cleanup;
+      if (!hasKeys(value, ['found', 'stopped', 'removed', 'exitCode', 'oomKilled', 'failureCode'])
+        || [value.found, value.stopped, value.removed, value.oomKilled].some((item) => typeof item !== 'boolean')
+        || (value.exitCode !== null && (!Number.isSafeInteger(value.exitCode) || value.exitCode < 0))
+        || (value.failureCode !== null && !isText(value.failureCode))) throw new HarnessError(code);
+    }
+    if (lifecycle.observation !== null) this.assertObservation(lifecycle.observation);
+    decode(JSON.stringify(lifecycle), code);
+  }
+
+  private assertObservation(observation: ExecutionObservation): void {
+    if (!hasKeys(observation, ['status', 'reason', 'changes', 'gitUnchanged', 'viewUnchanged', 'workspaceExists'])
+      || !['passed', 'failed', 'not_run'].includes(observation.status) || !isText(observation.reason)
+      || !Array.isArray(observation.changes) || observation.changes.length > 128 || typeof observation.workspaceExists !== 'boolean'
+      || ![null, true, false].includes(observation.gitUnchanged) || ![null, true, false].includes(observation.viewUnchanged)) {
+      throw new HarnessError('INVALID_EXECUTION_OBSERVATION');
+    }
+    for (const change of observation.changes) {
+      if (!hasKeys(change, ['path', 'kind', 'beforeHash', 'afterHash', 'beforeMode', 'afterMode', 'inScope'])
+        || !isText(change.path) || !['modified', 'added', 'deleted', 'mode', 'symlink', 'special'].includes(change.kind)
+        || !isDigestOrNull(change.beforeHash) || !isDigestOrNull(change.afterHash) || typeof change.inScope !== 'boolean'
+        || [change.beforeMode, change.afterMode].some((mode) => mode !== null && (!Number.isSafeInteger(mode) || mode < 0 || mode > 0o177777))) {
+        throw new HarnessError('INVALID_EXECUTION_OBSERVATION');
+      }
+    }
+  }
 
   private assertTask(task: ExecutionTask): void {
     if (!hasKeys(task, taskKeys) || !isText(task.taskId) || !taskStatuses.includes(task.status)
@@ -264,7 +620,7 @@ export class SqliteExecutionStore implements ExecutionStore {
   }
 
   private assertRun(run: ExecutionRun): void {
-    if (!hasKeys(run, runKeys) || !isText(run.runId) || !isText(run.taskId) || !isText(run.approvalId)
+    if (!hasKeys(run, run?.observation === undefined ? runKeys : [...runKeys, 'observation']) || !isText(run.runId) || !isText(run.taskId) || !isText(run.approvalId)
       || !['RUNNING', ...terminalStatuses].includes(run.status) || !isTimestamp(run.startedAt)
       || !isPath(run.artifactDirectory) || (run.worktreeRoot !== null && !isPath(run.worktreeRoot))
       || (run.failureCode !== null && !isText(run.failureCode))
@@ -294,6 +650,7 @@ export class SqliteExecutionStore implements ExecutionStore {
         || Buffer.byteLength(diff.before) > 65_536 || Buffer.byteLength(diff.after) > 65_536
         || sha256(diff.before) !== diff.beforeHash || sha256(diff.after) !== diff.afterHash) throw new HarnessError('INVALID_EXECUTION_RUN');
     }
+    if (run.observation !== undefined) this.assertObservation(run.observation);
     // 다시 읽을 수 없는 과대 감사 기록을 만들지 않도록 쓰기 전에도 한도를 확인한다.
     decode<ExecutionRun>(JSON.stringify(run), 'INVALID_EXECUTION_RUN');
   }
@@ -359,8 +716,7 @@ export class SqliteExecutionStore implements ExecutionStore {
   }
 
   private transaction<T>(operation: () => T): T {
-    this.protectFiles();
-    this.database.exec('BEGIN IMMEDIATE');
+    this.beginTransaction();
     try {
       const result = operation();
       this.database.exec('COMMIT');
@@ -368,6 +724,16 @@ export class SqliteExecutionStore implements ExecutionStore {
     } catch (error) {
       this.database.exec('ROLLBACK');
       throw error;
-    } finally { this.protectFiles(); }
+    } finally {
+      this.transactionOpen = false;
+      this.protectFiles();
+    }
+  }
+
+  private beginTransaction(): void {
+    if (this.transactionOpen) throw new HarnessError('EXECUTION_TRANSACTION_IN_PROGRESS');
+    this.protectFiles();
+    this.database.exec('BEGIN IMMEDIATE');
+    this.transactionOpen = true;
   }
 }

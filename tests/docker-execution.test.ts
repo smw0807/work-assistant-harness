@@ -10,6 +10,7 @@ import { DockerIsolatedExecution } from '../src/adapters/docker-execution.js';
 import { createExecutionPolicy, getExecutionCommand } from '../src/policy/execution-policy.js';
 import type { SandboxConfig } from '../src/domain/sandbox.js';
 import { HarnessError } from '../src/domain/errors.js';
+import type { ExecutionContainerIntent, ExecutionLifecycleHooks } from '../src/domain/execution.js';
 
 type JsonObject = Record<string, unknown>;
 const imageId = `sha256:${'b'.repeat(64)}`;
@@ -54,7 +55,6 @@ const createFakeDocker = (settings: FakeOptions = {}) => {
       Id: imageId, Os: 'linux', Architecture: 'arm64', Config: { Env: imageEnvironment, Volumes: null, OnBuild: null }, ...settings.image,
     }]));
     if (operation === 'create') {
-      const token = option('--label').split('=')[1];
       const mount = option('--mount');
       const workspace = /src=([^,]+),/.exec(mount)?.[1];
       const command = argumentsWithoutControl.slice(argumentsWithoutControl.indexOf(imageId) + 1);
@@ -65,7 +65,8 @@ const createFakeDocker = (settings: FakeOptions = {}) => {
           User: '1000:1000', WorkingDir: '/workspace', Hostname: 'harness-execution', OpenStdin: false, Tty: false,
           Entrypoint: ['/usr/local/bin/node'], Cmd: command,
           Env: [...imageEnvironment, 'HOME=/tmp', 'LANG=C.UTF-8', 'NODE_OPTIONS='], Volumes: null, OnBuild: null,
-          Healthcheck: { Test: ['NONE'] }, Labels: { 'work-assistant-harness.execution': token },
+          Healthcheck: { Test: ['NONE'] }, Labels: Object.fromEntries(argumentsWithoutControl.flatMap((argument, index) =>
+            argument === '--label' ? [argumentsWithoutControl[index + 1]!.split('=')] : [])),
         },
         HostConfig: {
           NetworkMode: 'none', ReadonlyRootfs: true, Privileged: false, CapDrop: ['ALL'], CapAdd: null,
@@ -341,4 +342,95 @@ test('취소 신호와 Docker 오류 원문은 외부 실행이나 비밀 출력
   try {
     await assert.rejects(failed.executor.preflight(failed.config, failed.policy), (error: unknown) => !String(error).includes('synthetic-secret'));
   } finally { await failed.close(); }
+});
+
+test('container intent와 full ID는 생성 RPC 전후에 기록하고 start 전에 다시 승인 세대를 확인한다', async () => {
+  const fixture = await prepare();
+  try {
+    await fixture.executor.preflight(fixture.config, fixture.policy);
+    const phases: string[] = [];
+    let savedIntent: ExecutionContainerIntent | null = null;
+    const runId = '12345678-1234-4234-8234-123456789abc';
+    const hooks: ExecutionLifecycleHooks = {
+      runId,
+      beforeCreate: async (intent) => {
+        assert.equal(fixture.fake.calls.some((call) => call.arguments[4] === 'create'), false);
+        assert.equal(intent.id, null);
+        assert.equal(intent.runId, runId);
+        savedIntent = intent;
+        phases.push('intent');
+      },
+      created: async (intent) => {
+        assert.equal(intent.id, containerId);
+        assert.equal(intent.name, savedIntent?.name);
+        assert.equal(fixture.fake.calls.some((call) => call.arguments[4] === 'create'), true);
+        savedIntent = intent;
+        phases.push('created');
+      },
+      beforeStart: async () => {
+        assert.equal(fixture.fake.calls.some((call) => call.arguments[4] === 'start'), false);
+        phases.push('fenced');
+      },
+      finished: async (result) => {
+        assert.equal(result.removed, true);
+        assert.equal(fixture.fake.calls.some((call) => call.arguments[4] === 'rm'), true);
+        phases.push('finished');
+      },
+    };
+    const result = await fixture.executor.execute(getExecutionCommand('synthetic-check-v1'), fixture.workspace, undefined, hooks);
+    assert.equal(result.failureCode, null);
+    assert.deepEqual(phases, ['intent', 'created', 'fenced', 'finished']);
+    const create = fixture.fake.calls.find((call) => call.arguments[4] === 'create');
+    assert.ok(create?.arguments.includes(`work-assistant-harness.run=${runId}`));
+  } finally { await fixture.close(); }
+});
+
+test('lifecycle 저장 실패와 start 직전 취소는 새 실행을 막고 이미 생성한 container를 먼저 정리한다', async () => {
+  for (const failurePhase of ['beforeCreate', 'created', 'beforeStart', 'finished'] as const) {
+    const fixture = await prepare();
+    try {
+      await fixture.executor.preflight(fixture.config, fixture.policy);
+      let finished = false;
+      const record = async (phase: string): Promise<void> => {
+        if (phase === failurePhase) throw new Error('synthetic-private-store-error');
+      };
+      const hooks: ExecutionLifecycleHooks = {
+        runId: '12345678-1234-4234-8234-123456789abc',
+        beforeCreate: async () => { await record('beforeCreate'); },
+        created: async () => { await record('created'); },
+        beforeStart: async () => { await record('beforeStart'); },
+        finished: async (result) => {
+          finished = true;
+          assert.equal(result.removed, true);
+          if (failurePhase !== 'beforeCreate') assert.ok(fixture.fake.calls.some((call) => call.arguments[4] === 'rm'));
+          await record('finished');
+        },
+      };
+      const result = await fixture.executor.execute(getExecutionCommand('synthetic-check-v1'), fixture.workspace, undefined, hooks);
+      assert.equal(result.failureCode, 'EXECUTION_LIFECYCLE_RECORD_FAILED');
+      assert.equal(result.removed, true);
+      assert.equal(finished, true);
+      assert.equal(fixture.fake.calls.some((call) => call.arguments[4] === 'create'), failurePhase !== 'beforeCreate');
+      assert.equal(fixture.fake.calls.some((call) => call.arguments[4] === 'start'), failurePhase === 'finished');
+      assert.equal(JSON.stringify(result).includes('synthetic-private'), false);
+    } finally { await fixture.close(); }
+  }
+  const fixture = await prepare();
+  try {
+    await fixture.executor.preflight(fixture.config, fixture.policy);
+    const abort = new AbortController();
+    let recordedId: string | null = null;
+    const hooks: ExecutionLifecycleHooks = {
+      runId: '12345678-1234-4234-8234-123456789abc',
+      beforeCreate: async () => {},
+      created: async (intent) => { recordedId = intent.id; abort.abort(); },
+      beforeStart: async () => {},
+      finished: async () => {},
+    };
+    const result = await fixture.executor.execute(getExecutionCommand('synthetic-check-v1'), fixture.workspace, abort.signal, hooks);
+    assert.equal(recordedId, containerId);
+    assert.equal(result.termination, 'aborted');
+    assert.equal(result.removed, true);
+    assert.equal(fixture.fake.calls.some((call) => call.arguments[4] === 'start'), false);
+  } finally { await fixture.close(); }
 });

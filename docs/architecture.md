@@ -4,7 +4,7 @@
 
 이 문서는 `work-assistant-harness`의 구조와 단계별 설계를 설명한다. 실제 구현 경계는 아래 결과 문서로 구분하며, 후속 승인·실행 설계가 이미 사용 가능한 기능이라는 뜻은 아니다.
 
-2026-11-09에 단계 0·1의 합성 자료 기반 읽기 전용 CLI를, 2026-11-10에 단계 2의 Slack 수신, 단계 3-A의 로컬 승인·취소, 단계 3-B의 Docker 격리 진단과 단계 3-C의 고정 합성 patch·등록 검사 실행을 구현했다. 실제 구현과 검증 상태는 [stage-1-result.md](stage-1-result.md), [stage-2-result.md](stage-2-result.md), [stage-3a-result.md](stage-3a-result.md), [stage-3b-result.md](stage-3b-result.md), [stage-3c-result.md](stage-3c-result.md)를 따른다. 실제 Slack·AI·회사 저장소 연결과 실행 중 취소·crash 복구는 완료된 기능이 아니다.
+2026-11-09에 단계 0·1의 합성 자료 기반 읽기 전용 CLI를, 2026-11-10에 단계 2의 Slack 수신과 단계 3-A~3-D의 로컬 승인·Docker 진단·독립 합성 실행·취소·중단 복구를 구현했다. 실제 구현과 검증 상태는 [stage-1-result.md](stage-1-result.md), [stage-2-result.md](stage-2-result.md), [stage-3a-result.md](stage-3a-result.md), [stage-3b-result.md](stage-3b-result.md), [stage-3c-result.md](stage-3c-result.md), [stage-3d-result.md](stage-3d-result.md)를 따른다. 실제 Slack·AI·회사 저장소를 실행 흐름에 연결하지 않는다.
 
 - 구현 순서와 상세 수용 기준: [implementation-plan.md](implementation-plan.md)
 - 권한과 승인 조건: [security-and-approval.md](security-and-approval.md)
@@ -122,7 +122,28 @@ execution-inspect → SQLite의 Task·최신 승인 페이지·Run과 완료 보
 
 동결 원본과 Git 메타데이터는 container에 노출하지 않는다. 고정 파일에서 원본과 같은 커밋의 독립 Git 작업 트리를 재생성하고, patch 적용 후 Git 없는 읽기 전용 view를 만든다. 이는 원본 `.git`을 공유하는 `git worktree`가 아니다. 쓰기 영역은 16MiB `/tmp` tmpfs로 제한하며 nonroot·읽기 전용 root·네트워크 없음·seccomp·capability 제거와 메모리·CPU·PID·시간·출력 한도를 함께 적용한다.
 
-승인 소비 뒤에는 실패하더라도 usedAt을 되돌리지 않으며 task당 Run은 한 번만 생성한다. `finishRun`은 원래 identity를 보존하고 `RUNNING`에서 terminal 상태로만 전환한다. SQLite를 감사 기록의 원본으로 삼고 `execution-inspect`가 누락된 완료 보고서를 재생성한다. 강제 종료로 남은 `RUNNING`의 분류·프로세스 조사·복구는 3-D 범위이며 현재 자동 복구나 재실행은 없다.
+승인 소비 뒤에는 실패하더라도 usedAt을 되돌리지 않으며 task당 Run은 한 번만 생성한다. `finishRun`은 원래 identity를 보존하고 `RUNNING`에서 terminal 상태로만 전환한다. SQLite를 감사 기록의 원본으로 삼고 `execution-inspect`가 누락된 완료 보고서를 재생성한다. 강제 종료 뒤 상태 조사는 아래 명시적 복구 경로를 사용하며 자동 재실행하지 않는다.
+
+### 단계 3-D의 제어와 복구 경로
+
+```text
+execution-cancel / execution-invalidate → OS 소유자·이벤트·revision 검증
+  → generation 증가·요청 무효화·미소비 승인 revoke 원자 commit
+  → 실행 controller의 fence / 50ms polling → 새 동작 거부·소유 container 정리
+execution-recover → 저장된 lifecycle·소유 identity·파일 증거 조사
+  → 정지·제거 확인 + 잔여 파일/Git/view 관찰 → INTERRUPTED / CANCELLED / BLOCKED
+execution-inspect → 한 DB snapshot의 Task·제어·승인 페이지·Run·lifecycle → 누락 보고서 재생성
+```
+
+합성 요청은 `synthetic:<task-id>`와 초기 revision 1·generation 0으로 식별한다. 같은 이벤트 ID·payload는 멱등 처리하고 다른 payload는 거부한다. 오래된 편집·삭제 revision은 상태를 되돌리지 않는다. 승인 생성과 소비는 같은 트랜잭션에서 무효화 여부를 확인한다. 실행 전 취소는 대기 Task를 `CANCELLED`로 바꾸고, 실행 중 제어는 먼저 요청 상태만 바꾼다. controller가 정리를 확인한 뒤 Run과 Task를 종료하며 성공 종료와 취소 경합도 `finishRun`에서 재검증한다.
+
+`execution.sqlite`는 요청 제어 기록과 순번이 있는 lifecycle 최신 기록·추가 전용 이력을 보관한다. 승인 소비와 최초 `claimed` 기록은 원자적이다. 작업 영역의 경로·계획/Git/view 해시와 diff·검사·명령 결과를 중간 저장한다. Docker 생성 전 이름·소유 토큰·Run ID를 저장하고 생성 후 전체 ID를 추가한다. 이름·토큰·Run/command identity와 한 번 기록한 ID·workspace 증거는 바꿀 수 없다.
+
+짧은 파일 작업은 DB guard 안에서 수행해 취소 writer와 직렬화한다. Docker create/start는 동기 dispatch gate가 generation을 확인하고 실제 CLI spawn 호출까지만 잠금을 유지한다. RPC 완료는 트랜잭션 밖에서 기다리며 이미 전달된 RPC의 container는 취소·복구 때 정리한다. container의 이름·소유 토큰·Run label·기록한 전체 ID를 대조하고 다른 container를 추측해 종료하지 않는다.
+
+재시작 관찰은 메모리 snapshot에 의존하지 않는다. 저장된 파일/Git/view 증거로 부분 patch·추가·삭제·권한·링크·특수 파일을 조사하고 예상 밖 파일의 본문은 읽지 않는다. 정리나 관찰이 불확실하면 `BLOCKED`, 확인된 중단은 `INTERRUPTED`, 확인된 취소는 `CANCELLED`다. 과거 3-C의 소유 정보 없는 미완 Run은 `legacy_untracked`와 `BLOCKED`로 보존한다. 이미 `BLOCKED`인 Run의 재복구는 Run 역사를 유지하고 lifecycle의 정리·관찰만 갱신한다. 소비 승인 복원·작업 재개·commit·push·자동 삭제는 없다.
+
+제어·조회만 전역 lease를 우회한다. 계획·승인·실행·복구는 전역 lease를 유지하므로 실제 Slack 수신과 합성 실행은 직렬화된다. 실제 Slack Task와 합성 요청을 연결하지 않으며 수신 공백 중 변경 감지도 보장하지 않는다.
 
 ## 3. 구성 요소와 책임
 
@@ -138,7 +159,7 @@ execution-inspect → SQLite의 Task·최신 승인 페이지·Run과 완료 보
 | PolicyGate | 채널·저장소·경로·명령·데이터 전송 정책 검사 |
 | ApprovalService | 단계 3-A의 OS 소유자·계획·기준 커밋·만료·취소 검증과 기록용 승인. 합성 실행 승인은 별도 서비스가 담당 |
 | SandboxVerifier | 단계 3-B에서 로컬 Docker의 합성 probe·유효 정책·종료와 보호 경계를 확인. 대상 코드 실행 권한 없음 |
-| SyntheticExecutionService / IsolatedExecutionPort | 단계 3-C의 독립 합성 계획·새 승인·원자적 Run과 고정 patch·등록 검사 실행 |
+| SyntheticExecutionService / IsolatedExecutionPort | 독립 합성 계획·새 승인·원자적 Run과 고정 실행, 단계 3-D의 취소·소유 container 복구·잔여 상태 관찰 |
 | TaskStore / Reporter | 상태·감사 기록 저장과 로컬 보고 |
 
 외부 기능은 `MessageSource`, `ModelPort`, `RepoReadPort`, `ExecutionPort`, `ApprovalPort`, `ReportSink`로 나눈다. 모의 조사는 `MockSlackSource`, `FixtureModel`, 제한된 로컬 저장소 읽기와 로컬 보고를 사용한다. 단계 3-A는 로컬 승인 기록, 단계 3-B는 `SandboxVerificationPort`의 고정 probe, 단계 3-C는 `ExecutionStore`·`IsolatedExecutionPort`의 독립 합성 실행을 제공한다. 실제 Slack 요청·모델·제품 저장소와 실행 흐름의 연결은 제공하지 않는다.
@@ -193,8 +214,9 @@ RECEIVED → TRIAGED → ANALYZED
 
 예외 → BLOCKED / FAILED / CANCELLED
 
-[단계 3-C 독립 합성 실행]
-AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED
+[단계 3-C·3-D 독립 합성 실행]
+AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED / CANCELLED / INTERRUPTED
+        취소·무효화 → CANCELLED
 ```
 
 상태 변경은 트랜잭션으로 처리하고 이벤트 중복과 승인 재사용을 데이터베이스 제약으로 막는다. 재시작 후 기록을 복구하되, 중단된 변경을 자동 재실행하지 않는다. `REPORTED`는 보고가 끝났다는 뜻이며 모든 검사가 통과했다는 뜻이 아니다.
@@ -216,7 +238,7 @@ AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED
 | 3-D | 실행 취소·복구와 실제 diff 보고 | 요청 무효화·crash 경합 처리, 자동 재실행 없음, 승인·Run·잔여 작업물 보존 |
 | 4 | 답장, push·PR, Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증 |
 
-기존 `ExecutionPort`의 항상 거부 동작과 외부 메시지 전송 차단을 유지하며 3-C 합성 실행만 별도 명령으로 연다. 승인·취소와 `execution-*` CLI는 기존 전역 lease를 사용하므로 같은 데이터 디렉터리의 실시간 Slack 수신 중에는 거부된다. 수신을 멈춘 동안의 요청 변경 감지는 보장하지 않는다. 단계 3-D 전에 잠금을 재설계하거나 수신·실행을 명시적으로 직렬화하고 무효화 경합을 검증해야 한다. 단계 3의 작업 트리는 작업 분리 수단이며 Docker 격리 환경을 대신하지 않는다.
+기존 `ExecutionPort`의 항상 거부 동작과 외부 메시지 전송 차단을 유지하며 합성 실행만 별도 명령으로 연다. 기존 `approve`·`cancel`과 합성 계획·승인·실행·복구는 전역 lease를 유지한다. 합성 실행의 취소·무효화·조회는 실행 DB의 짧은 트랜잭션으로 전달한다. 실제 Slack 수신과 실행은 직렬화하며 수신 공백의 변경 감지는 보장하지 않는다. 단계 3의 작업 트리는 작업 분리 수단이며 Docker 격리 환경을 대신하지 않는다.
 
 ## 6. Slack 연결에서 혼동하지 않을 것
 
