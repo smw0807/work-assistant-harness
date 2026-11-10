@@ -1,6 +1,6 @@
 # work-assistant-harness
 
-Slack 요청을 로컬에 기록하고, 합성 자료로 읽기 전용 조사를 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사와 단계 2의 Slack 읽기 수신 기능**을 구현했습니다. 실제 Slack 권한과 회사 환경 검증은 아직 수행하지 않았습니다.
+Slack 요청을 로컬에 기록하고, 합성 자료로 읽기 전용 조사를 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록**이 구현 범위입니다. 실제 Slack 권한과 회사 환경, 승인 후 격리 실행 검증은 아직 수행하지 않았습니다.
 
 ```text
 로컬 이벤트 JSON
@@ -14,7 +14,7 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 읽기 전용 조사를
       불명확: NEEDS_CLARIFICATION
 ```
 
-기본 실행은 합성 자료만 사용합니다. Slack 수신은 명시적으로 켜는 별도 경로이며 모델·제품 저장소와 연결하지 않습니다. 승인 후 수정, 대상 스크립트 실행, 외부 메시지, Git 원격 작업은 구현하지 않았습니다. `ApprovalPort`와 `ExecutionPort`의 기본 구현은 항상 거부합니다.
+기본 실행은 합성 자료만 사용합니다. Slack 수신은 명시적으로 켜는 별도 경로이며 모델·제품 저장소와 연결하지 않습니다. 단계 3-A는 로컬 승인과 취소를 저장하며 `APPROVED`에서 멈춥니다. 승인 후 수정, 대상 스크립트 실행, 외부 메시지, Git 원격 작업은 구현하지 않았습니다. `ExecutionPort`의 기본 구현은 항상 거부하고 `run` 명령은 제공하지 않습니다.
 
 ## 설치와 실행
 
@@ -47,12 +47,34 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 
 데이터 폴더는 소스와 겹치지 않는 비공개 디렉터리여야 합니다. 새 폴더는 `0700`, SQLite와 보고서는 `0600`으로 만듭니다. 기존 폴더가 다른 사용자에게 열려 있으면 거부하며 임의로 권한을 바꾸지 않습니다. DB·저널의 symlink와 hardlink도 거부합니다.
 
-- `tasks.sqlite`: 작업, 이벤트 중복 제약, 상태 이력, 근거와 계획. 원문 메시지와 모델 원문은 저장하지 않습니다.
+- `tasks.sqlite`: 작업, 이벤트 중복 제약, 상태 이력, 근거와 계획, 별도 승인 테이블의 불변 계획 스냅샷과 승인·취소 이력. 모의 조사 작업은 원문 메시지와 모델 원문을 저장하지 않습니다. Slack 수집 자료의 별도 보관 범위는 아래 단계 2를 따릅니다.
 - `harness-lock.sqlite`: 동시 CLI 실행 방지용 SQLite 잠금. 프로세스 종료 시 OS가 잠금을 해제합니다.
 - `reports/`: 작업별 JSON 보고서. DB에 저장된 자료로 누락된 보고서를 재생성합니다.
 - `runs/`: 명령별 결과와 대상 전후 해시를 기록한 JSON 실행 기록.
 
-같은 이벤트는 재시작 후에도 다시 분석하지 않습니다. 중간에 종료된 `RECEIVED`, `TRIAGED`, `ANALYZED` 작업은 `BLOCKED`와 `INTERRUPTED_REVIEW_REQUIRED`로 남기고 자동 재실행하지 않습니다. 승인 대기 상태도 그대로 유지합니다. 자동 보관 기간·삭제·재처리 기능은 아직 없습니다.
+같은 이벤트는 재시작 후에도 다시 분석하지 않습니다. 중간에 종료된 `RECEIVED`, `TRIAGED`, `ANALYZED` 작업은 `BLOCKED`와 `INTERRUPTED_REVIEW_REQUIRED`로 남기고 자동 재실행하지 않습니다. 승인 대기 상태도 그대로 유지합니다. 만료된 승인은 상태 확인 시 취소 기록을 남기고 `AWAITING_APPROVAL`로 되돌립니다. 조사 작업과 승인 이력의 자동 보관 기간·삭제·재처리 기능은 아직 없습니다.
+
+## 단계 3-A 로컬 승인·취소
+
+변경 요청의 계획을 `inspect`로 확인하고, 표시된 해시와 기준 커밋을 그대로 승인 입력에 사용합니다. 유효기간은 1~1440분의 정수를 반드시 지정합니다.
+
+```sh
+pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
+pnpm harness approve <task-id> --plan-hash <sha256> --base-commit <sha1> --expires-in-minutes 30 --data-dir /private/tmp/harness-demo-data
+pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
+pnpm harness inspect <task-id> --approval-offset 1 --data-dir /private/tmp/harness-demo-data
+pnpm harness cancel <task-id> --data-dir /private/tmp/harness-demo-data
+```
+
+`--data-dir`를 생략하면 기본 데이터 위치를 사용합니다. `approve`는 `AWAITING_APPROVAL`인 변경 요청의 계획·요청 revision·저장소·기준 커밋을 검증하고, 불변 계획 스냅샷과 승인 기록을 `APPROVED` 상태 변경과 같은 트랜잭션으로 저장합니다. 활성 승인을 중복 생성하지 않습니다. 소유자는 `process.getuid()`로 확인한 `os-user:<uid>`이며 소유자 CLI 옵션이나 Slack 사용자 ID로 바꿀 수 없습니다. UID를 확인할 수 없는 OS에서는 거부합니다.
+
+`inspect`는 취소·만료 기록을 포함한 승인 이력을 최신순으로 한 번에 1개씩 반환합니다. 선택 옵션 `--approval-offset <0..1000000000>`의 기본값은 `0`입니다. `result.approvals`는 해당 페이지이고 `result.approvalPage`는 `{ offset, total, nextOffset }`입니다. `nextOffset`이 있으면 그 값을 다음 `--approval-offset`에 넣어 이어 조회합니다. `approve`·`cancel` 응답도 최신 승인 1개와 같은 페이지 정보를 반환하며, 전체 이력은 DB에 보존합니다. worker 출력은 최대 1MiB로 제한합니다.
+
+`cancel`은 `AWAITING_APPROVAL` 또는 `APPROVED`인 변경 요청을 `CANCELLED`로 바꾸고 기존 승인을 취소합니다. 만료 승인은 상태 확인 시 취소되고 작업이 다시 승인 대기 상태가 됩니다. 원본 요청의 편집·삭제도 Task 무효화와 같은 트랜잭션에서 승인을 취소하며, Task 계획·보고가 제거돼도 별도 승인 스냅샷은 보존합니다.
+
+이 단계의 승인은 `executionPolicy: approval-only-v1`, `usedAt: null`인 기록입니다. 후속 실제 실행 정책의 승인으로 재사용하지 않습니다. 현재 기준 커밋 검증은 Task·계획·CLI 입력의 일치 검사이며 대상 저장소의 실행 직전 상태 검증은 후속 단계입니다. 승인 소비·Run 생성·실제 patch·대상 검사·격리 실행은 `not_run`입니다. `pnpm harness run <task-id>`는 `UNKNOWN_COMMAND`로 거부됩니다.
+
+승인·취소는 기존 전역 프로세스 잠금을 사용합니다. 같은 데이터 디렉터리에서 `slack-listen`이 실행 중이면 거부되므로 수신과 동시에 승인하는 기능은 제공하지 않습니다. 수신 중단 구간의 Slack 편집·삭제 감지도 보장하지 않습니다. 실제 실행 전에는 수신·무효화·실행의 잠금과 취소 흐름을 추가 검증해야 합니다.
 
 ## 모의 입력과 오류 재현
 
@@ -142,4 +164,4 @@ pnpm build
 
 `test`는 컴파일 후 Node 내장 test runner로 단위·통합·CLI 수용 테스트를 실행합니다. 합성 저장소는 별도 임시 경로에 준비합니다. 하네스 테스트가 통과해도 실제 Slack 권한·회사 보안·격리 실행기의 검증을 통과한 것은 아닙니다.
 
-전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1 결과](docs/stage-1-result.md)와 [단계 2 결과](docs/stage-2-result.md)에 정리했습니다.
+전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1 결과](docs/stage-1-result.md), [단계 2 결과](docs/stage-2-result.md), [단계 3-A 결과](docs/stage-3a-result.md)에 정리했습니다. 단계 3 전체 완료는 승인 기록뿐 아니라 실제 격리 실증·고정 patch와 검사·실행 취소 및 복구까지 확인한 뒤 판단합니다.

@@ -63,7 +63,7 @@ const run = async (): Promise<void> => {
       checks: [
         { name: 'analysis', status: 'not_run', reason: 'Slack 수신·문맥 기록만 수행하며 모델과 대상 저장소를 연결하지 않습니다.' },
         { name: 'external_message_delivery', status: 'not_run', reason: 'Slack 메시지·DM·Git 원격 전송 경로가 없습니다.' },
-        { name: 'approval_and_execution', status: 'not_run', reason: '기본 승인·실행 포트는 계속 거부합니다.' },
+        { name: 'approval_and_execution', status: 'not_run', reason: '수집 경로는 승인과 실행을 제공하지 않으며 실행 포트는 계속 거부합니다.' },
       ],
     }, null, 2)}\n`);
   };

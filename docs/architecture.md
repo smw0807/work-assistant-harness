@@ -4,7 +4,7 @@
 
 이 문서는 `work-assistant-harness`의 구조와 단계별 설계를 설명한다. 실제 구현 경계는 아래 결과 문서로 구분하며, 후속 승인·실행 설계가 이미 사용 가능한 기능이라는 뜻은 아니다.
 
-2026-11-09에 단계 0의 최소 기반과 단계 1의 합성 자료 기반 읽기 전용 CLI를, 2026-11-10에 단계 2의 Slack 수신 어댑터·수집 CLI·오프라인 테스트를 구현했다. 실제 구현 경계와 검증 결과는 [stage-1-result.md](stage-1-result.md), [stage-2-result.md](stage-2-result.md)를 따른다. 실제 Slack·AI·회사 저장소 연결과 승인·실행은 완료된 기능이 아니다.
+2026-11-09에 단계 0의 최소 기반과 단계 1의 합성 자료 기반 읽기 전용 CLI를, 2026-11-10에 단계 2의 Slack 수신 어댑터·수집 CLI·오프라인 테스트를 구현했다. 이번 작업 범위는 단계 3-A의 로컬 승인·취소와 영속 승인 기록까지다. 실제 구현 경계와 검증 결과는 [stage-1-result.md](stage-1-result.md), [stage-2-result.md](stage-2-result.md), [stage-3a-result.md](stage-3a-result.md)를 따른다. 실제 Slack·AI·회사 저장소 연결과 승인 후 실행은 완료된 기능이 아니다.
 
 - 구현 순서와 상세 수용 기준: [implementation-plan.md](implementation-plan.md)
 - 권한과 승인 조건: [security-and-approval.md](security-and-approval.md)
@@ -38,8 +38,8 @@
       문의: 근거 + 답변 초안
       불명확: 확인 질문
       변경 요청: 수정 계획 + 승인 대기
-  → [후속 단계] 구체적인 소유자 승인 검증
-  → [후속 단계] 격리 환경에서 변경·허용된 검사
+  → [단계 3-A] 로컬 소유자 승인·취소 기록 (APPROVED에서 정지)
+  → [단계 3-B 이후] 실제 실행 정책의 새 승인·격리 환경에서 변경·허용된 검사
   → 실제 diff와 검사 결과 보고
 ```
 
@@ -82,7 +82,9 @@ Socket Mode의 `envelope_id`는 전달별 ACK에만 쓰고, `event_id`는 중복
 
 보고서에는 확인한 사실과 가설, 근거, 답변 초안 또는 수정 계획, 위험과 다음 승인 항목을 구분한다. 근거가 부족하면 알 수 없다고 적는다. 요청자에게 답장을 자동 전송하지 않는다.
 
-변경 요청은 `AWAITING_APPROVAL`에서 멈춘다. 승인 후 실행 기능을 구현하더라도 승인된 범위의 로컬 diff와 검사 결과를 보고하는 데까지 진행한다. 외부 메시지와 Git 원격 작업은 별도 기능이다.
+변경 요청의 조사는 `AWAITING_APPROVAL`에서 멈춘다. 단계 3-A의 로컬 CLI는 계획 해시·기준 커밋·필수 유효기간을 받아 불변 계획 스냅샷과 승인 기록을 저장하고 `APPROVED`로 바꾼다. 소유자는 OS UID의 `os-user:<uid>`로 고정하며 UID 미지원 환경은 거부한다. 승인 기록의 실행 정책은 `approval-only-v1`이고 실제 실행에 재사용하지 않는다. `ExecutionPort`는 항상 거부하며 `run` 명령은 없다.
+
+실제 실행은 격리 backend 실증 이후 별도 구현한다. 승인된 범위의 로컬 diff와 검사 결과를 보고하는 데까지 진행하며, 외부 메시지와 Git 원격 작업은 별도 기능이다.
 
 ## 3. 구성 요소와 책임
 
@@ -96,11 +98,11 @@ Socket Mode의 `envelope_id`는 전달별 ACK에만 쓰고, `event_id`는 중복
 | RepoReader | 허용된 커밋·경로에서 필요한 근거만 읽기 |
 | Planner | 조사 보고서, 답변 초안과 수정 계획 생성. 실행 권한 없음 |
 | PolicyGate | 채널·저장소·경로·명령·데이터 전송 정책 검사 |
-| ApprovalService | 소유자, 계획, 기준 커밋, 만료와 1회 사용 검증 |
+| ApprovalService | 단계 3-A에서 OS 소유자·계획·기준 커밋·만료·취소 검증과 승인 기록. 소비와 1회 실행은 후속 단계 |
 | ExecutionRunner | 후속 단계에서 승인된 변경과 검사만 실행 |
 | TaskStore / Reporter | 상태·감사 기록 저장과 로컬 보고 |
 
-외부 기능은 `MessageSource`, `ModelPort`, `RepoReadPort`, `ExecutionPort`, `ApprovalPort`, `ReportSink`로 나눈다. 초기 구현은 `MockSlackSource`, `FixtureModel`, 제한된 로컬 저장소 읽기와 로컬 보고를 사용한다. 승인 서비스의 실제 실행 연결은 후속 단계에 둔다.
+외부 기능은 `MessageSource`, `ModelPort`, `RepoReadPort`, `ExecutionPort`, `ApprovalPort`, `ReportSink`로 나눈다. 모의 조사는 `MockSlackSource`, `FixtureModel`, 제한된 로컬 저장소 읽기와 로컬 보고를 사용한다. 단계 3-A에서 로컬 승인 경로와 SQLite 승인 기록을 추가하며, 승인 소비와 실제 실행 연결은 후속 단계에 둔다.
 
 특정 Codex SDK나 CLI를 필수 전제로 도메인 코드를 묶지 않는다. 실제 실행기를 선택할 때 해당 버전의 공식 문서, 인증과 권한 조건을 검증한다.
 
@@ -136,7 +138,7 @@ work-assistant-harness/
 
 - **Task:** 이벤트 출처, 요청자, 분류, 상태, 대상 저장소와 기준 커밋.
 - **Plan:** 버전, 요청 메시지 revision, 목적, 허용 파일·동작·검사와 계획 해시.
-- **Approval:** 소유자, 작업과 계획, 기준 커밋, 허용 동작, 만료·사용·취소 기록.
+- **Approval:** OS 소유자, 작업, 불변 계획 스냅샷·해시·요청 revision·저장소·기준 커밋, 실행 정책, 생성·만료·사용·취소 기록. 단계 3-A의 실행 정책은 `approval-only-v1`, 사용 시각은 `null`이다.
 - **Evidence / Run:** 파일 근거, 실제 diff, 검사별 결과와 실패·미실행 사유.
 - **Slack inbox / collection:** 이벤트 중복 키, 원본 메시지·revision, 수집 상태, 마스킹한 최소 문맥, 보관 만료와 분석 미실행 사유. 기존 Task의 조사 상태와 구분한다.
 
@@ -145,12 +147,17 @@ RECEIVED → TRIAGED → ANALYZED
   문의      → REPORTED
   불명확    → NEEDS_CLARIFICATION
   변경 요청 → AWAITING_APPROVAL
-               → [후속 단계] APPROVED → RUNNING → VERIFYING → REPORTED
+               → [단계 3-A] APPROVED (실행 없음)
+               → [단계 3-C 이후] RUNNING → VERIFYING → REPORTED
 
 예외 → BLOCKED / FAILED / CANCELLED
 ```
 
 상태 변경은 트랜잭션으로 처리하고 이벤트 중복과 승인 재사용을 데이터베이스 제약으로 막는다. 재시작 후 기록을 복구하되, 중단된 변경을 자동 재실행하지 않는다. `REPORTED`는 보고가 끝났다는 뜻이며 모든 검사가 통과했다는 뜻이 아니다.
+
+단계 3-A는 승인 삽입과 `APPROVED` 전환을 한 트랜잭션으로 처리하고 활성 승인의 중복 생성을 막는다. 만료 조정은 승인 취소와 `AWAITING_APPROVAL` 복귀를, 로컬 취소는 `CANCELLED` 전환을 함께 기록한다. 요청 편집·삭제도 기존 Task 무효화와 같은 트랜잭션에서 승인을 취소한다. Task의 계획·보고 제거와 별개로 승인 스냅샷은 보존한다. 승인 소비와 Run 생성은 아직 없으며 이후 실제 실행 정책의 새 승인이 필요하다.
+
+승인 이력은 DB에 모두 남기고 CLI 응답은 최신순 1개 페이지로 제한한다. `inspect`는 기본 0인 `--approval-offset`과 `result.approvalPage`의 `nextOffset`으로 이어 조회하며 `result.approvals`에는 해당 페이지를 담는다. 승인·취소 응답도 같은 최신 페이지를 사용한다. worker stdout의 최대 크기는 1MiB다.
 
 ## 5. 단계별로 어디까지 만드는가
 
@@ -159,10 +166,13 @@ RECEIVED → TRIAGED → ANALYZED
 | 0 | 로컬 CLI, 합성 이벤트·저장소, 고정 모델, SQLite와 보고서 | 실제 토큰과 인터넷 없이 세 분류가 재현되고 재시작 후 기록 유지 |
 | 1 | 읽기 전용 조사, 경로 제한과 파일 근거 | 변경 요청도 대상 파일을 바꾸지 않고 보고서·계획만 생성 |
 | 2 | 기본 비활성 Slack 읽기 어댑터와 오프라인 수집·복구 검증 | inbox commit 후 ACK, 최신 revision·보관 경계, 분석·외부 메시지 전송 없음. 실제 연결은 별도 승인·검증 |
-| 3 | 로컬 승인과 격리된 코드 변경 | 승인 없음·만료·재사용·기준 변경·범위 초과를 모두 차단 |
+| 3-A | 로컬 승인·취소와 불변 승인 기록 | 계획·OS 소유자·TTL 검증, 원자적 상태 변경·취소·만료, 실행 거부 유지 |
+| 3-B | 실제 격리 backend 선정·실증 | 호스트·승인 DB·공유 Git 보호, 네트워크·자원·프로세스 제한을 실제 실패 테스트로 검증 |
+| 3-C | 고정 합성 patch·명령 사양·허용 검사 | 새 실행 승인 소비, 계획·커밋·revision·정책 변경과 범위 초과 차단 |
+| 3-D | 실행 취소·복구와 실제 diff 보고 | 요청 무효화·crash 경합 처리, 자동 재실행 없음, 승인·Run·잔여 작업물 보존 |
 | 4 | 답장, push·PR, Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증 |
 
-최초 구현은 단계 0·1까지였고, 이번 후속 작업은 단계 2의 어댑터·오프라인 수집 경계를 추가한다. `ExecutionPort`·`ApprovalPort`는 항상 거부하는 구현을 유지하고 외부 메시지 전송은 끈다. 승인 모델을 먼저 테스트하더라도 실제 실행 권한은 열지 않는다. 단계 3의 worktree는 작업 분리 수단이며 보안 격리 환경을 대신하지 않는다.
+이번 단계 3-A는 실제 실행 권한을 열지 않고 `ExecutionPort`의 항상 거부 동작과 외부 메시지 전송 차단을 유지한다. 승인·취소 CLI는 기존 전역 lease를 사용하므로 같은 데이터 디렉터리의 실시간 Slack 수신 중에는 거부된다. 수신을 멈춘 동안의 요청 변경 감지는 보장하지 않는다. 단계 3-D 전에 잠금을 재설계하거나 수신·실행을 명시적으로 직렬화하고 무효화 경합을 검증해야 한다. 단계 3의 worktree는 작업 분리 수단이며 보안 격리 환경을 대신하지 않는다.
 
 ## 6. Slack 연결에서 혼동하지 않을 것
 

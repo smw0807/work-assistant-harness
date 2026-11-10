@@ -1,6 +1,7 @@
 import type {
   Evidence, MessageEvent, ModelSummary, ReadRequest, Task, TriageDecision,
 } from '../domain/types.js';
+import type { ApprovalContext, ApprovalHistoryPage, ApprovalRecord, ApprovalRequest } from '../domain/approval.js';
 
 export interface MessageSource {
   read(): Promise<unknown[]>;
@@ -16,7 +17,14 @@ export interface RepoReadPort {
 }
 
 export interface ApprovalPort {
-  approve(taskId: string, planHash: string): never;
+  approve(request: ApprovalRequest, context: ApprovalContext): ApprovalRecord;
+}
+
+export interface ApprovalStore extends ApprovalPort {
+  cancelApproval(taskId: string, ownerId: string, now: Date): Task;
+  listApprovals(taskId: string): ApprovalRecord[];
+  listApprovalHistory(taskId: string, offset: number): ApprovalHistoryPage;
+  reconcileApprovals(now: Date): number;
 }
 
 export interface ExecutionPort {

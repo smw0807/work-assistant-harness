@@ -1,7 +1,7 @@
 export type Classification = 'inquiry' | 'change' | 'unclear';
 export type TaskStatus =
   | 'RECEIVED' | 'TRIAGED' | 'ANALYZED' | 'REPORTED'
-  | 'NEEDS_CLARIFICATION' | 'AWAITING_APPROVAL' | 'BLOCKED' | 'FAILED' | 'CANCELLED';
+  | 'NEEDS_CLARIFICATION' | 'AWAITING_APPROVAL' | 'APPROVED' | 'BLOCKED' | 'FAILED' | 'CANCELLED';
 
 export interface MessageEvent {
   eventId: string;

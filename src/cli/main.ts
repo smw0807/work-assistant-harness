@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { prepareDemoRepository, hashRepository } from '../adapters/demo-repository.js';
 import { HarnessError } from '../domain/errors.js';
 import type { IngestionPolicy } from '../domain/types.js';
+import type { ApprovalRequest } from '../domain/approval.js';
 import type { WorkerOptions } from './harness.module.js';
 import { acquireRuntimeLease, assertSafeEventFile, defaultDataDirectory, isInside, prepareDataDirectory, safeReadFlag } from './runtime.js';
 import { runSlackCommand, slackUsage } from './slack.js';
@@ -17,27 +18,75 @@ const scenarios = new Set([
   'bot', 'self', 'redaction',
 ]);
 
-const usage = 'pnpm harness replay --fixture <name> [--events <json>] [--data-dir <private-directory>]\npnpm harness list [--data-dir <private-directory>]\npnpm harness inspect <task-id> [--data-dir <private-directory>]';
+const usage = [
+  'pnpm harness replay --fixture <name> [--events <json>] [--data-dir <private-directory>]',
+  'pnpm harness list [--data-dir <private-directory>]',
+  'pnpm harness inspect <task-id> [--approval-offset <0..1000000000>] [--data-dir <private-directory>]',
+  'pnpm harness approve <task-id> --plan-hash <sha256> --base-commit <sha1> --expires-in-minutes <1..1440> [--data-dir <private-directory>]',
+  'pnpm harness cancel <task-id> [--data-dir <private-directory>]',
+].join('\n');
 
-const parseArguments = (): { command: WorkerOptions['command']; taskId: string; scenario: string; events: string; dataDirectory: string } => {
+interface CliArguments {
+  command: WorkerOptions['command'];
+  taskId: string;
+  scenario: string;
+  events: string;
+  dataDirectory: string;
+  approvalRequest: ApprovalRequest | null;
+  approvalOffset: number;
+}
+
+const parseApprovalRequest = (taskId: string, options: Map<string, string>): ApprovalRequest => {
+  const planHash = options.get('--plan-hash') ?? '';
+  const baseCommit = options.get('--base-commit') ?? '';
+  const minutes = options.get('--expires-in-minutes') ?? '';
+  if (!/^[a-f0-9]{64}$/.test(planHash) || !/^[a-f0-9]{40}$/.test(baseCommit)
+    || !/^[1-9]\d{0,3}$/.test(minutes) || Number(minutes) > 1440) {
+    throw new HarnessError('INVALID_APPROVAL_REQUEST');
+  }
+  return { taskId, planHash, baseCommit, expiresInMinutes: Number(minutes) };
+};
+
+const parseArguments = (): CliArguments => {
   const args = process.argv.slice(2);
   const command = args.shift();
-  if (command !== 'replay' && command !== 'inspect' && command !== 'list') throw new HarnessError('UNKNOWN_COMMAND');
-  const taskId = command === 'inspect' ? args.shift() ?? '' : '';
-  if (command === 'inspect' && !/^[a-f0-9-]{36}$/.test(taskId)) throw new HarnessError('INVALID_TASK_ID');
+  if (command !== 'replay' && command !== 'inspect' && command !== 'list' && command !== 'approve' && command !== 'cancel') {
+    throw new HarnessError('UNKNOWN_COMMAND');
+  }
+  const needsTask = command === 'inspect' || command === 'approve' || command === 'cancel';
+  const taskId = needsTask ? args.shift() ?? '' : '';
+  if (needsTask && !/^[a-f0-9-]{36}$/.test(taskId)) throw new HarnessError('INVALID_TASK_ID');
+  const allowedOptions = new Set(['--data-dir']);
+  if (command === 'replay') {
+    allowedOptions.add('--fixture');
+    allowedOptions.add('--events');
+  } else if (command === 'approve') {
+    allowedOptions.add('--plan-hash');
+    allowedOptions.add('--base-commit');
+    allowedOptions.add('--expires-in-minutes');
+  } else if (command === 'inspect') {
+    allowedOptions.add('--approval-offset');
+  }
   const options = new Map<string, string>();
   while (args.length > 0) {
     const key = args.shift() ?? '';
     const value = args.shift();
-    if (!['--fixture', '--events', '--data-dir'].includes(key) || !value || value.startsWith('--') || options.has(key)) {
+    if (!allowedOptions.has(key) || !value || value.startsWith('--') || options.has(key)) {
       throw new HarnessError('INVALID_ARGUMENTS');
     }
     options.set(key, value);
   }
-  if (command !== 'replay' && (options.has('--fixture') || options.has('--events'))) throw new HarnessError('INVALID_ARGUMENTS');
   const scenario = options.get('--fixture') ?? 'inquiry';
   if (!scenarios.has(scenario)) throw new HarnessError('UNKNOWN_FIXTURE');
-  return { command, taskId, scenario, events: options.get('--events') ?? '', dataDirectory: options.get('--data-dir') ?? defaultDataDirectory() };
+  const approvalRequest = command === 'approve' ? parseApprovalRequest(taskId, options) : null;
+  const offsetText = options.get('--approval-offset') ?? '0';
+  if (!/^(0|[1-9]\d{0,9})$/.test(offsetText) || Number(offsetText) > 1_000_000_000) {
+    throw new HarnessError('INVALID_APPROVAL_OFFSET');
+  }
+  return {
+    command, taskId, scenario, events: options.get('--events') ?? '',
+    dataDirectory: options.get('--data-dir') ?? defaultDataDirectory(), approvalRequest, approvalOffset: Number(offsetText),
+  };
 };
 
 const run = async (): Promise<void> => {
@@ -68,7 +117,8 @@ const run = async (): Promise<void> => {
         cwd: sourceRoot,
         // 원래 프로세스의 토큰과 Node/Git 옵션을 조사 프로세스에 넘기지 않는다.
         env: { LANG: 'C.UTF-8', TZ: 'UTC' }, encoding: 'utf8', timeout: 30_000,
-        maxBuffer: 256_000, stdio: ['ignore', 'pipe', 'pipe'],
+        // task와 승인 및 승인 이력 1페이지는 각각 256KB 이하로 읽는다.
+        maxBuffer: 1_048_576, stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (error) {
       const stderr = error instanceof Error && 'stderr' in error && typeof error.stderr === 'string' ? error.stderr.trim() : '';

@@ -7,6 +7,7 @@ import type {
   SlackMessageChange, SlackReceiverConfig, SlackThreadSnapshot,
 } from '../domain/slack.js';
 import type { Task } from '../domain/types.js';
+import type { ApprovalRecord } from '../domain/approval.js';
 import { containsSensitiveText, redactSlackText } from '../policy/redaction.js';
 import { assertRuntimeFile } from '../policy/runtime-path.js';
 
@@ -409,6 +410,18 @@ export class SqliteSlackInbox implements SlackInbox {
         sameMessage && event.kind === 'deleted' ? 'REQUEST_DELETED' : 'REQUEST_CHANGED', now.toISOString());
       this.database.prepare('UPDATE tasks SET status = ?, payload = ? WHERE task_id = ?')
         .run(cancelled.status, JSON.stringify(cancelled), String(row.task_id));
+      this.revokeTaskApprovals(task.taskId, now, cancelled.failureCode ?? 'REQUEST_CHANGED');
+    }
+  }
+
+  private revokeTaskApprovals(taskId: string, now: Date, reason: string): void {
+    if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'approvals'").get()) return;
+    const rows = this.database.prepare('SELECT payload FROM approvals WHERE task_id = ? AND revoked_at IS NULL').all(taskId);
+    for (const row of rows) {
+      const approval = parsePayload<ApprovalRecord>(row.payload);
+      const revoked = { ...approval, revokedAt: now.toISOString(), revocationReason: reason };
+      this.database.prepare('UPDATE approvals SET revoked_at = ?, payload = ? WHERE approval_id = ? AND revoked_at IS NULL')
+        .run(revoked.revokedAt, JSON.stringify(revoked), approval.approvalId);
     }
   }
 

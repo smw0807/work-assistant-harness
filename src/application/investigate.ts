@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { hashChangePlan } from '../domain/approval.js';
 import { HarnessError } from '../domain/errors.js';
 import { transitionTask } from '../domain/state.js';
 import type {
@@ -26,9 +27,9 @@ const boundedModelCall = async (operation: () => Promise<string>): Promise<strin
 };
 
 export const unexecutedChecks = (): TaskReport['checks'] => [
-  { name: 'target_install_test_build', status: 'not_run', reason: '단계 1은 대상 코드를 읽기만 하며 설치·검사·빌드를 실행하지 않습니다.' },
+  { name: 'target_install_test_build', status: 'not_run', reason: '조사 경로는 대상 코드를 읽기만 하며 설치·검사·빌드를 실행하지 않습니다.' },
   { name: 'external_delivery', status: 'not_run', reason: '외부 모델·Slack 전송·Git 원격 어댑터가 연결되지 않았습니다.' },
-  { name: 'approval_and_execution', status: 'not_run', reason: '승인 후 실행은 단계 3의 미구현 기능이며 기본 포트는 항상 거부합니다.' },
+  { name: 'approval_and_execution', status: 'not_run', reason: '로컬 승인과 별개로 격리 실행은 미구현이며 실행 포트는 항상 거부합니다.' },
 ];
 
 const createChangePlan = (task: Task, objective: string, evidence: Evidence[], summary: ModelSummary): ChangePlan => {
@@ -44,7 +45,7 @@ const createChangePlan = (task: Task, objective: string, evidence: Evidence[], s
     testCommandIds: [],
     risks: summary.risks,
   };
-  return { ...content, planHash: createHash('sha256').update(JSON.stringify(content)).digest('hex') };
+  return { ...content, planHash: hashChangePlan(content) };
 };
 
 export interface ReplayResult {
@@ -149,7 +150,7 @@ export class InvestigationService {
       risks: summary.risks,
       checks: [{ name: 'read_only_investigation', status: 'passed', reason: '허용된 파일 근거 수집과 모델 JSON 검증을 완료했습니다.' }, ...unexecutedChecks()],
       nextApproval: decision.kind === 'change'
-        ? '수정 계획만 생성했습니다. 승인과 실행 명령은 단계 3에서 구현합니다.'
+        ? '계획을 검토하고 로컬 approve 명령으로 승인할 수 있습니다. 대상 코드 실행은 비활성화되어 있습니다.'
         : '로컬 답변 초안입니다. 외부 전송은 별도 승인 대상입니다.',
     };
     return {

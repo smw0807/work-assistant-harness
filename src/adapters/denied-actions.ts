@@ -1,8 +1,9 @@
 import { HarnessError } from '../domain/errors.js';
 import type { ApprovalPort, ExecutionPort } from '../ports/index.js';
+import type { ApprovalContext, ApprovalRequest } from '../domain/approval.js';
 
 export class DeniedApproval implements ApprovalPort {
-  approve(_taskId: string, _planHash: string): never {
+  approve(_request: ApprovalRequest, _context: ApprovalContext): never {
     throw new HarnessError('APPROVAL_NOT_IMPLEMENTED');
   }
 }
