@@ -4,7 +4,7 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 핵심 방향은 Slack에서 나를 부른 메시지를 모아 저장소를 읽고, 답변 초안이나 수정 계획을 나에게 보여 주는 것이다. 코드 변경은 내가 승인한 뒤에만 격리된 작업 공간에서 수행한다. 첫 버전은 실제 회사 계정 없이 로컬에서 검증할 수 있게 만든다.
 
-현재 구현 상태: 단계 0·1의 모의 조사, 단계 2의 수신·오프라인 검증과 단계 3-A의 로컬 승인 기록에 이어 2026-11-10에 단계 3-B의 고정 합성 Docker 격리 진단을 구현했다. 지원 backend의 실제 probe 5개와 수용 33, 회귀 테스트 171개·lint·typecheck·build가 통과했다. 근거와 지원 범위는 [단계 3-B 결과](stage-3b-result.md)에 기록하며 진단 통과가 대상 실행 권한을 만들지는 않는다. 실제 Slack·AI·회사 저장소는 연결하지 않았다. 기존 범위는 [단계 1 결과](stage-1-result.md), [단계 2 결과](stage-2-result.md), [단계 3-A 결과](stage-3a-result.md), 사용 가능한 명령은 [README](../README.md)를 따른다. 단계 3-C 이후 실행 기능과 아래 실행 명령 예시는 후속 계획이다.
+현재 구현 상태: 단계 0·1의 모의 조사, 단계 2의 수신·오프라인 검증, 단계 3-A의 로컬 승인, 단계 3-B의 Docker 격리 진단에 이어 2026-11-10에 단계 3-C의 독립 합성 patch·등록 검사 실행을 구현했다. 3-B 실제 probe와 진단 권한 경계는 [단계 3-B 결과](stage-3b-result.md), 새 실행 계획·승인·원자적 Run과 실제 Docker 성공·실패 검증은 [단계 3-C 결과](stage-3c-result.md)에 기록한다. 기존 조사 Task와 `approval-only-v1`은 실행에 연결하지 않으며 실제 Slack·AI·회사 저장소도 연결하지 않았다. 기존 범위는 [단계 1 결과](stage-1-result.md), [단계 2 결과](stage-2-result.md), [단계 3-A 결과](stage-3a-result.md), 현재 명령은 [README](../README.md)를 따른다. 다음 구현 단계는 3-D의 요청 무효화·취소·crash 복구다. 아래 범용 실행 명령 예시는 구현 제안이다.
 
 ### 하네스가 맡을 역할
 
@@ -161,12 +161,16 @@ Socket Mode의 app-level 토큰에는 연결용 `connections:write`를 사용한
 
 #### 단계 3-C 고정 합성 patch와 허용 검사
 
-- 실제 AI 실행기 대신 고정 합성 patch 어댑터로 시작한다. patch 스키마, 원본 파일 해시, 허용 파일과 변경을 검증하고 파일 생성·삭제·이름 변경·실행 비트·symlink·서브모듈의 지원·거부 범위를 명시한다. 읽은 근거 파일 목록을 자동으로 수정 허용 범위로 확장하지 않는다.
-- 명령 registry에 `commandId`, 실행 파일, argv와 인자 스키마, cwd, 최소 환경변수, 네트워크 목적지·용도, 시간·메모리·출력 한도를 정의한다. 명령의 실제 사양과 정책 버전을 계획 해시에 결합하고 변경 시 다시 승인받는다. 모델 문자열을 shell에 전달하지 않는다.
-- 실행 직전 계획·요청 revision·저장소와 기준 커밋·실행 정책을 재검증한다. 새 실제 실행 승인을 요구하고 승인 소비·Run 생성·`RUNNING` 전환을 원자적으로 처리한다. 단계 3-A의 `approval-only-v1` 기록은 소비하지 않는다.
-- 검증된 격리 환경과 별도 worktree에서 승인된 변경·검사만 실행한다. 설치와 테스트 설정 변경은 별도 계획 항목으로 명시하고, 격리 준비에 필요한 외부 연결을 코드 수정 승인에 묵시적으로 포함하지 않는다.
+- `execution-plan`·`execution-approve`·`execution-run`·`execution-inspect`를 별도 합성 경로로 구현한다. 기존 조사 Task·기록용 승인과 분리한 `execution.sqlite`에 실행 Task·계획·불변 승인·Run을 저장한다. 실제 AI·Slack 요청·회사 저장소·임의 대상 경로를 연결하지 않는다.
+- `src/message.mjs` 한 기존 일반 파일의 고정 `replace`만 지원한다. 원본 파일 해시·허용 파일·정확한 고정 교체 내용을 적용 전에 검증한다. 파일 생성·삭제·이름 변경·실행 비트·symlink·서브모듈은 거부하며 읽기 근거 목록을 수정 허용 범위로 확장하지 않는다. 성공·고의 검사 실패·시간 초과·출력 초과의 합성 fixture를 제공한다.
+- registry의 `synthetic-check-v1`·`synthetic-timeout-v1`·`synthetic-output-v1`만 지원한다. 실행 파일·정확한 argv·인자 없음·cwd·환경·네트워크 없음·시간과 자원 한도, `synthetic-execution-v1` 정책·backend identity·설정 해시를 계획 해시에 결합한다. 설정의 `enabled` 변경도 새 계획·승인을 요구한다. 계획·승인은 Docker를 호출하지 않으며 shell·임의 명령은 제공하지 않는다.
+- 실행 직전 동결 원본·Git 객체·계획·요청 revision·기준 커밋·설정·실제 backend를 재검증한다. OS 소유자의 새 실행 승인과 TTL 1~1440분을 검증하고 승인 소비·Run 생성·`RUNNING` 전환을 단일 SQLite 트랜잭션으로 처리한다. 단계 3-A의 `approval-only-v1` 기록은 사용하지 않는다. task당 Run은 최대 하나이며 실패 후에도 소비를 되돌리지 않는다.
+- 동결 원본에서 공유 Git 메타데이터가 없는 독립 Git 작업 트리를 재생성하고 승인 patch를 적용한다. container에는 Git 없는 읽기 전용 view만 마운트한다. 쓰기는 16MiB `/tmp` tmpfs로 한정하며 nonroot·읽기 전용 root·네트워크 없음·seccomp·권한 상승 금지와 메모리 128MiB·swap 0·PID 64·CPU 0.5개·시간 3초·출력 16KiB를 강제한다. 파일 수 16·내용 64KiB 한도를 적용한다. 설치·검사 설정 변경·image pull·다른 backend 대체는 제공하지 않는다.
+- 실제 diff와 원본 전후 해시, 검사별 `passed`·`failed`·`not_run`, 명령 종료·정지·제거를 Run과 로컬 보고서에 저장한다. 원시 명령 출력은 저장하지 않고 관찰한 바이트 수·해시만 남긴다. SQLite에서 누락된 완료 보고서를 재생성하고 승인 이력은 최신 한 건씩 조회한다. 자동 commit·push·작업물 삭제는 하지 않는다.
 
 **완료 기준:** 수용 테스트 06~13과 34~35를 합성 저장소에서 통과한다. 승인 없음·만료·재사용·계획/커밋/revision/정책 변경·범위 초과는 파일 변경 또는 검사 시작 전에 차단한다.
+
+**현재 경계:** 실행 중 요청 변경·소유자 취소·controller crash 경합은 3-D에서 구현한다. 기존 전역 lease로 실시간 Slack 수신과 합성 실행을 직렬화하고, 강제 종료로 남은 `RUNNING`과 소비 승인은 자동 복구·재실행 없이 보존한다. 실제 Docker 성공·실패 결과와 수용 기준별 근거는 [3-C 결과](stage-3c-result.md)를 따른다.
 
 #### 단계 3-D 실행 취소·복구·diff 보고
 
@@ -221,7 +225,7 @@ RECEIVED → TRIAGED → ANALYZED
 
 상태는 데이터베이스 트랜잭션으로 바꾼다. 이벤트 ID와 승인 사용 기록에는 유일성 제약을 둔다. 재시작은 기록 복구이지, 중단된 수정 작업의 자동 재실행 허가가 아니다.
 
-단계 3-A는 `APPROVED`까지 저장하고 실행하지 않는다. 승인 만료는 취소 기록을 남긴 뒤 `APPROVED → AWAITING_APPROVAL`, 로컬 취소와 요청 무효화는 `CANCELLED`로 전환한다. 불변 승인 스냅샷과 `approval-only-v1` 정책은 Task와 별도로 보존하며, 실제 승인 소비·Run 저장은 단계 3-C의 후속 작업이다.
+단계 3-A는 `APPROVED`까지 저장하고 실행하지 않는다. 승인 만료는 취소 기록을 남긴 뒤 `APPROVED → AWAITING_APPROVAL`, 로컬 취소와 요청 무효화는 `CANCELLED`로 전환한다. 불변 승인 스냅샷과 `approval-only-v1` 정책은 Task와 별도로 보존한다. 단계 3-C의 독립 합성 실행은 별도 `execution.sqlite`에서 `AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED`와 새 `synthetic-execution-v1` 승인·Run을 관리한다. 기존 조사 상태 전이와 혼용하지 않는다.
 
 ## 4 승인과 실행 경계
 
@@ -255,7 +259,7 @@ MVP의 승인은 로컬 CLI에서만 받는다. 원격 서버를 열지 않고 �
 
 ### worktree의 의미
 
-별도 브랜치와 worktree는 원래 작업 디렉터리를 어지럽히지 않게 한다. 보안 격리 자체는 아니다. Git 메타데이터를 공유하므로 경로와 명령 통제, 파일시스템 권한, 네트워크 제한은 별도로 적용한다. 기본 동작은 로컬 diff 보고까지이며 자동 commit과 정리는 하지 않는다.
+별도 작업 트리는 원래 작업 디렉터리를 어지럽히지 않게 한다. 보안 격리 자체는 아니므로 경로·명령·파일시스템·네트워크 제한을 별도로 적용한다. 일반적인 `git worktree`는 Git 메타데이터를 공유하지만 현재 3-C 합성 실행은 고정 파일에서 독립 Git 저장소를 재생성하고 container에 Git 없는 view만 제공한다. 기본 동작은 로컬 diff 보고까지이며 실행 결과를 자동 commit하거나 정리하지 않는다.
 
 ## 5 보안과 Slack 연결
 

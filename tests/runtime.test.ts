@@ -44,6 +44,8 @@ test('런타임 데이터는 소스 밖의 비공개 디렉터리에만 둔다',
   assert.equal((await stat(privateDirectory)).mode & 0o777, 0o700);
   await assert.rejects(prepareDataDirectory(sourceRoot, sourceRoot), { code: 'DATA_DIRECTORY_OVERLAPS_SOURCE' });
   await assert.rejects(prepareDataDirectory(join(sourceRoot, 'runtime-test-data'), sourceRoot), { code: 'DATA_DIRECTORY_OVERLAPS_SOURCE' });
+  await assert.rejects(prepareDataDirectory(join(sourceRoot, '..runtime'), sourceRoot), { code: 'DATA_DIRECTORY_OVERLAPS_SOURCE' });
+  await assert.rejects(prepareDataDirectory(join(sourceRoot, '..runtime', 'nested'), sourceRoot), { code: 'DATA_DIRECTORY_OVERLAPS_SOURCE' });
   const sharedDirectory = join(directory, 'shared');
   await mkdir(sharedDirectory);
   await chmod(sharedDirectory, 0o755);

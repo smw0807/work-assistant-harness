@@ -1,13 +1,13 @@
 import { mkdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { HarnessError } from '../domain/errors.js';
 import { assertRuntimeFile, runtimePathMetadata } from '../policy/runtime-path.js';
 
 export const isInside = (root: string, path: string): boolean => {
   const difference = relative(root, path);
-  return difference === '' || (!difference.startsWith('..') && !isAbsolute(difference));
+  return difference === '' || (difference !== '..' && !difference.startsWith(`..${sep}`) && !isAbsolute(difference));
 };
 
 export const defaultDataDirectory = (): string => {

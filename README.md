@@ -1,6 +1,6 @@
 # work-assistant-harness
 
-Slack 요청을 로컬에 기록하고, 합성 자료로 읽기 전용 조사를 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록, 단계 3-B의 Docker 격리 진단**이 구현 범위입니다. 실제 backend 검증 결과는 [단계 3-B 결과](docs/stage-3b-result.md)에 구분해 기록합니다. 실제 Slack 권한·회사 환경과 승인 후 대상 코드 실행은 검증하지 않았습니다.
+Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 격리 실행을 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록, 단계 3-B의 Docker 격리 진단, 단계 3-C의 고정 합성 patch·등록 검사 실행**을 구현했습니다. 실제 backend 검증 결과는 [단계 3-B 결과](docs/stage-3b-result.md)와 [단계 3-C 결과](docs/stage-3c-result.md)에 기록합니다. 실제 Slack 권한·AI·회사 저장소 연결과 실행은 검증하지 않았습니다.
 
 ```text
 로컬 이벤트 JSON
@@ -14,7 +14,7 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 읽기 전용 조사를
       불명확: NEEDS_CLARIFICATION
 ```
 
-기본 실행은 합성 자료만 사용합니다. Slack 수신은 명시적으로 켜는 별도 경로이며 모델·제품 저장소와 연결하지 않습니다. 단계 3-A는 로컬 승인과 취소를 저장하며 `APPROVED`에서 멈춥니다. 승인 후 수정, 대상 스크립트 실행, 외부 메시지, Git 원격 작업은 구현하지 않았습니다. `ExecutionPort`의 기본 구현은 항상 거부하고 `run` 명령은 제공하지 않습니다.
+기본 실행은 합성 자료만 사용합니다. Slack 수신은 명시적으로 켜는 별도 경로이며 모델·제품 저장소와 연결하지 않습니다. 기존 조사와 단계 3-A는 `APPROVED`에서 멈추며 기본 `ExecutionPort`는 항상 거부하고 `run` 명령은 제공하지 않습니다. 단계 3-C는 별도 `execution-*` 명령에서 새 합성 작업·실행 승인을 만들고 고정 patch와 등록 검사만 실행합니다. 외부 메시지와 Git 원격 작업은 구현하지 않았습니다.
 
 ## 설치와 실행
 
@@ -51,6 +51,7 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 - `harness-lock.sqlite`: 동시 CLI 실행 방지용 SQLite 잠금. 프로세스 종료 시 OS가 잠금을 해제합니다.
 - `reports/`: 작업별 JSON 보고서. DB에 저장된 자료로 누락된 보고서를 재생성합니다.
 - `runs/`: 명령별 결과와 대상 전후 해시를 기록한 JSON 실행 기록.
+- `execution.sqlite`, `executions/`: 단계 3-C의 독립 합성 작업·실행 계획·승인·Run과 동결 원본·분리 작업 트리·읽기 전용 실행 view·보고서. 기존 `tasks.sqlite`의 작업과 승인을 실행에 사용하지 않습니다.
 
 같은 이벤트는 재시작 후에도 다시 분석하지 않습니다. 중간에 종료된 `RECEIVED`, `TRIAGED`, `ANALYZED` 작업은 `BLOCKED`와 `INTERRUPTED_REVIEW_REQUIRED`로 남기고 자동 재실행하지 않습니다. 승인 대기 상태도 그대로 유지합니다. 만료된 승인은 상태 확인 시 취소 기록을 남기고 `AWAITING_APPROVAL`로 되돌립니다. 조사 작업과 승인 이력의 자동 보관 기간·삭제·재처리 기능은 아직 없습니다.
 
@@ -93,7 +94,31 @@ pnpm harness sandbox-check --config /absolute/path/to/private-sandbox.json --dat
 
 결과는 `<data-dir>/sandbox-checks/<verificationId>/report.json`에 기록합니다. backend identity·한도·probe별 종료와 정리 결과·보호 영역 전후 해시를 남깁니다. 상태 `passed`는 종료 코드 0, `failed`·`blocked`는 1입니다. 생성한 probe container만 소유권을 확인해 종료·제거하고, 합성 workspace와 보고서는 검토용으로 보존합니다. Docker CLI를 종료하는 것과 container 종료를 구분해 잔존 여부를 확인합니다. 생성 응답이 불확실한 상태에서 현재 부재만 확인되면 정리 미확인으로 기록합니다. 이 진단용 controller만 Docker 호출 권한을 가지며 기존 읽기 worker의 네트워크·하위 프로세스 제한은 유지합니다.
 
-Docker daemon과 Linux VM·커널을 신뢰하는 경계입니다. container escape의 완전한 방지나 회사 보안 검토 통과를 뜻하지 않습니다. 범용 실행기, 실행 작업의 디스크 quota, 승인 소비와 patch·검사 연결은 단계 3-C 이후입니다. 자세한 정책과 근거는 [보안과 승인](docs/security-and-approval.md#단계-3-b의-합성-docker-진단)을 따릅니다.
+Docker daemon과 Linux VM·커널을 신뢰하는 경계입니다. container escape의 완전한 방지나 회사 보안 검토 통과를 뜻하지 않습니다. 진단 보고서와 실행 승인은 분리합니다. 단계 3-C의 제한된 합성 실행은 아래 경로를 사용하며 범용 실행기는 제공하지 않습니다. 자세한 정책과 근거는 [보안과 승인](docs/security-and-approval.md#단계-3-b의-합성-docker-진단)을 따릅니다.
+
+## 단계 3-C 합성 patch와 등록 검사
+
+기존 조사 Task와 분리된 합성 저장소에서 `src/message.mjs` 한 파일의 내용 교체를 계획하고, OS 소유자의 새 승인 후 Docker에서 등록 검사 하나를 실행합니다. `success`, `test-failure`, `timeout`, `output` fixture를 제공하며 기본값은 `success`입니다. 대상 저장소 경로·임의 patch·명령·추가 인자를 받지 않습니다.
+
+```sh
+pnpm harness execution-plan --fixture success --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-execution-data
+pnpm harness execution-approve --task <id> --plan-hash <sha256> --base-commit <sha1> --expires-in-minutes 30 --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-execution-data
+pnpm harness execution-run --task <id> --plan-hash <sha256> --base-commit <sha1> --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-execution-data
+pnpm harness execution-inspect --task <id> --data-dir /private/tmp/harness-execution-data
+pnpm harness execution-inspect --task <id> --approval-offset 1 --data-dir /private/tmp/harness-execution-data
+```
+
+계획 출력의 `task.taskId`, `task.plan.planHash`, `task.baseCommit`을 검토해 승인·실행 입력에 사용합니다. `--expires-in-minutes`는 필수 정수 1~1440입니다. `--config` 생략 시 기본 비활성 예제를 사용해 계획은 만들 수 있지만 승인·실행은 거부됩니다. `enabled`까지 설정 해시에 포함하므로 비활성 상태의 계획을 만든 뒤 설정만 켤 수 없습니다. 실행하려면 위 지원 환경의 실제 socket·Engine·Node·로컬 이미지 ID와 `enabled: true`인 비공개 설정으로 **새 계획**을 만들어야 합니다. 계획과 승인은 Docker를 호출하지 않으며 실행 때 backend를 다시 검증합니다.
+
+계획 해시는 원본 전체 해시·커밋·고정 요청 revision, 수정 허용 파일·patch 전후 해시와 내용, 등록 명령의 실행 파일·argv·cwd·환경·네트워크·한도, `synthetic-execution-v1` 정책과 설정 해시에 결합합니다. 읽기 근거 목록을 수정 허용 범위로 확장하지 않습니다. 기존 일반 파일의 고정 내용 교체만 지원하며 생성·삭제·이름 변경·실행 비트·symlink·서브모듈·설치·검사 설정 변경은 거부합니다. `test-failure`는 고의로 잘못된 고정 내용을 적용해 실패를 재현합니다.
+
+새 승인은 `execution.sqlite`에 불변 계획 snapshot과 함께 저장합니다. 실행 직전에 원본·계획·커밋·revision·설정·backend를 검증하고 승인 소비·Run 생성·`RUNNING` 전환을 한 트랜잭션으로 처리합니다. 승인 없음·만료·다른 소유자·변조·재사용은 거부하며 기존 `approval-only-v1`을 사용하지 않습니다. 실패하거나 완료된 작업도 자동으로 다시 실행하지 않습니다.
+
+동결 원본에서 공유 Git 메타데이터가 없는 독립 Git 작업 트리를 재생성하고 승인 patch를 적용합니다. container에는 Git 없는 읽기 전용 실행 view만 마운트하고, 쓰기 영역은 `/tmp`의 **16MiB tmpfs**로 제한합니다. 네트워크 없음·nonroot·읽기 전용 root·capability 제거·권한 상승 금지·기본 seccomp와 메모리 **128MiB**·swap **0**·PID **64**·CPU **0.5개**·시간 **3초**·stdout/stderr 합계 **16KiB**를 강제합니다. 출력은 수신 chunk에서 한도 초과를 감지하므로 관찰한 `outputBytes`가 16KiB를 넘을 수 있으며 원시 출력 대신 합계 바이트와 해시만 보관합니다.
+
+결과는 `executions/<task-id>/run-<artifact-id>/report.json`과 SQLite Run에 저장합니다. 검사별 `passed`·`failed`·`not_run`, 실제 파일 전후 내용·해시, 원본 전후 해시, 명령의 종료 유형·코드·정지·제거 결과를 남깁니다. 실행 성공은 종료 코드 0, 실패는 1입니다. `execution-inspect`는 SQLite를 원본으로 누락된 완료 보고서를 재생성하고 승인 이력을 최신 한 건씩 `{ approvals, approvalPage }`로 반환합니다. `approvalPage.nextOffset`을 다음 조회에 사용합니다. 작업물은 자동 commit·push·정리하지 않습니다.
+
+모든 명령은 기존 전역 lease를 사용하므로 같은 데이터 디렉터리의 실시간 Slack 수신 중에는 거부됩니다. 실행 중 요청 변경·취소·controller 강제 종료 후 복구는 **3-D 미구현 범위**입니다. 강제 종료로 남은 `RUNNING`과 소비 승인은 그대로 보존하며 자동 복구·재실행하지 않습니다. SIGINT·SIGTERM의 정상 처리와 시간·출력 초과 때 생성한 container를 종료·제거하는 기능을 crash 복구 완료로 해석하지 않습니다.
 
 ## 모의 입력과 오류 재현
 
@@ -129,9 +154,9 @@ CLI는 매번 OS 임시 경로에 합성 Git 저장소를 준비한 뒤 읽기 �
 - 초기 reader는 크기를 제한한 **loose Git 객체만 지원**합니다. pack 객체와 임의의 회사 저장소 연결은 지원하지 않습니다.
 - 조회 전후 전체 파일·미추적 파일·Git 메타데이터·권한·symlink 대상을 해시로 비교합니다. 차이가 있으면 성공 처리하지 않고 변경물을 보존합니다.
 
-Node 권한 모델은 신뢰하는 하네스 코드의 실수를 제한하는 장치입니다. 악성 코드를 실행하는 보안 sandbox가 아니며, 같은 OS 사용자의 동시 파일 변조까지 방어한다고 주장하지 않습니다. 현재는 저장소 파일을 실행·import하지 않습니다. 단계 3-B의 Docker 진단도 합성 코드만 사용하며 대상 저장소 실행 권한을 만들지 않습니다. worktree만으로 보안 격리가 되지는 않습니다.
+Node 권한 모델은 신뢰하는 하네스 코드의 실수를 제한하는 장치입니다. 악성 코드를 실행하는 보안 sandbox가 아니며, 같은 OS 사용자의 동시 파일 변조까지 방어한다고 주장하지 않습니다. 조사 worker는 저장소 파일을 실행·import하지 않습니다. 단계 3-B 진단과 별도의 3-C 합성 실행 controller만 제한된 Docker 경로를 사용합니다. worktree만으로 보안 격리가 되지는 않습니다.
 
-합성 저장소 경로는 실행 기록의 `repository.root`에 남깁니다. CLI는 검토를 위해 이 임시 자료를 자동 삭제하지 않습니다. 테스트는 자신이 만든 임시 자료만 종료 후 정리합니다. 보고서의 `passed`, `failed`, `not_run`은 구분되며 대상 설치·테스트·외부 전송·승인 후 실행은 `not_run`입니다.
+합성 저장소 경로는 실행 기록의 `repository.root`에 남깁니다. CLI는 검토를 위해 이 임시 자료를 자동 삭제하지 않습니다. 테스트는 자신이 만든 임시 자료만 종료 후 정리합니다. 조사 보고서의 `passed`, `failed`, `not_run`은 구분되며 이 조사 경로의 대상 설치·테스트·외부 전송·승인 후 실행은 `not_run`입니다.
 
 ## 단계 2 Slack 읽기 수신
 
@@ -183,4 +208,4 @@ pnpm build
 
 `test`는 컴파일 후 Node 내장 test runner로 단위·통합·CLI 수용 테스트를 실행합니다. 합성 저장소는 별도 임시 경로에 준비합니다. 하네스 테스트가 통과해도 실제 Slack 권한·회사 보안·격리 실행기의 검증을 통과한 것은 아닙니다.
 
-전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1 결과](docs/stage-1-result.md), [단계 2 결과](docs/stage-2-result.md), [단계 3-A 결과](docs/stage-3a-result.md), [단계 3-B 결과](docs/stage-3b-result.md)에 정리했습니다. 단계 3 전체 완료는 승인 기록뿐 아니라 실제 격리 실증·고정 patch와 검사·실행 취소 및 복구까지 확인한 뒤 판단합니다.
+전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1 결과](docs/stage-1-result.md), [단계 2 결과](docs/stage-2-result.md), [단계 3-A 결과](docs/stage-3a-result.md), [단계 3-B 결과](docs/stage-3b-result.md), [단계 3-C 결과](docs/stage-3c-result.md)에 정리했습니다. 단계 3 전체 완료는 다음 3-D의 실행 중 요청 무효화·취소·crash 복구까지 확인한 뒤 판단합니다.

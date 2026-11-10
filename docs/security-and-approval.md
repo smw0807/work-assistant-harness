@@ -4,7 +4,7 @@
 
 이 문서는 구현할 보안 요구사항이다. 문서를 작성하거나 `AGENTS.md`에 규칙을 넣었다는 이유로 보호 장치가 작동한다고 간주하지 않는다. 코드, 권한 설정과 실패 테스트로 검증한 기능만 사용한다.
 
-단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 합성 Docker 격리 진단과 실제 backend의 검증 결과는 [stage-3b-result.md](stage-3b-result.md)를 따른다. 진단이 통과해도 대상 코드 실행을 열지 않는다. 현재 조사 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
+단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 Docker 격리 진단은 [stage-3b-result.md](stage-3b-result.md), 단계 3-C의 독립 합성 계획·새 승인·patch·등록 검사는 [stage-3c-result.md](stage-3c-result.md)를 따른다. 진단 보고서는 실행 권한이 아니며 기존 조사 Task나 실제 Slack·회사 저장소의 실행을 열지 않는다. 조사 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
 
 전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 범위는 합성 데이터 기반의 로컬 조사이며 실제 회사 계정과 코드를 연결하지 않는다.
 
@@ -66,7 +66,7 @@ MVP의 승인 경로는 로컬 CLI뿐이다. 현재 OS 사용자와 승인 저�
 - 승인 불변 스냅샷에는 계획·해시·요청 revision·저장소·기준 커밋을 고정하고 별도 SQLite 테이블에 보존한다. 승인 생성과 `APPROVED` 전환은 같은 트랜잭션이며 활성 승인을 중복 생성하지 않는다.
 - 만료 조정은 승인 취소와 `AWAITING_APPROVAL` 복귀를 함께 기록한다. 로컬 취소는 승인 대기·승인됨 변경 요청만 `CANCELLED`로 바꾼다. 요청 편집·삭제도 Task 무효화와 같은 트랜잭션에서 기존 승인을 취소한다. Task 계획·보고를 제거해도 불변 승인 스냅샷은 유지한다.
 - `executionPolicy`는 `approval-only-v1`이며 `usedAt`은 `null`이다. 승인 소비·Run 생성·대상 수정과 검사는 구현하지 않는다. 후속 실제 실행 정책의 새 승인을 요구하며 이 기록을 재사용하지 않는다. `ExecutionPort`는 항상 거부하고 `run` 명령은 없다.
-- 현재 기준 커밋 검증은 Task·계획·CLI 입력의 일치 검사다. 실제 대상 저장소의 실행 직전 상태 검증과 승인 소비의 원자성은 후속 단계에서 검증한다.
+- 이 경로의 기준 커밋 검증은 Task·계획·CLI 입력의 일치 검사다. 별도 3-C 합성 실행의 새 승인과 혼용하지 않는다.
 
 ## 4. 읽기 전용은 권한으로 강제한다
 
@@ -113,9 +113,30 @@ container 정책은 nonroot UID/GID `1000:1000`, 읽기 전용 root, 모든 capa
 
 고정 한도는 메모리 128MiB·swap 0·PID 64개·CPU 0.5개, 시간 probe 1.5초, stdout/stderr 합계 16KiB다. cgroup 값과 실제 PID 생성 거부·OOM을 확인한다. CPU는 quota 값 검증이며 성능 보장은 아니다. 시간·출력 초과 때는 Docker CLI 종료와 별개로 이 진단이 생성한 container를 소유권 확인 후 강제 종료하고, 정지 상태와 제거를 확인한다. detached child의 시작 파일·종료 코드 137·OOM 아님을 확인하고 지연 marker가 남지 않아야 한다. 고정 합성 probe의 7.5초 watchdog은 보조 종료 장치다. 생성 RPC가 불확실하게 끝난 뒤 현재 부재만 확인한 경우에는 정리 완료로 인정하지 않는다. container 이름과 정리 미확인 결과, 합성 작업물과 보고서를 검토용으로 보존한다. [Docker 자원 한도](https://docs.docker.com/engine/containers/resource_constraints/), [container 종료](https://docs.docker.com/reference/cli/docker/container/kill/)
 
-진단 결과의 `executionEnabled`는 항상 `false`다. 보고서를 승인·실행 권한으로 사용하지 않고 `approval-only-v1` 승인도 소비하지 않는다. 읽기 worker의 네트워크·하위 프로세스 차단은 유지한다. 대상 코드 실행·patch·등록 검사·Run 저장과 실행 중 취소·crash 복구는 단계 3-C·3-D에서 따로 구현한다.
+진단 결과의 `executionEnabled`는 항상 `false`다. 보고서를 승인·실행 권한으로 사용하지 않고 `approval-only-v1` 승인도 소비하지 않는다. 읽기 worker의 네트워크·하위 프로세스 차단은 유지한다. 단계 3-C는 아래 별도 합성 실행 흐름을 사용하며 실행 중 요청 변경·취소·crash 복구는 3-D 범위다.
 
-신뢰 경계에는 Docker daemon과 Desktop VM·Linux 커널이 포함된다. 이 검증은 알려진 제한과 canary 결과이며 container escape의 완전한 방지나 회사 도입 승인을 보장하지 않는다. 실행 작업의 디스크 quota와 범용 실행기 검증은 후속 단계다. 고정 공식 이미지의 초기 다운로드는 backend 준비이며 회사 자료나 토큰을 전달하지 않는다. 실제 회사 자료·네트워크·비밀 주입은 이번 진단에 포함하지 않는다.
+신뢰 경계에는 Docker daemon과 Desktop VM·Linux 커널이 포함된다. 이 검증은 알려진 제한과 canary 결과이며 container escape의 완전한 방지나 회사 도입 승인을 보장하지 않는다. 고정 공식 이미지의 초기 다운로드는 backend 준비이며 회사 자료나 토큰을 전달하지 않는다. 실제 회사 자료·네트워크·비밀 주입은 이번 진단에 포함하지 않는다.
+
+### 단계 3-C의 고정 합성 실행
+
+`execution-plan`·`execution-approve`·`execution-run`·`execution-inspect`는 기존 조사와 별도의 합성 전용 경로다. CLI에 저장소 경로·patch 본문·shell·임의 argv 입력을 제공하지 않는다. 고정 fixture만 사용하며 실제 AI와 Slack 요청을 실행으로 연결하지 않는다. 원본·실행 계획·승인·Run은 `execution.sqlite`와 비공개 `executions/`에 보관하고 기존 `tasks.sqlite`의 `approval-only-v1`은 조회하거나 소비하지 않는다.
+
+`synthetic-execution-v1`의 계획 해시에 다음을 고정한다.
+
+- task ID·고정 요청 revision·합성 repo ID·기준 커밋·원본 전체 해시.
+- 수정 허용 파일 `src/message.mjs`, 기존 일반 파일 내용 교체의 전후 해시와 고정 내용. 파일 생성·삭제·이름 변경·실행 비트·symlink·서브모듈은 거부한다. 읽기 근거는 수정 허용 범위가 아니다.
+- 명령 ID·실행 파일 `/usr/local/bin/node`·정확한 argv·인자 없음·cwd `/workspace`·고정 최소 환경·네트워크 없음·시간·자원 한도.
+- 정확한 Engine·Node·로컬 이미지 ID, 실행 정책 버전과 `enabled`·socket을 포함한 설정 해시. 설정 변경은 새 계획과 승인을 요구한다.
+
+승인은 현재 OS UID의 `os-user:<uid>`로 고정하고 TTL 1~1440분을 검증한다. 계획과 승인은 Docker에 접속하지 않는다. 실행 직전 원본 일반 파일·Git 객체·메타데이터·커밋·전체 해시, 계획·승인 snapshot·요청 revision·정책과 backend identity를 다시 검증한다. 실행 준비 중 흐른 시간도 TTL에 반영한다. 승인 소비·Run 삽입·`RUNNING` 전환을 `BEGIN IMMEDIATE` 한 트랜잭션에서 처리하고 소비 실패·저장 실패는 전부 rollback한다. task당 Run 하나와 승인당 소비 한 번을 DB 제약으로 제한한다. 실패·완료·controller 강제 종료 뒤에도 소비를 되돌리거나 자동 재실행하지 않는다.
+
+합성 원본은 동결하고 독립 Git 저장소의 작업 트리를 고정 파일에서 재생성한다. 원본 `.git`을 공유하지 않는다. 승인 patch를 적용한 뒤 실제 변경 경로·내용·권한·Git 메타데이터를 확인하고 container에는 Git 없는 읽기 전용 view만 마운트한다. 원본·승인 DB·하네스·호스트 홈·socket·Git 메타데이터는 마운트하지 않는다. 호스트에서 합성 검사 파일을 import하거나 실행하지 않는다.
+
+container는 3-B와 같은 nonroot·읽기 전용 root·네트워크 없음·capability 제거·권한 상승 금지·기본 seccomp 경계를 유지한다. 쓰기 영역은 `/tmp`의 `rw,noexec,nosuid,nodev,size=16777216` tmpfs 하나로 제한하며 별도의 `/dev/shm`을 허용하지 않는다. 메모리 128MiB·swap 0·PID 64·CPU 0.5개·시간 3초·stdout/stderr 합계 16KiB를 강제한다. 실행 view는 파일 수 16·전체 64KiB 한도를 가진다. 생성 후 시작 전 inspect에서 정확한 command·mount·tmpfs·환경·한도·권한을 대조하고 예상 밖 mount·쓰기 영역을 거부한다.
+
+시간·출력 초과나 정상 신호 취소 때 controller는 자기 container만 소유권을 확인해 kill하고 정지·제거 결과를 남긴다. 생성 응답이 불확실하면 단순 부재만으로 정리 성공을 주장하지 않는다. 출력 한도는 수신 chunk에서 감지하므로 관찰 바이트 수가 임계값보다 클 수 있다. 원시 stdout/stderr나 Docker 오류를 저장하지 않고 관찰 바이트 수·출력 해시·고정 오류 코드만 보관한다. 실제 diff는 합성 파일 내용과 전후 해시를 포함하며 원본 전체 전후 해시와 검사별 `passed`·`failed`·`not_run`을 기록한다.
+
+모든 `execution-*` 명령도 기존 전역 lease를 사용한다. 같은 데이터 디렉터리의 실시간 Slack 수신과 동시에 실행하지 않으며 수신 중단 구간의 변경 감지는 보장하지 않는다. SIGINT·SIGTERM 처리와 시간 초과 종료를 controller crash 복구로 확대하지 않는다. 강제 종료로 남은 `RUNNING`은 보존하며 재시작 시 자동 분류·프로세스 조사·정리·재실행하지 않는다. 실행 중 요청 무효화·소유자 취소·crash 경합과 복구는 3-D에서 구현한다. Docker daemon·Desktop VM·Linux 커널과 같은 OS 사용자는 계속 신뢰 경계에 포함되며 범용 악성 코드나 실제 회사 자료의 실행 검증을 완료했다고 주장하지 않는다.
 
 ## 6. Slack과 외부 전송
 
@@ -189,5 +210,5 @@ Gmail·Calendar·Drive는 후속 선택 기능이다. 연결된 계정이 있다
 - 별도 허가 없는 메시지 전송·push·PR이 없음.
 - 승인 범위 밖 변경과 실패·미실행 검사를 성공으로 보고하지 않음.
 
-단계 3-A의 승인 기록, 단계 3-B의 합성 격리 진단과 아직 구현하지 않은 승인 소비·대상 실행을 구분한다. 수용 33의 실제 결과는 3-B 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. patch·대상 검사·실행 취소·복구는 **미구현**이며 항상 거부되는 실행 기본 동작을 유지한다. 후속 단계의 보안 검증을 통과했다고 미리 기록하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
+단계 3-A의 기록용 승인, 단계 3-B의 합성 격리 진단과 단계 3-C의 독립 합성 실행을 구분한다. 실제 검증 범위는 3-B·3-C 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. 기존 조사 실행 포트는 항상 거부하며 실제 회사 저장소·Slack 요청 실행과 3-D의 요청 무효화·취소·crash 복구는 미구현이다. 후속 보안 검증을 통과했다고 미리 기록하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
 
