@@ -4,7 +4,7 @@
 
 이 문서는 `work-assistant-harness`의 구조와 단계별 설계를 설명한다. 실제 구현 경계는 아래 결과 문서로 구분하며, 후속 승인·실행 설계가 이미 사용 가능한 기능이라는 뜻은 아니다.
 
-2026-11-09에 단계 0·1의 합성 자료 기반 읽기 전용 CLI를, 2026-11-10에 단계 2의 Slack 수신과 단계 3-A~3-D의 로컬 승인·Docker 진단·독립 합성 실행·취소·중단 복구를 구현했다. 2026-11-11의 후속 범위는 단계 4-A의 합성 답장 계획·별도 승인·모의 전송과 단계 4-B-1의 오프라인 Slack HTTP 계약 진단이다. 실제 구현과 검증 상태는 [stage-1-result.md](stage-1-result.md), [stage-2-result.md](stage-2-result.md), [stage-3a-result.md](stage-3a-result.md), [stage-3b-result.md](stage-3b-result.md), [stage-3c-result.md](stage-3c-result.md), [stage-3d-result.md](stage-3d-result.md), [stage-4a-result.md](stage-4a-result.md), [stage-4b1-result.md](stage-4b1-result.md)를 따른다. 실제 Slack·AI·회사 저장소를 실행·전송 흐름에 연결하지 않는다.
+2026-11-09에 단계 0·1의 합성 자료 기반 읽기 전용 CLI를, 2026-11-10에 단계 2의 Slack 수신과 단계 3-A~3-D의 로컬 승인·Docker 진단·독립 합성 실행·취소·중단 복구를 구현했다. 2026-11-11의 후속 범위는 단계 4-A의 합성 답장 계획·별도 승인·모의 전송, 단계 4-B-1의 오프라인 Slack HTTP 계약 진단과 단계 4-B-2의 고정 시험 문구 단건 전송이다. 실제 구현과 검증 상태는 [stage-1-result.md](stage-1-result.md), [stage-2-result.md](stage-2-result.md), [stage-3a-result.md](stage-3a-result.md), [stage-3b-result.md](stage-3b-result.md), [stage-3c-result.md](stage-3c-result.md), [stage-3d-result.md](stage-3d-result.md), [stage-4a-result.md](stage-4a-result.md), [stage-4b1-result.md](stage-4b1-result.md), [stage-4b2-result.md](stage-4b2-result.md)를 따른다. 실제 Slack 단건 시험은 기본 비활성인 별도 live 경로로 분리하며 AI·회사 저장소·자동 업무 답장을 연결하지 않는다.
 
 - 구현 순서와 상세 수용 기준: [implementation-plan.md](implementation-plan.md)
 - 권한과 승인 조건: [security-and-approval.md](security-and-approval.md)
@@ -185,7 +185,28 @@ slack-post-check → 고정 합성 설정·본문·thread·offline-http intent
 
 NestJS application context를 여는 별도 제한 worker에는 네트워크·하위 프로세스·호스트 토큰 권한이 없다. 고정 합성 token·본문·응답은 메모리에서만 사용하고 `<data-dir>/slack-post-checks/<verificationId>/report.json`과 stdout에는 해시·결과·호출 횟수와 정적 원인을 남긴다. 전역 `fetch`를 사용하는 실제 transport와 실전송 활성화/토큰/본문/대상 입력 옵션은 제공하지 않는다.
 
-실제 Slack 수신 lease와 전송의 조정, 새 reply의 실시간 감지·전송 직전 경합, 별도 live 승인 소비와 crash 복구, 회사 계정·자료·보관 정책은 4-B-2에서 설계할 범위다. 합성 thread 재확인과 진단 통과를 이 조건의 충족으로 해석하지 않는다. 상세 수용 기준은 [4-B-1 계획](implementation-plan.md#단계-4-b-1-오프라인-slack-http-계약-진단)을 따른다.
+별도 live 승인 소비·복구와 실제 단건 시험은 아래 4-B-2 경로를 사용한다. 합성 thread 재확인과 진단 통과를 실제 수신 공백·문맥 경합 해결이나 회사 계정/자료 정책의 충족으로 해석하지 않는다. 상세 수용 기준은 [4-B-1 계획](implementation-plan.md#단계-4-b-1-오프라인-slack-http-계약-진단)을 따른다.
+
+### 단계 4-B-2의 고정 시험 문구 단건 전송 경로
+
+```text
+slack-live-plan → live 명시 활성화·고정 대상 → auth.test + conversations.replies
+  → 고정 root 한 개·reply 없음·bot identity·문맥 metadata 확인 → live 계획
+slack-live-inspect → 대상·계획 해시·코드의 고정 시험 문구 검토
+slack-live-approve → 인증/문맥 재조회 → OS 소유자·계획 해시·필수 TTL → 새 live 승인
+slack-live-send → 인증/문맥 재조회·5초 최신성·계획/승인 검사
+  → 승인 소비 + SENDING 시도 원자 commit → 고정 chat.postMessage 최대 1회
+  → receipt 대조 → SENT / FAILED(NOT_SENT) / UNKNOWN
+slack-live-cancel / recover / prune → 승인 취소 / UNKNOWN 복구 / 30일 감사 정리
+```
+
+`slack-live-test-v1`과 별도 `live-replies.sqlite`를 사용하며 mock·diagnostic·기존 코드/실행 계획과 승인을 받지 않는다. `liveEnabled` 기본값은 `false`다. 실제 대상 ID는 로컬 CLI와 비공개 DB metadata로 관리하고 token은 환경 주입 또는 TTY 숨김 입력으로만 받는다. 설정 파일·fixture·Git에 token을 넣지 않는다. 허용 원문은 코드에 정한 `하네스 전송 테스트` root 한 개이며 전송 본문은 `하네스 Slack 단건 전송 테스트입니다. (4-B-2)`뿐이다. 모델·Slack 수신 큐·대상 제품 저장소·임의 본문과 연결하지 않는다.
+
+source의 raw revision·문맥 hash·관측 시각·bot identity만 저장하고 원문·고정 전송 본문·token은 DB와 영속 보고서에 복제하지 않는다. 계획에는 OS UID 소유자·설정을 포함한 계획 hash·목적지·source·본문 hash와 최대 24시간 만료를 결합한다. 검토할 본문은 유효 계획에 대해 코드 상수로 재구성한다. 별도 live 승인은 정확한 계획 해시·필수 TTL 1~60분에 묶고 계획 만료 이내로 제한한다.
+
+plan·approve·send의 제한 worker만 token과 네트워크를 받는다. 고정 auth/thread/post API, 요청 10초·응답 32KiB·redirect 거부·자동 재시도 0을 적용한다. 읽기·제어 명령은 token과 네트워크를 받지 않는다. 전역 lease로 실수신과 직렬화하고 매번 실제 인증·스레드를 다시 확인한다. 원문 편집·삭제·새 reply·불완전·identity 변경과 5초를 넘긴 관측은 차단한다. Slack 조회와 POST 사이 외부 변경을 원자적으로 막을 수 없다는 한계는 남는다. Node 네트워크 권한과 어댑터의 URL 제한은 호스트별 OS 격리가 아니다.
+
+저장소는 승인 소비와 `SENDING` 시도를 원자적으로 만든다. 확인된 receipt만 `SENT`, 명백한 거부는 `NOT_SENT`/`FAILED`, 게시 결과가 불확실하면 `UNKNOWN`이다. 중단된 `SENDING`은 명시적 recover에서 `UNKNOWN`으로 확정하며 재전송하지 않는다. `SENT`·`UNKNOWN`의 workspace/channel/root 대상 marker는 다른 작업 ID의 새 계획까지 차단한다. terminal 감사 metadata는 30일 후 정리하되 대상 marker는 DB 수명 동안 유지한다. 개인 테스트 workspace의 구체 계획과 별도 승인으로 실제 단건 게시를 검증했다. 로컬 `SENT` 시도 한 개와 원래 Slack 스레드의 댓글 한 개·고정 본문·receipt 일치 근거는 [4-B-2 결과](stage-4b2-result.md)에 기록한다. 회사 운영·AI·실제 업무 자동 답장은 검증하지 않았다.
 
 ## 3. 구성 요소와 책임
 
@@ -204,9 +225,10 @@ NestJS application context를 여는 별도 제한 worker에는 네트워크·�
 | SyntheticExecutionService / IsolatedExecutionPort | 독립 합성 계획·새 승인·원자적 Run과 고정 실행, 단계 3-D의 취소·소유 container 복구·잔여 상태 관찰 |
 | SyntheticReplyService / ReplyStore / MockReplyDeliveryPort | 단계 4-A의 고정 합성 답장 계획·전송 전용 승인·원자 소비·모의 결과·무효화·명시적 복구·본문/감사 보관 |
 | SlackPostContractPort / SlackPostHttpPort | 단계 4-B-1의 비활성 기본 포트·합성 HTTP 직렬화·identity/문맥/receipt 계약 진단. 영속 승인과 실제 전송 권한 없음 |
+| Live reply service / store / Slack adapter | 단계 4-B-2의 고정 단건 시험·새 live 승인·원자 소비·실제 receipt·대상 중복 marker·명시적 복구 |
 | TaskStore / Reporter | 상태·감사 기록 저장과 로컬 보고 |
 
-외부 기능은 `MessageSource`, `ModelPort`, `RepoReadPort`, `ExecutionPort`, `ApprovalPort`, `ReportSink`로 나눈다. 모의 조사는 `MockSlackSource`, `FixtureModel`, 제한된 로컬 저장소 읽기와 로컬 보고를 사용한다. 단계 3-A는 로컬 승인 기록, 단계 3-B는 `SandboxVerificationPort`의 고정 probe, 단계 3-C는 `ExecutionStore`·`IsolatedExecutionPort`의 독립 합성 실행을 제공한다. 단계 4-A는 독립 `ReplyStore`·`MockReplyDeliveryPort`, 단계 4-B-1은 승인 DB와 분리된 `SlackPostContractPort`·`SlackPostHttpPort`를 사용한다. 실제 Slack 요청·모델·제품 저장소와 실행·전송 흐름의 연결은 제공하지 않는다.
+외부 기능은 `MessageSource`, `ModelPort`, `RepoReadPort`, `ExecutionPort`, `ApprovalPort`, `ReportSink`로 나눈다. 모의 조사는 `MockSlackSource`, `FixtureModel`, 제한된 로컬 저장소 읽기와 로컬 보고를 사용한다. 단계 3-A는 로컬 승인 기록, 단계 3-B는 `SandboxVerificationPort`의 고정 probe, 단계 3-C는 `ExecutionStore`·`IsolatedExecutionPort`의 독립 합성 실행을 제공한다. 단계 4-A는 독립 `ReplyStore`·`MockReplyDeliveryPort`, 단계 4-B-1은 승인 DB와 분리된 `SlackPostContractPort`·`SlackPostHttpPort`를 사용한다. 단계 4-B-2는 별도 live 저장소와 실제 Slack 단건 시험 어댑터를 사용한다. 실제 Slack 요청·모델·제품 저장소와 실행·자동 답장 흐름의 연결은 제공하지 않는다.
 
 특정 Codex SDK나 CLI를 필수 전제로 도메인 코드를 묶지 않는다. 실제 실행기를 선택할 때 해당 버전의 공식 문서, 인증과 권한 조건을 검증한다.
 
@@ -248,6 +270,7 @@ work-assistant-harness/
 - **Sandbox verification:** 정책·daemon·이미지 identity, probe별 결과와 실패 사유, 보호 영역 전후 상태와 종료·제거 확인. `sandbox-checks/<verificationId>/report.json`에 저장하며 Task·Approval·Run과 연결하지 않는다.
 - **Synthetic execution:** 별도 `execution.sqlite`에 실행용 Task·정확한 patch/명령/정책 계획·불변 승인·원자 소비와 Run을 저장한다. 작업물과 완료 보고서는 `executions/<task-id>/`에 보존한다. 기존 조사 승인과 혼용하지 않는다.
 - **Synthetic reply:** 별도 `replies.sqlite`의 답장 Task·본문 해시/목적지/revision/정책 계획·본문 없는 승인 snapshot·1회 소비와 전송 시도·제어 이벤트·보관 정책. 본문은 별도 만료 payload에만 저장하고 최소 중복 marker는 DB 수명 동안 유지한다.
+- **Live test reply:** 별도 `live-replies.sqlite`의 `LivePlan`·`LiveTask`·`LiveApproval`·`LiveAttempt`와 대상 중복 hash marker. 원문·전송 본문·token은 저장하지 않고 검토 본문은 plan/inspect 시 코드 상수로 재구성한다.
 
 ```text
 RECEIVED → TRIAGED → ANALYZED
@@ -289,9 +312,10 @@ AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
 | 3-D | 실행 취소·복구와 실제 diff 보고 | 요청 무효화·crash 경합 처리, 자동 재실행 없음, 승인·Run·잔여 작업물 보존 |
 | 4-A | 합성 답장 계획·별도 승인·모의 전송·무효화·복구·보관 | 승인한 대상/본문만 모의 호출, 중복·불확실 재전송 차단, 실제 외부 전송 0 |
 | 4-B-1 | 비활성 기본 포트와 오프라인 Slack HTTP 계약 진단 | 합성 identity·문맥·직렬화·receipt·불확실 결과·제한 worker 검증, 실제 전송 0. 승인 권한 생성 없음 |
-| 4-B-2 이후 | 실제 Slack 답장, push·PR, Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-A와 4-B-1 승인 범위 밖 |
+| 4-B-2 | 고정 시험 문구의 별도 live 계획·승인·원자 소비·단건 Slack 전송·복구 | 합성 검증과 실제 게시 승인 분리. 정확한 identity/문맥/receipt·대상 중복 차단, 실제 게시 상태 별도 기록 |
+| 4-C 이후 | push·PR, Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-B-2 승인 범위 밖 |
 
-기존 `ExecutionPort`의 항상 거부 동작과 외부 메시지 전송 차단을 유지하며 합성 실행만 별도 명령으로 연다. 기존 `approve`·`cancel`과 합성 계획·승인·실행·복구는 전역 lease를 유지한다. 합성 실행의 취소·무효화·조회는 실행 DB의 짧은 트랜잭션으로 전달한다. 실제 Slack 수신과 실행은 직렬화하며 수신 공백의 변경 감지는 보장하지 않는다. 단계 3의 작업 트리는 작업 분리 수단이며 Docker 격리 환경을 대신하지 않는다.
+기존 `ExecutionPort`의 항상 거부 동작을 유지하며 합성 실행과 고정 Slack 단건 시험을 각각 별도 명령·승인으로 연다. 기존 `approve`·`cancel`과 합성 계획·승인·실행·복구는 전역 lease를 유지한다. 합성 실행의 취소·무효화·조회는 실행 DB의 짧은 트랜잭션으로 전달한다. 실제 Slack 수신과 실행은 직렬화하며 수신 공백의 변경 감지는 보장하지 않는다. 단계 3의 작업 트리는 작업 분리 수단이며 Docker 격리 환경을 대신하지 않는다.
 
 ## 6. Slack 연결에서 혼동하지 않을 것
 

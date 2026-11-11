@@ -4,7 +4,7 @@
 
 이 문서는 구현할 보안 요구사항이다. 문서를 작성하거나 `AGENTS.md`에 규칙을 넣었다는 이유로 보호 장치가 작동한다고 간주하지 않는다. 코드, 권한 설정과 실패 테스트로 검증한 기능만 사용한다.
 
-단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 Docker 격리 진단은 [stage-3b-result.md](stage-3b-result.md), 단계 3-C의 독립 합성 실행은 [stage-3c-result.md](stage-3c-result.md), 단계 3-D의 합성 취소·중단 복구·잔여 관찰은 [stage-3d-result.md](stage-3d-result.md), 단계 4-A의 합성 답장 계획·별도 승인·모의 전송은 [stage-4a-result.md](stage-4a-result.md), 단계 4-B-1의 오프라인 Slack HTTP 계약 진단은 [stage-4b1-result.md](stage-4b1-result.md)를 따른다. 진단 보고서는 실행·전송 권한이 아니며 기존 조사 Task나 실제 Slack·회사 저장소의 실행을 열지 않는다. 조사·답장·HTTP 계약 진단 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
+단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 Docker 격리 진단은 [stage-3b-result.md](stage-3b-result.md), 단계 3-C의 독립 합성 실행은 [stage-3c-result.md](stage-3c-result.md), 단계 3-D의 합성 취소·중단 복구·잔여 관찰은 [stage-3d-result.md](stage-3d-result.md), 단계 4-A의 합성 답장 계획·별도 승인·모의 전송은 [stage-4a-result.md](stage-4a-result.md), 단계 4-B-1의 오프라인 Slack HTTP 계약 진단은 [stage-4b1-result.md](stage-4b1-result.md), 단계 4-B-2의 고정 시험 문구 단건 전송은 [stage-4b2-result.md](stage-4b2-result.md)를 따른다. 진단 보고서는 실행·전송 권한이 아니며 기존 조사 Task나 실제 Slack·회사 저장소의 실행을 열지 않는다. 조사·답장·HTTP 계약 진단 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
 
 전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 범위는 합성 데이터 기반의 로컬 조사이며 실제 회사 계정과 코드를 연결하지 않는다.
 
@@ -28,7 +28,7 @@ MVP의 승인 경로는 로컬 CLI뿐이다. 현재 OS 사용자와 승인 저�
 | 대상 코드 읽기·초안 작성 | 사전 허용된 저장소·커밋·경로와 데이터 처리 범위 안에서만 한다. 대상 파일 수정이나 스크립트 실행은 포함하지 않는다. |
 | 대상 코드 변경·검사 실행 | 단계 3 이후, 구체적인 계획에 대한 유효한 소유자 승인을 **실제 변경이나 실행 전에** 확인한다. |
 | 의존성 설치·테스트 설정 변경 | 실행 코드와 외부 연결을 수반할 수 있으므로 계획에 별도로 명시한다. 코드 수정 승인에 묵시적으로 포함하지 않는다. |
-| 요청자 답장·소유자 Slack DM | 실제 외부 전송은 비활성화. 수신자·채널·전송 내용 또는 명확한 내용 범위를 별도로 허용받는다. 4-A는 원래 합성 스레드의 고정 요약을 별도 승인 후 가짜 어댑터로만 처리한다. 로컬 보고서 생성이나 코드 변경 승인은 전송 승인이 아니다. |
+| 요청자 답장·소유자 Slack DM | 수신자·채널·전송 내용 또는 명확한 내용 범위를 별도로 허용받는다. 4-A는 가짜 어댑터만 사용한다. 4-B-2는 기본 비활성이며 승인된 개인 테스트 스레드의 고정 합성 문구를 새 live 승인 후 한 번 게시하는 경로만 제공한다. DM·실제 업무 답장은 연결하지 않는다. 로컬 보고서 생성이나 코드 변경 승인은 전송 승인이 아니다. |
 | Git push·PR 생성 | 초기 범위 밖이다. 원격·브랜치·대상 diff와 PR 정보를 별도로 승인받는다. 로컬 변경 승인을 재사용하지 않는다. |
 | 병합·배포 | 첫 버전에서 구현하지 않는다. 후속 도입 시 독립된 승인과 운영 정책을 정한다. |
 | 회사 자료를 외부 AI로 전송 | 회사가 허용한 제공자·실행 위치·자료 범위·보관 조건이 먼저 충족되어야 한다. 개인의 수정 승인이 회사의 데이터 반출 승인을 대신하지 않는다. |
@@ -211,7 +211,25 @@ identity·요청 revision·문맥 hash·완전성·만료를 재검증하고 새
 
 NestJS application context의 제한 worker는 하네스 읽기·비공개 데이터 디렉터리 쓰기만 허용하고 네트워크·하위 프로세스·추가 worker·외부 native addon 권한과 호스트 토큰을 받지 않는다. 가짜 token·본문·원시 HTTP 응답은 메모리에서만 사용하며 stdout과 `<data-dir>/slack-post-checks/<verificationId>/report.json`에 복제하지 않는다. 보고서에는 진단/receipt metadata·해시·정적 원인·호출 횟수와 `passed`·`failed`·`not_run`을 남긴다. 합성 진단 metadata의 로컬 보고서 보관은 실제 회사 보관 정책의 기본값이 아니다.
 
-실제 전송은 4-B-2의 별도 범위다. 회사/계정 승인, 자격증명 보관과 최소 scope, workspace/channel/thread/bot identity, 실제 본문·감사 기록·게시 후 보관/삭제, 수신 lease와 새 reply·편집·삭제의 경합, 전송 전 최신성, 새 live 승인 소비·중복·crash 복구를 확정하고 승인된 테스트 환경에서 검증해야 한다. 현재 합성 thread 재조회는 실제 수신 공백·문맥 경합을 해결하지 않는다. 4-A 승인과 4-B-1 intent/성공 보고서를 실전송 권한으로 재사용하지 않는다.
+실제 전송은 아래 4-B-2의 별도 정책·저장소·승인을 사용한다. 이 합성 진단의 thread 재조회는 실제 수신 공백·문맥 경합을 해결하지 않는다. 4-A 승인과 4-B-1 intent/성공 보고서를 실전송 권한으로 재사용하지 않는다.
+
+### 단계 4-B-2의 고정 시험 문구 단건 전송
+
+`slack-live-test-v1`은 허가된 개인 테스트 workspace의 공개 채널·root 스레드 하나만 다루며 `live-replies.sqlite`를 사용한다. 기본 live 활성화는 `false`다. 기존 코드·실행·mock 승인과 오프라인 진단 intent/성공 보고서는 live 계획이나 승인으로 전환하지 않는다. 실제 대상 ID는 로컬 CLI와 비공개 DB metadata로 관리한다. token은 환경 주입 또는 TTY 숨김 입력으로만 받고 설정 파일에는 넣지 않는다. 실제 ID·token·런타임 DB는 fixture·Git에 넣지 않는다. 회사 계정·자료와 자동 업무 답장은 이 단계의 허가 범위가 아니다.
+
+허용 원문은 `하네스 전송 테스트`라는 root 메시지 한 개이고 reply가 없어야 한다. 전송 본문은 코드의 고정 일반 텍스트 `하네스 Slack 단건 전송 테스트입니다. (4-B-2)`뿐이다. 본문·파일·URL에서 임의 전송 내용을 받지 않는다. 첨부·DM·계획에 고정한 대상 외 채널 전송·알림 멘션·링크 확장·Slack 수정/삭제 API를 제공하지 않는다. 게시 메시지 보관은 해당 Slack workspace 정책을 따른다.
+
+plan·approve·send는 `auth.test`와 `conversations.replies`를 재호출해 workspace/bot/user와 원래 root, 고정 원문, raw revision·문맥 hash·완전성을 확인한다. source는 관측 시각·revision·hash·identity metadata만 저장하고 Slack 원문은 저장하지 않는다. 5초 이내 관측만 승인 생성·전송에 사용할 수 있다. 원문 편집·삭제·새 reply·부분 조회·만료·identity 변경을 확인하면 차단한다. 같은 데이터 디렉터리의 실시간 수신과 live 명령은 전역 lease로 직렬화한다. 이 경로는 수신 이벤트의 완전한 추적이나 Slack 조회와 POST의 원자성을 보장하지 않는다. 마지막 조회와 실제 게시 사이 외부 변경은 막을 수 없으며, 5초 이내 확인만 사용하는 단건 시험의 한계로 명시한다.
+
+계획은 정책·설정을 포함한 계획 hash·OS UID 소유자·목적지·source identity·본문 hash·생성/만료를 묶으며 최대 24시간 유효하다. 소유자는 검토한 정확한 계획 해시에 기본값 없는 정수 TTL 1~60분을 지정해 새 live 승인을 만든다. 30분을 권장하고 계획 만료를 넘지 않는다. 승인만으로 전송하지 않는다. send는 저장소 트랜잭션에서 승인 소비·`SENDING` 시도·작업 상태를 함께 commit한 뒤 POST를 최대 한 번 호출한다.
+
+channel·새 message timestamp·thread·bot·본문이 일치하는 성공 receipt만 `SENT`다. 명백한 API 거부·rate limit은 `NOT_SENT`/`FAILED`이며 새 승인으로만 수동 재시도한다. POST 이후 timeout·서버 오류·redirect·응답 형식/크기 오류·receipt 불일치는 `UNKNOWN`이다. `recover`는 중단된 `SENDING`을 `UNKNOWN`으로 확정하며 자동 재전송·소비 승인 복원은 없다. `SENT`·`UNKNOWN`은 workspace/channel/root 키의 최소 중복 marker를 DB 수명 동안 남겨 다른 task ID의 새 계획도 막는다.
+
+실제 HTTP는 고정한 세 API만 사용하고 요청 10초·응답 32KiB·redirect 거부·자동 재시도 0을 강제한다. `SLACK_SEND_TOKEN` 환경 주입 또는 TTY 숨김 입력으로 받은 자격증명은 plan·approve·send worker에만 전달하며 argv·설정·DB·stdout·보고서·오류에 기록하지 않는다. inspect/list/cancel/recover/prune에는 token·네트워크를 주지 않는다. Node 권한으로 하네스 읽기·비공개 데이터 쓰기를 제한하고 child process·추가 worker·불필요한 호스트 환경을 차단한다. 어댑터의 고정 URL 검사는 호스트별 OS 네트워크 격리나 악성 코드용 sandbox와 다르다.
+
+고정 전송 본문도 DB·승인 snapshot·시도·영속 보고서에 복제하지 않는다. 계획 유효기간 안에서 코드 상수로 재구성해 검토한다. terminal 감사 metadata는 마지막 상태 변경부터 30일 뒤 정리하고 `SENT`·`UNKNOWN`의 최소 대상 marker는 유지한다. 정리는 명령 실행 시 수행하므로 중지 중 만료 자료는 다음 실행까지 남을 수 있으며 논리 삭제는 백업·디스크의 물리적 완전 삭제를 보장하지 않는다. DB 폐기 뒤에는 과거 중복 차단을 보장할 수 없다.
+
+구현 검사와 실제 게시는 구분한다. 단위·통합·CLI의 합성 응답 검증을 통과해도 실제 전송 권한이 생기지 않는다. 실제 게시 전에는 대상·고정 본문·계획 해시·TTL을 구체적으로 검토하고 별도 소유자 승인을 받아야 한다. 개인 테스트 workspace에서 이 절차를 거친 실제 단건 시험은 로컬 `SENT` 시도 한 개·승인 소비 한 번과 Slack UI의 댓글 한 개·고정 본문·receipt 일치로 확인했다. 이 확인은 회사 운영·자료·AI·실제 업무 자동 답장의 승인이 아니다. 검증 상태는 [4-B-2 결과](stage-4b2-result.md)를 따른다.
 
 ## 7. 회사 자료와 비밀정보
 
@@ -250,5 +268,5 @@ Gmail·Calendar·Drive는 후속 선택 기능이다. 연결된 계정이 있다
 - 별도 허가 없는 메시지 전송·push·PR이 없음.
 - 승인 범위 밖 변경과 실패·미실행 검사를 성공으로 보고하지 않음.
 
-단계 3-A의 기록용 승인, 단계 3-B의 합성 격리 진단, 단계 3-C의 독립 합성 실행, 단계 3-D의 합성 제어·복구, 단계 4-A의 합성 답장 전용 승인과 단계 4-B-1의 오프라인 HTTP 계약 진단을 구분한다. 실제 검증 범위는 각 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. 기존 조사 실행 포트는 항상 거부하며 실제 회사 저장소·Slack 요청 실행·실제 답장은 연결하지 않는다. 합성 검증을 회사 보안 검토 통과로 표현하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
+단계 3-A의 기록용 승인, 단계 3-B의 합성 격리 진단, 단계 3-C의 독립 합성 실행, 단계 3-D의 합성 제어·복구, 단계 4-A의 합성 답장 전용 승인, 단계 4-B-1의 오프라인 HTTP 계약 진단과 단계 4-B-2의 별도 live 승인을 구분한다. 실제 검증 범위는 각 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. 기존 조사 실행 포트는 항상 거부하며 실제 회사 저장소·Slack 요청 실행·자동 업무 답장은 연결하지 않는다. 실제 Slack 게시 검증은 별도 승인된 고정 단건 시험으로만 기록한다. 합성 검증을 회사 보안 검토 통과로 표현하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
 
