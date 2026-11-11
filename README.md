@@ -1,4 +1,4 @@
-# work-assistant-harness
+# work-assistant-harness !
 
 Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 격리 실행을 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록, 단계 3-B의 Docker 격리 진단, 단계 3-C의 고정 합성 patch·등록 검사 실행, 단계 3-D의 합성 실행 취소·중단 복구·잔여 변경 관찰**에 이어 **단계 4-A의 합성 답장 계획·별도 승인·모의 전송, 단계 4-B-1의 오프라인 Slack HTTP 계약 진단**을 제공합니다. 검증 결과는 [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A](docs/stage-4a-result.md), [단계 4-B-1](docs/stage-4b1-result.md)에 기록합니다. 실제 Slack 권한·AI·회사 저장소 연결과 실행은 검증하지 않았습니다.
 
@@ -155,12 +155,12 @@ pnpm harness reply-inspect --task <uuid> --approval-offset 0 --data-dir /private
 
 `reply-plan`·`reply-inspect`가 출력한 `task.taskId`·`task.plan.planHash`를 그대로 사용합니다. 계획에서 대상·유효 본문을 검토하고 OS 소유자가 전송 전용 승인을 내립니다. `--expires-in-minutes`는 기본값 없이 필수이며 정수 1~60분만 허용합니다. 30분을 권장하고, 실제 승인 만료는 본문·source 만료보다 늦을 수 없습니다. 승인만으로 전송하지 않으며 `reply-send`가 승인 소비와 `SENDING` 시도를 원자 저장한 뒤 가짜 어댑터를 한 번 호출합니다.
 
-| `reply-plan --fixture` | 기대 결과 |
-| --- | --- |
-| `success` (기본값) | 승인 후 `SIMULATED`. 실제 Slack 전송을 뜻하지 않습니다. |
-| `not-sent` | 시도 `NOT_SENT`·Task `FAILED`. 자동 재시도 없이 새 승인 후에만 수동 재시도합니다. 고정 fixture이므로 재시도도 미전송으로 끝납니다. |
-| `unknown` | 결과 `UNKNOWN`. 새 승인·재전송을 차단합니다. |
-| `incomplete`, `gap` | 문맥 불완전·수신 공백으로 `BLOCKED`. 승인·전송을 차단합니다. |
+| `reply-plan --fixture` | 기대 결과                                                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `success` (기본값)     | 승인 후 `SIMULATED`. 실제 Slack 전송을 뜻하지 않습니다.                                                                            |
+| `not-sent`             | 시도 `NOT_SENT`·Task `FAILED`. 자동 재시도 없이 새 승인 후에만 수동 재시도합니다. 고정 fixture이므로 재시도도 미전송으로 끝납니다. |
+| `unknown`              | 결과 `UNKNOWN`. 새 승인·재전송을 차단합니다.                                                                                       |
+| `incomplete`, `gap`    | 문맥 불완전·수신 공백으로 `BLOCKED`. 승인·전송을 차단합니다.                                                                       |
 
 `reply-send`는 `SIMULATED` 이외 결과에서 JSON 결과를 출력하고 종료 코드 1을 반환합니다. 본문·대상·요청/문맥 revision이 바뀌거나 새 reply가 생기면 기존 승인을 사용할 수 없습니다. 아래 명령은 실제 Slack 이벤트와 연결되지 않은 합성 제어 경로입니다.
 
@@ -197,13 +197,13 @@ pnpm harness slack-post-check --fixture disabled --data-dir /private/tmp/harness
 
 `--fixture`의 기본값은 `all`입니다. 각 시나리오가 예상한 결과를 반환하면 차단·오류도 진단 `passed`이며, 전체 통과 시 종료 코드는 0입니다. 보고서는 `<data-dir>/slack-post-checks/<verificationId>/report.json`에 저장합니다. stdout과 보고서에 본문·토큰·원시 HTTP 요청/응답·원시 오류를 남기지 않습니다.
 
-| fixture | 검증 내용과 예상 결과 |
-| --- | --- |
-| `success` | 합성 `auth.test` → `conversations.replies` → `chat.postMessage`의 직렬화·응답 검증 후 `OFFLINE_CONFIRMED` |
-| `disabled` | 기본 비활성 HTTP 포트 호출 0, `BLOCKED` |
-| `auth-mismatch`, `source-changed`, `new-reply`, `incomplete`, `expired` | identity·문맥·만료 불일치로 post 호출 전 `BLOCKED` |
-| `denied`, `rate-limited` | 확실한 API 거부를 `NOT_SENT`로 분류, 자동 재시도 0 |
-| `server-error`, `timeout`, `malformed`, `oversized`, `receipt-mismatch`, `redirect` | post 결과 불확실성을 `UNKNOWN`으로 보존, 자동 재시도 0 |
+| fixture                                                                             | 검증 내용과 예상 결과                                                                                     |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `success`                                                                           | 합성 `auth.test` → `conversations.replies` → `chat.postMessage`의 직렬화·응답 검증 후 `OFFLINE_CONFIRMED` |
+| `disabled`                                                                          | 기본 비활성 HTTP 포트 호출 0, `BLOCKED`                                                                   |
+| `auth-mismatch`, `source-changed`, `new-reply`, `incomplete`, `expired`             | identity·문맥·만료 불일치로 post 호출 전 `BLOCKED`                                                        |
+| `denied`, `rate-limited`                                                            | 확실한 API 거부를 `NOT_SENT`로 분류, 자동 재시도 0                                                        |
+| `server-error`, `timeout`, `malformed`, `oversized`, `receipt-mismatch`, `redirect` | post 결과 불확실성을 `UNKNOWN`으로 보존, 자동 재시도 0                                                    |
 
 진단 입력인 `offline-http` intent는 유효한 합성 설정·대상·본문 hash·문맥 hash를 묶으며 생성 후 60초에 만료합니다. 이는 소유자의 전송 승인 TTL이 아닙니다. 고정 합성 workspace `T_LOCAL`·채널 `C_ALLOWED`·bot `B_LOCAL`·bot 사용자 `U_BOT`·원래 스레드와 고정 일반 텍스트만 사용합니다. 기본 포트는 요청을 수행하지 않고, 각 진단에서만 합성 HTTP 포트를 주입합니다. 가짜 token은 메모리의 합성 요청 검증에만 쓰며 호스트 토큰을 읽지 않습니다.
 
@@ -215,16 +215,16 @@ pnpm harness slack-post-check --fixture disabled --data-dir /private/tmp/harness
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.
 
-| fixture | 기대 결과 |
-| --- | --- |
-| `inquiry`, `change`, `unclear` | 답변 초안, 승인 대기 계획, 확인 질문 |
-| `duplicate` | 같은 이벤트는 한 번만 처리 |
-| `no-mention`, `other-user`, `disallowed-channel`, `other-workspace` | 작업 생성 없음 |
-| `bot`, `self`, `edited`, `deleted` | 작업 생성 없음. 편집·삭제 반영은 후속 단계 |
-| `invalid-json`, `invalid-summary`, `forbidden-command`, `timeout` | `FAILED`와 정적 실패 코드 |
-| `hallucinated-file`, `path-escape`, `symlink`, `secret`, `large`, `binary` | `BLOCKED`, 근거 및 실행 계획 없음 |
-| `malicious` | 메시지와 README의 악성 지시를 자료로 읽고 실행 권한을 만들지 않음 |
-| `redaction` | 합성 비밀 패턴을 모델 입력 전 마스킹 |
+| fixture                                                                    | 기대 결과                                                         |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `inquiry`, `change`, `unclear`                                             | 답변 초안, 승인 대기 계획, 확인 질문                              |
+| `duplicate`                                                                | 같은 이벤트는 한 번만 처리                                        |
+| `no-mention`, `other-user`, `disallowed-channel`, `other-workspace`        | 작업 생성 없음                                                    |
+| `bot`, `self`, `edited`, `deleted`                                         | 작업 생성 없음. 편집·삭제 반영은 후속 단계                        |
+| `invalid-json`, `invalid-summary`, `forbidden-command`, `timeout`          | `FAILED`와 정적 실패 코드                                         |
+| `hallucinated-file`, `path-escape`, `symlink`, `secret`, `large`, `binary` | `BLOCKED`, 근거 및 실행 계획 없음                                 |
+| `malicious`                                                                | 메시지와 README의 악성 지시를 자료로 읽고 실행 권한을 만들지 않음 |
+| `redaction`                                                                | 합성 비밀 패턴을 모델 입력 전 마스킹                              |
 
 ```sh
 pnpm harness replay --fixture invalid-json
