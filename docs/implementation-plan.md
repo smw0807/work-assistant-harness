@@ -4,7 +4,7 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 핵심 방향은 Slack에서 나를 부른 메시지를 모아 저장소를 읽고, 답변 초안이나 수정 계획을 나에게 보여 주는 것이다. 코드 변경은 내가 승인한 뒤에만 격리된 작업 공간에서 수행한다. 첫 버전은 실제 회사 계정 없이 로컬에서 검증할 수 있게 만든다.
 
-현재 구현 상태: 단계 0·1의 모의 조사, 단계 2의 수신·오프라인 검증, 단계 3-A의 로컬 승인, 단계 3-B의 Docker 격리 진단과 단계 3-C의 독립 합성 실행에 이어 2026-11-10에 단계 3-D의 합성 요청 무효화·취소·crash 복구·잔여 상태 관찰을 구현했다. 2026-11-11의 후속 요청 범위는 아래 단계 4-A의 합성 답장 계획·별도 승인·모의 전송이며, 구현·검증 상태는 [4-A 결과](stage-4a-result.md)에 기록한다. 실제 검증은 [단계 3-B](stage-3b-result.md), [단계 3-C](stage-3c-result.md), [단계 3-D 결과](stage-3d-result.md)에 기록한다. 기존 조사 Task와 `approval-only-v1`은 실행에 연결하지 않으며 실제 Slack·AI·회사 저장소도 연결하지 않았다. 기존 범위는 [단계 1](stage-1-result.md), [단계 2](stage-2-result.md), [단계 3-A 결과](stage-3a-result.md), 현재 명령은 [README](../README.md)를 따른다. 회사 도입과 실제 외부 전송은 별도 범위다. 아래 범용 실행 명령 예시는 구현 제안이다.
+현재 구현 상태: 단계 0·1의 모의 조사, 단계 2의 수신·오프라인 검증, 단계 3-A의 로컬 승인, 단계 3-B의 Docker 격리 진단과 단계 3-C의 독립 합성 실행에 이어 2026-11-10에 단계 3-D의 합성 요청 무효화·취소·crash 복구·잔여 상태 관찰을 구현했다. 2026-11-11의 후속 요청 범위는 단계 4-A의 합성 답장 계획·별도 승인·모의 전송과 단계 4-B-1의 오프라인 Slack HTTP 계약 진단이다. 구현·검증 상태는 [4-A 결과](stage-4a-result.md)와 [4-B-1 결과](stage-4b1-result.md)에 기록한다. 실제 검증은 [단계 3-B](stage-3b-result.md), [단계 3-C](stage-3c-result.md), [단계 3-D 결과](stage-3d-result.md)에 기록한다. 기존 조사 Task와 `approval-only-v1`은 실행에 연결하지 않으며 실제 Slack·AI·회사 저장소도 실행·전송 흐름에 연결하지 않았다. 기존 범위는 [단계 1](stage-1-result.md), [단계 2](stage-2-result.md), [단계 3-A 결과](stage-3a-result.md), 현재 명령은 [README](../README.md)를 따른다. 회사 도입과 실제 외부 전송은 별도 범위다. 아래 범용 실행 명령 예시는 구현 제안이다.
 
 ### 하네스가 맡을 역할
 
@@ -227,13 +227,41 @@ reply-prune / 각 명령 시작 → 만료 본문·설정된 감사 기록 정�
 
 **검증 상태:** 최종 회귀 301개(기존 271개 + 신규 30개), lint·typecheck·build가 통과했다. 실제 child-process 강제 종료·새 프로세스 복구·동시 승인 소비·본문 보관·제한 worker의 파일/child/TCP 차단 근거와 실제 외부 연결의 `not_run` 범위는 [4-A 결과](stage-4a-result.md)에 기록한다.
 
+#### 단계 4-B-1 오프라인 Slack HTTP 계약 진단
+
+2026-11-11의 후속 요청은 기본 비활성 전송 어댑터와 가짜 HTTP 응답 검증의 구현이다. 실제 토큰·계정·회사 자료·자유 본문·실제 네트워크를 연결하지 않는 범위여서 추가 운영 정책의 결정 없이 진행한다. 단계 4-A의 채택 정책·합성 승인·DB·기존 명령은 보존한다.
+
+**목적과 데이터 흐름:** 실제 Slack 쓰기 API에 사용할 요청 직렬화와 응답 검증을 합성 transport로 진단한다. 이는 단계 3-B의 `sandbox-check`처럼 기능 권한을 만들지 않는 별도 진단이며, 영속 전송 승인 흐름의 확장이 아니다.
+
+```text
+slack-post-check → 고정 합성 설정·본문·thread·offline-http intent
+  → 기본 disabled 포트: HTTP 호출 0, BLOCKED
+  → 진단에서만 합성 HTTP 포트 주입
+    → auth.test identity → conversations.replies 문맥 재검증
+    → chat.postMessage 요청 JSON·응답 계약 검증
+    → OFFLINE_CONFIRMED / NOT_SENT / UNKNOWN / BLOCKED
+  → 시나리오별 예상 결과 비교 → 로컬 report.json
+```
+
+**권한과 입력 계약:** 새 계약의 정책은 `slack-post-contract-v1`, 진단 모드는 `offline-http`이며 `liveEnabled`는 항상 `false`다. `OfflinePostIntent`는 설정·합성 대상·본문·요청 revision·문맥 hash·유효기한을 묶는 진단 입력이며 생성 후 60초에 만료한다. 이 기한은 소유자 승인 TTL이 아니다. intent는 소유자의 전송 승인이나 승인 소비 기록이 아니며 진단 성공도 실제 전송을 허용하지 않는다. 단계 4-A의 `synthetic-reply-v1`·`mode: mock` 계획/승인과 기존 코드·실행 승인은 이 입력으로 수용하지 않는다. 실제 전송 활성화 옵션, 실제 토큰·설정 파일·대상 ID·본문 입력, 전역 `fetch`를 사용하는 transport는 제공하지 않는다.
+
+**HTTP와 결과 계약:** 고정 합성 workspace/channel/bot/user identity와 원래 스레드·일반 텍스트 본문만 사용한다. `auth.test` identity를 확인한 뒤, 제한된 `conversations.replies` 응답에서 원문 revision·문맥 hash·완전성·새 reply·만료를 다시 확인한다. 조건이 다르면 post 호출 없이 차단한다. `chat.postMessage` 요청은 JSON으로 직렬화하고 알림 멘션·첨부·링크 확장 없이 고정한 스레드의 일반 텍스트만 담는다. 성공 응답은 channel·message timestamp·thread·bot identity·본문을 대조한 뒤 `OFFLINE_CONFIRMED`로 기록한다. 확실한 거부는 `NOT_SENT`, post 이후 timeout·서버 오류·잘못된 응답·receipt 불일치는 `UNKNOWN`으로 처리한다. 모든 결과에서 자동 재시도는 0회다. 요청 제한은 250ms, 응답은 16KiB이며 redirect를 거부한다. 이 시간·크기는 오프라인 진단 한도이며 실제 운영 한도가 아니다.
+
+**CLI와 보관:** `slack-post-check [--fixture all|success|disabled|auth-mismatch|source-changed|new-reply|incomplete|expired|denied|rate-limited|server-error|timeout|malformed|oversized|receipt-mismatch|redirect] [--data-dir <private-directory>]`를 제공한다. 기본 fixture는 `all`이다. 예상한 차단·오류도 시나리오의 기대 결과와 일치하면 진단 `passed`이며, 전체 통과 시 CLI 종료 코드는 0이다. `<data-dir>/slack-post-checks/<verificationId>/report.json`에 `passed`·`failed`·`not_run`과 정적 원인을 남긴다. 본문·토큰·원시 HTTP 요청/응답·원시 오류는 stdout과 보고서에 넣지 않는다. 합성 token은 메모리에서 가짜 요청 직렬화 검증에만 사용한다. 보고서는 이 진단이 새로 만든 파일이며 기존 승인 DB를 열거나 변경하지 않는다.
+
+**실행 경계:** NestJS application context의 별도 제한 worker는 하네스 읽기와 비공개 데이터 디렉터리 쓰기만 허용하고 네트워크·하위 프로세스·추가 worker·외부 native addon 권한을 받지 않는다. 호스트 토큰을 상속하지 않는다. 기본 포트는 합성 포트를 명시적으로 주입하기 전까지 어떤 HTTP 요청도 받지 않는다. 진단용 합성 문맥 재조회는 실제 Slack 최신성·수신과 전송의 원자성·전역 lease 문제를 해결한 것으로 해석하지 않는다.
+
+**완료 기준:** 수용 15·16과 45~51을 검증한다. disabled 호출 0, 기존 승인 재사용 거부, identity·문맥·TTL 실패 시 post 0, 고정 HTTP 직렬화와 receipt 검증, 미전송/불확실 결과·상한·재시도 0, 토큰·본문 비보관, 제한 worker와 기존 흐름의 회귀를 확인한다. 실제 HTTP 전송·Slack 계정/scope·실제 수신 문맥과 경합·실전송 승인 소비·회사 자료/보관 정책은 `not_run`이다. 검증 결과는 [4-B-1 결과](stage-4b1-result.md)를 따른다.
+
+**검증 상태:** 최종 회귀 324개(기존 301개 + 신규 23개), lint·typecheck·build가 통과했다. 15개 합성 HTTP 시나리오와 기본 차단·정밀 timestamp/문맥·직렬화·receipt·제한 worker·기존 DB 불변 근거는 [4-B-1 결과](stage-4b1-result.md)에 기록한다. 이는 실제 전송이나 live 승인 소비 검증을 뜻하지 않는다.
+
 #### 후속 단계의 별도 범위
 
-- 4-B 후보: 기본 비활성 실제 Slack 전송 어댑터. 회사 승인·자격증명·최소 쓰기 권한·목적지·실제 문맥 최신성·불확실 전송 처리를 먼저 정하고 승인된 테스트 환경에서 검증한다.
+- 4-B-2 후보: 별도 실전송 승인과 승인된 테스트 채널의 고정 시험 문구 단건 전송. 회사/계정 승인, 자격증명 보관·최소 scope, 정확한 workspace/channel/thread/bot identity, 실제 본문/감사 보관·게시 후 처리, 수신 lease와 전송 직전 문맥 변경 경합, 실제 승인 소비·결과 불확실성·중복 방지를 먼저 설계·검증한다. 4-B-1 진단 입력·성공 보고서와 4-A 모의 승인을 실전송 승인으로 사용하지 않는다.
 - 4-C 후보: commit 준비·push·PR을 각각 구분하고 원격·브랜치·diff·PR 본문의 별도 승인을 설계한다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 
-4-B~4-D는 진행 순서 제안이며 4-A의 구현 승인에 포함되지 않는다.
+4-B-2~4-D는 진행 순서 제안이며 4-A와 4-B-1의 구현 승인에 포함되지 않는다.
 
 ## 3 구조와 데이터 모델
 
@@ -472,6 +500,13 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 42 | SENDING 중단·재시작·명시적 복구 (4-A) | 새 프로세스가 자동 전송하지 않고 유효 문맥의 SENDING을 보존. reply-recover가 UNKNOWN으로 확정하며 반복 복구 멱등·소비 승인 복원 없음·이후 재전송 금지. 별도 만료·무효화도 진행 중 시도를 UNKNOWN으로 차단. |
 | 43 | 본문·감사 보관과 만료 후 재생성 (4-A) | 기본 본문 24h·1~168h와 별도 감사 null/1~3650일 검증. 본문은 별도 payload만 존재하고 snapshot·attempt·영속 보고서에 복제 없음. 만료 승인 취소·본문 제거·terminal 감사 정리 뒤 최소 marker로 같은 task ID 재생성 거부. |
 | 44 | 답장 CLI·저장 경계와 회귀 (4-A) | 실제 명령·옵션·출력과 소유자·lease·private DB 경계를 검증. plan/inspect 외 stdout에 본문 없음. 기존 조사/실행/Slack 수신 승인과 DB 분리, 대상 전후 상태 불변과 실제 외부 전송 0 유지. |
+| 45 | 기본 비활성·진단 입력 경계 (4-B-1) | `liveEnabled=false` 고정, 기본 disabled HTTP 호출 0. 실제 활성화/토큰/본문/대상 입력 옵션 없음. 기존 4-A 계획·승인·코드 승인과 live 모드/추가 필드/변조된 진단 intent 거부. |
+| 46 | identity와 최신 합성 문맥 검증 (4-B-1) | auth의 workspace/bot/user 불일치, 원문 revision 변경·새 reply·불완전·만료 때 post 호출 0. 고정 thread·본문·설정·문맥 hash를 다시 검증. 실제 최신성 보장과 구분. |
+| 47 | 고정 post 직렬화·receipt 대조 (4-B-1) | 고정 API·JSON channel/thread/text·확장 제한·redirect 거부 검증. channel/message/thread/bot/text가 일치하는 합성 응답만 OFFLINE_CONFIRMED. 실제 전송 성공으로 표시하지 않음. |
+| 48 | 미전송과 불확실 결과 (4-B-1) | 확실한 API 거부·rate limit과 post 이후 서버 오류·timeout·malformed·oversized·receipt 불일치·redirect를 구분. 자동 재시도 0, 원시 응답/오류 비노출, 불확실 성공을 미전송으로 단정하지 않음. |
+| 49 | 시간·응답 크기 상한 (4-B-1) | 250ms 제한·16KiB 응답 상한을 코드로 강제. 무응답·과대 응답·잘못된 JSON에도 무한 대기/무한 재시도 없음. |
+| 50 | 제한 worker·보고서 보관 경계 (4-B-1) | 네트워크·child·상속 토큰 차단, 비공개 경로·보고서 symlink 경계 검증. stdout/report에 본문·토큰·원시 HTTP 자료 없음. 기존 승인 DB/대상 저장소 변경과 실제 외부 전송 0. |
+| 51 | CLI 진단과 기존 기능 회귀 (4-B-1) | 지원 fixture·기본 all·옵션 검증·기대 차단 포함 CLI 종료 코드·보고서 passed/failed/not_run 확인. 진단 성공으로 승인/활성화 권한을 만들지 않고 기존 reply/수신/조사/합성 실행 경계 유지. |
 
 ### 최종 검증 묶음
 

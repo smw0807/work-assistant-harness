@@ -4,7 +4,7 @@
 
 이 문서는 구현할 보안 요구사항이다. 문서를 작성하거나 `AGENTS.md`에 규칙을 넣었다는 이유로 보호 장치가 작동한다고 간주하지 않는다. 코드, 권한 설정과 실패 테스트로 검증한 기능만 사용한다.
 
-단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 Docker 격리 진단은 [stage-3b-result.md](stage-3b-result.md), 단계 3-C의 독립 합성 실행은 [stage-3c-result.md](stage-3c-result.md), 단계 3-D의 합성 취소·중단 복구·잔여 관찰은 [stage-3d-result.md](stage-3d-result.md), 단계 4-A의 합성 답장 계획·별도 승인·모의 전송은 [stage-4a-result.md](stage-4a-result.md)를 따른다. 진단 보고서는 실행 권한이 아니며 기존 조사 Task나 실제 Slack·회사 저장소의 실행을 열지 않는다. 조사·답장 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
+단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 Docker 격리 진단은 [stage-3b-result.md](stage-3b-result.md), 단계 3-C의 독립 합성 실행은 [stage-3c-result.md](stage-3c-result.md), 단계 3-D의 합성 취소·중단 복구·잔여 관찰은 [stage-3d-result.md](stage-3d-result.md), 단계 4-A의 합성 답장 계획·별도 승인·모의 전송은 [stage-4a-result.md](stage-4a-result.md), 단계 4-B-1의 오프라인 Slack HTTP 계약 진단은 [stage-4b1-result.md](stage-4b1-result.md)를 따른다. 진단 보고서는 실행·전송 권한이 아니며 기존 조사 Task나 실제 Slack·회사 저장소의 실행을 열지 않는다. 조사·답장·HTTP 계약 진단 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
 
 전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 범위는 합성 데이터 기반의 로컬 조사이며 실제 회사 계정과 코드를 연결하지 않는다.
 
@@ -201,6 +201,18 @@ Slack 메시지 전송, 외부 모델 호출, Git 원격 변경은 서로 다른
 
 감사 기록은 본문 없이 계획/본문 해시·목적지·revision·소유자·승인·제어·시도 결과를 남긴다. `auditRetentionDays` 기본 `null`은 이 합성 metadata를 DB 수명 동안 보관한다는 뜻이며 회사 정책의 기본값이 아니다. 1~3650일을 명시하면 terminal 작업의 감사 기한이 지난 뒤 metadata를 제거하되 최소 task ID·계획 해시 중복 marker는 DB 수명 동안 유지한다. 진행 중 작업은 감사 정리로 제거하지 않는다. 만료 본문·감사 정리는 각 답장 명령 시작과 `reply-prune`에서 수행하므로 프로그램 중지 중에는 다음 실행까지 남을 수 있다. 논리 삭제는 물리적 완전 삭제를 보장하지 않으며 DB 폐기 뒤 과거 중복 차단도 보장하지 않는다. 실제 회사 도입 전에는 이 metadata 범위·DB 폐기·백업을 포함한 별도 보관 정책이 필요하다.
 
+### 단계 4-B-1의 오프라인 HTTP 계약 진단
+
+`slack-post-check`는 실제 Slack 쓰기를 연결하지 않는 계약 진단이다. `slack-post-contract-v1`·`offline-http`의 intent는 설정 hash·합성 대상·본문 hash·요청 revision·문맥 hash·만료를 묶는 검증 입력이며, 소유자의 전송 승인이나 영속 승인 소비를 대신하지 않는다. 단계 4-A의 `synthetic-reply-v1`·`mode: mock` 계획/승인과 기존 코드·실행 승인을 받아들이지 않는다. 기존 승인 DB는 열거나 바꾸지 않고 진단 통과를 활성화 토큰으로 저장하지 않는다.
+
+`liveEnabled`는 `false`로 고정하고 기본 HTTP 포트는 요청을 0회 수행한다. 진단에서 합성 포트를 명시적으로 주입할 때만 고정 합성 workspace/channel/bot/user·thread·본문과 가짜 token으로 `auth.test`·`conversations.replies`·`chat.postMessage` 요청 직렬화를 검증한다. 실제 토큰/설정/본문/대상 입력과 실전송 활성화 옵션, 전역 `fetch`를 사용하는 실제 transport는 제공하지 않는다. 실제 승인된 계정·토큰이나 회사 자료를 fixture로 사용하지 않는다.
+
+identity·요청 revision·문맥 hash·완전성·만료를 재검증하고 새 reply·불완전·만료·identity 불일치가 있으면 post 전 차단한다. 요청에는 고정한 스레드의 일반 텍스트와 확장 제한만 포함하고 redirect를 거부한다. 요청 제한 250ms·응답 16KiB를 적용하며 자동 재시도는 없다. 합성 성공 응답의 channel·message·thread·bot·본문을 대조한 결과는 `OFFLINE_CONFIRMED`다. 확실한 미전송은 `NOT_SENT`, post 이후 서버 오류·timeout·malformed/oversized 응답·receipt 불일치는 `UNKNOWN`으로 분리한다. 이 상태는 HTTP 계약 진단 결과이며 실제 메시지 전달이나 운영 중복 방지를 보장하지 않는다.
+
+NestJS application context의 제한 worker는 하네스 읽기·비공개 데이터 디렉터리 쓰기만 허용하고 네트워크·하위 프로세스·추가 worker·외부 native addon 권한과 호스트 토큰을 받지 않는다. 가짜 token·본문·원시 HTTP 응답은 메모리에서만 사용하며 stdout과 `<data-dir>/slack-post-checks/<verificationId>/report.json`에 복제하지 않는다. 보고서에는 진단/receipt metadata·해시·정적 원인·호출 횟수와 `passed`·`failed`·`not_run`을 남긴다. 합성 진단 metadata의 로컬 보고서 보관은 실제 회사 보관 정책의 기본값이 아니다.
+
+실제 전송은 4-B-2의 별도 범위다. 회사/계정 승인, 자격증명 보관과 최소 scope, workspace/channel/thread/bot identity, 실제 본문·감사 기록·게시 후 보관/삭제, 수신 lease와 새 reply·편집·삭제의 경합, 전송 전 최신성, 새 live 승인 소비·중복·crash 복구를 확정하고 승인된 테스트 환경에서 검증해야 한다. 현재 합성 thread 재조회는 실제 수신 공백·문맥 경합을 해결하지 않는다. 4-A 승인과 4-B-1 intent/성공 보고서를 실전송 권한으로 재사용하지 않는다.
+
 ## 7. 회사 자료와 비밀정보
 
 회사 계정·저장소 연결 전에 AI 제공자, 모델, 실행 위치, 전송 가능 자료, 보관 기간과 감사 요구를 회사 정책에 따라 확인한다. 회사 승인이 없으면 합성 데이터로 계속 개발한다.
@@ -238,5 +250,5 @@ Gmail·Calendar·Drive는 후속 선택 기능이다. 연결된 계정이 있다
 - 별도 허가 없는 메시지 전송·push·PR이 없음.
 - 승인 범위 밖 변경과 실패·미실행 검사를 성공으로 보고하지 않음.
 
-단계 3-A의 기록용 승인, 단계 3-B의 합성 격리 진단, 단계 3-C의 독립 합성 실행, 단계 3-D의 합성 제어·복구와 단계 4-A의 합성 답장 전용 승인을 구분한다. 실제 검증 범위는 각 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. 기존 조사 실행 포트는 항상 거부하며 실제 회사 저장소·Slack 요청 실행·실제 답장은 연결하지 않는다. 합성 검증을 회사 보안 검토 통과로 표현하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
+단계 3-A의 기록용 승인, 단계 3-B의 합성 격리 진단, 단계 3-C의 독립 합성 실행, 단계 3-D의 합성 제어·복구, 단계 4-A의 합성 답장 전용 승인과 단계 4-B-1의 오프라인 HTTP 계약 진단을 구분한다. 실제 검증 범위는 각 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. 기존 조사 실행 포트는 항상 거부하며 실제 회사 저장소·Slack 요청 실행·실제 답장은 연결하지 않는다. 합성 검증을 회사 보안 검토 통과로 표현하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
 

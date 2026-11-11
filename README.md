@@ -1,6 +1,6 @@
 # work-assistant-harness
 
-Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 격리 실행을 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록, 단계 3-B의 Docker 격리 진단, 단계 3-C의 고정 합성 patch·등록 검사 실행, 단계 3-D의 합성 실행 취소·중단 복구·잔여 변경 관찰**에 이어 **단계 4-A의 합성 답장 계획·별도 승인·모의 전송**을 제공합니다. 검증 결과는 [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A](docs/stage-4a-result.md)에 기록합니다. 실제 Slack 권한·AI·회사 저장소 연결과 실행은 검증하지 않았습니다.
+Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 격리 실행을 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록, 단계 3-B의 Docker 격리 진단, 단계 3-C의 고정 합성 patch·등록 검사 실행, 단계 3-D의 합성 실행 취소·중단 복구·잔여 변경 관찰**에 이어 **단계 4-A의 합성 답장 계획·별도 승인·모의 전송, 단계 4-B-1의 오프라인 Slack HTTP 계약 진단**을 제공합니다. 검증 결과는 [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A](docs/stage-4a-result.md), [단계 4-B-1](docs/stage-4b1-result.md)에 기록합니다. 실제 Slack 권한·AI·회사 저장소 연결과 실행은 검증하지 않았습니다.
 
 ```text
 로컬 이벤트 JSON
@@ -14,7 +14,7 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
       불명확: NEEDS_CLARIFICATION
 ```
 
-기본 실행은 합성 자료만 사용합니다. Slack 수신은 명시적으로 켜는 별도 경로이며 모델·제품 저장소와 연결하지 않습니다. 기존 조사와 단계 3-A는 `APPROVED`에서 멈추며 기본 `ExecutionPort`는 항상 거부하고 `run` 명령은 제공하지 않습니다. 단계 3-C는 별도 `execution-*` 명령에서 새 합성 작업·실행 승인을 만들고 고정 patch와 등록 검사만 실행합니다. 단계 4-A의 `reply-*` 명령은 고정 합성 요청과 가짜 전송 어댑터를 사용합니다. 실제 외부 메시지와 Git 원격 작업은 구현하지 않았습니다.
+기본 실행은 합성 자료만 사용합니다. Slack 수신은 명시적으로 켜는 별도 경로이며 모델·제품 저장소와 연결하지 않습니다. 기존 조사와 단계 3-A는 `APPROVED`에서 멈추며 기본 `ExecutionPort`는 항상 거부하고 `run` 명령은 제공하지 않습니다. 단계 3-C는 별도 `execution-*` 명령에서 새 합성 작업·실행 승인을 만들고 고정 patch와 등록 검사만 실행합니다. 단계 4-A의 `reply-*` 명령은 고정 합성 요청과 가짜 전송 어댑터를 사용합니다. 단계 4-B-1의 `slack-post-check`는 가짜 HTTP 응답으로 요청·응답 계약만 진단하며 승인이나 실제 전송을 만들지 않습니다. 실제 외부 메시지와 Git 원격 작업은 구현하지 않았습니다.
 
 ## 설치와 실행
 
@@ -185,6 +185,32 @@ pnpm harness reply-plan --body-retention-hours 24 --audit-retention-days 30 --da
 
 본문은 별도 payload에만 저장하고 승인 snapshot·시도·영속 보고서에 복제하지 않습니다. `reply-plan`·`reply-inspect`만 유효 본문을 stdout에 표시하며 사용자가 redirect한 출력은 사용자의 보관 정책을 따릅니다. 각 답장 명령 시작과 `reply-prune`에서 정리하므로 중지 중 만료 자료는 다음 실행까지 남을 수 있습니다. SQLite 논리 삭제는 디스크·백업의 물리적 완전 삭제를 보장하지 않습니다. 실제 Slack 전송·회사 자료·실제 문맥 최신성은 `not_run`이며 다음 별도 범위입니다. 상세 계획과 검증 범위는 [4-A 계획](docs/implementation-plan.md#단계-4-a-합성-답장-계획별도-승인모의-전송)과 [결과](docs/stage-4a-result.md)를 따릅니다.
 
+## 단계 4-B-1 오프라인 Slack HTTP 계약 진단
+
+가짜 HTTP transport로 Slack 요청 직렬화·identity·스레드 문맥·성공 응답을 검증하는 별도 진단입니다. 기존 `reply-*`의 승인·DB·모의 전송은 그대로 사용하며 이 진단과 연결하지 않습니다. `liveEnabled`는 항상 `false`이고 실제 토큰·계정·설정·본문·대상을 입력하거나 전송을 활성화하는 옵션은 없습니다.
+
+```sh
+pnpm harness slack-post-check --data-dir /private/tmp/harness-slack-post-check
+pnpm harness slack-post-check --fixture success --data-dir /private/tmp/harness-slack-post-check
+pnpm harness slack-post-check --fixture disabled --data-dir /private/tmp/harness-slack-post-check
+```
+
+`--fixture`의 기본값은 `all`입니다. 각 시나리오가 예상한 결과를 반환하면 차단·오류도 진단 `passed`이며, 전체 통과 시 종료 코드는 0입니다. 보고서는 `<data-dir>/slack-post-checks/<verificationId>/report.json`에 저장합니다. stdout과 보고서에 본문·토큰·원시 HTTP 요청/응답·원시 오류를 남기지 않습니다.
+
+| fixture | 검증 내용과 예상 결과 |
+| --- | --- |
+| `success` | 합성 `auth.test` → `conversations.replies` → `chat.postMessage`의 직렬화·응답 검증 후 `OFFLINE_CONFIRMED` |
+| `disabled` | 기본 비활성 HTTP 포트 호출 0, `BLOCKED` |
+| `auth-mismatch`, `source-changed`, `new-reply`, `incomplete`, `expired` | identity·문맥·만료 불일치로 post 호출 전 `BLOCKED` |
+| `denied`, `rate-limited` | 확실한 API 거부를 `NOT_SENT`로 분류, 자동 재시도 0 |
+| `server-error`, `timeout`, `malformed`, `oversized`, `receipt-mismatch`, `redirect` | post 결과 불확실성을 `UNKNOWN`으로 보존, 자동 재시도 0 |
+
+진단 입력인 `offline-http` intent는 유효한 합성 설정·대상·본문 hash·문맥 hash를 묶으며 생성 후 60초에 만료합니다. 이는 소유자의 전송 승인 TTL이 아닙니다. 고정 합성 workspace `T_LOCAL`·채널 `C_ALLOWED`·bot `B_LOCAL`·bot 사용자 `U_BOT`·원래 스레드와 고정 일반 텍스트만 사용합니다. 기본 포트는 요청을 수행하지 않고, 각 진단에서만 합성 HTTP 포트를 주입합니다. 가짜 token은 메모리의 합성 요청 검증에만 쓰며 호스트 토큰을 읽지 않습니다.
+
+요청은 250ms·응답은 16KiB로 제한하고 redirect를 거부합니다. 합성 성공 receipt의 channel·message timestamp·thread·bot·본문을 대조합니다. 네트워크·하위 프로세스 권한과 호스트 토큰이 없는 별도 Node worker에서 NestJS application context로 실행하며 실제 `fetch` transport는 제공하지 않습니다. 진단 결과는 실제 Slack 전송 성공이나 전송 권한이 아닙니다.
+
+실제 승인·승인 소비·중복/중단 복구, 실제 수신 lease와 전송의 조정, 실제 문맥 경합과 회사 계정·scope·자료/보관 정책은 4-B-2에서 별도로 정하고 검증해야 합니다. 기존 4-A 모의 승인과 이 진단의 intent·성공 보고서를 실전송 승인으로 재사용할 수 없습니다. 자세한 수용 기준과 검증 상태는 [4-B-1 계획](docs/implementation-plan.md#단계-4-b-1-오프라인-slack-http-계약-진단)과 [결과](docs/stage-4b1-result.md)를 따릅니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.
@@ -273,4 +299,4 @@ pnpm build
 
 `test`는 컴파일 후 Node 내장 test runner로 단위·통합·CLI 수용 테스트를 실행합니다. 합성 저장소는 별도 임시 경로에 준비합니다. 하네스 테스트가 통과해도 실제 Slack 권한·회사 보안·격리 실행기의 검증을 통과한 것은 아닙니다.
 
-전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1](docs/stage-1-result.md), [단계 2](docs/stage-2-result.md), [단계 3-A](docs/stage-3a-result.md), [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A 결과](docs/stage-4a-result.md)에 정리했습니다. 합성 실행·모의 전송 검증과 실제 Slack·회사 도입 승인을 구분합니다.
+전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1](docs/stage-1-result.md), [단계 2](docs/stage-2-result.md), [단계 3-A](docs/stage-3a-result.md), [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A](docs/stage-4a-result.md), [단계 4-B-1 결과](docs/stage-4b1-result.md)에 정리했습니다. 합성 실행·모의 전송·HTTP 계약 진단과 실제 Slack·회사 도입 승인을 구분합니다.
