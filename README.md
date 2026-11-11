@@ -1,6 +1,6 @@
 # work-assistant-harness
 
-Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 격리 실행을 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록, 단계 3-B의 Docker 격리 진단, 단계 3-C의 고정 합성 patch·등록 검사 실행, 단계 3-D의 합성 실행 취소·중단 복구·잔여 변경 관찰**을 구현했습니다. 검증 결과는 [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md)에 기록합니다. 실제 Slack 권한·AI·회사 저장소 연결과 실행은 검증하지 않았습니다.
+Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 격리 실행을 검증하는 업무 하네스입니다. **단계 0·1의 모의 조사, 단계 2의 Slack 읽기 수신, 단계 3-A의 로컬 승인·취소 기록, 단계 3-B의 Docker 격리 진단, 단계 3-C의 고정 합성 patch·등록 검사 실행, 단계 3-D의 합성 실행 취소·중단 복구·잔여 변경 관찰**에 이어 **단계 4-A의 합성 답장 계획·별도 승인·모의 전송**을 제공합니다. 검증 결과는 [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A](docs/stage-4a-result.md)에 기록합니다. 실제 Slack 권한·AI·회사 저장소 연결과 실행은 검증하지 않았습니다.
 
 ```text
 로컬 이벤트 JSON
@@ -14,7 +14,7 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
       불명확: NEEDS_CLARIFICATION
 ```
 
-기본 실행은 합성 자료만 사용합니다. Slack 수신은 명시적으로 켜는 별도 경로이며 모델·제품 저장소와 연결하지 않습니다. 기존 조사와 단계 3-A는 `APPROVED`에서 멈추며 기본 `ExecutionPort`는 항상 거부하고 `run` 명령은 제공하지 않습니다. 단계 3-C는 별도 `execution-*` 명령에서 새 합성 작업·실행 승인을 만들고 고정 patch와 등록 검사만 실행합니다. 외부 메시지와 Git 원격 작업은 구현하지 않았습니다.
+기본 실행은 합성 자료만 사용합니다. Slack 수신은 명시적으로 켜는 별도 경로이며 모델·제품 저장소와 연결하지 않습니다. 기존 조사와 단계 3-A는 `APPROVED`에서 멈추며 기본 `ExecutionPort`는 항상 거부하고 `run` 명령은 제공하지 않습니다. 단계 3-C는 별도 `execution-*` 명령에서 새 합성 작업·실행 승인을 만들고 고정 patch와 등록 검사만 실행합니다. 단계 4-A의 `reply-*` 명령은 고정 합성 요청과 가짜 전송 어댑터를 사용합니다. 실제 외부 메시지와 Git 원격 작업은 구현하지 않았습니다.
 
 ## 설치와 실행
 
@@ -52,6 +52,7 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 - `reports/`: 작업별 JSON 보고서. DB에 저장된 자료로 누락된 보고서를 재생성합니다.
 - `runs/`: 명령별 결과와 대상 전후 해시를 기록한 JSON 실행 기록.
 - `execution.sqlite`, `executions/`: 독립 합성 작업·계획·승인·Run, 요청 revision·무효화·실행 단계 이력과 동결 원본·분리 작업 트리·읽기 전용 실행 view·보고서. 기존 `tasks.sqlite`의 작업과 승인을 실행에 사용하지 않습니다.
+- `replies.sqlite`: 독립 합성 답장 Task·본문 없는 계획/승인 snapshot·전송 시도·제어 이력·보관 정책·최소 중복 marker. 답장 본문은 별도 만료 payload에만 보관하며 영속 보고서에 복제하지 않습니다.
 
 같은 이벤트는 재시작 후에도 다시 분석하지 않습니다. 중간에 종료된 `RECEIVED`, `TRIAGED`, `ANALYZED` 작업은 `BLOCKED`와 `INTERRUPTED_REVIEW_REQUIRED`로 남기고 자동 재실행하지 않습니다. 승인 대기 상태도 그대로 유지합니다. 만료된 승인은 상태 확인 시 취소 기록을 남기고 `AWAITING_APPROVAL`로 되돌립니다. 조사 작업과 승인 이력의 자동 보관 기간·삭제·재처리 기능은 아직 없습니다.
 
@@ -139,6 +140,50 @@ pnpm harness execution-inspect --task <id> --data-dir /private/tmp/harness-execu
 강제 종료 뒤 `execution-recover`는 저장된 실행 단계·container 이름·소유 토큰·Run label·전체 ID와 작업 영역 증거를 읽어 정리와 관찰만 수행합니다. 실행을 재개하지 않습니다. 확인된 중단은 `INTERRUPTED`, 확인된 취소는 `CANCELLED`, 정리·파일 상태 미확인은 `BLOCKED`입니다. 과거 3-C의 미완 Run에 소유 정보가 없으면 `legacy_untracked`와 `BLOCKED`로 남기고 다른 container를 추측해 종료하지 않습니다. 이미 `BLOCKED`인 Run을 다시 복구하면 기존 Run·보고서는 유지하고 lifecycle의 정리·관찰 근거만 갱신합니다.
 
 부분 patch·추가·삭제·권한·Git·실행 view 상태는 새 프로세스에서도 관찰합니다. 예상 밖 파일의 본문과 이름은 읽거나 출력하지 않고 이름 해시와 변경 종류를 기록합니다. `execution-inspect`는 Task·제어·승인 페이지·Run·lifecycle을 한 DB snapshot으로 읽은 뒤 누락된 완료 보고서를 만듭니다. 승인 `usedAt`, 불변 계획과 작업물은 유지하며 자동 재실행·승인 복원·commit·push·작업물 삭제는 하지 않습니다. 실제 검증 범위와 한계는 [3-D 결과](docs/stage-3d-result.md)를 따릅니다.
+
+## 단계 4-A 합성 답장과 전송 전용 승인
+
+실제 Slack·AI·회사 저장소를 연결하지 않고 고정된 합성 요청·일반 텍스트 요약만 사용합니다. 목적지는 `W_LOCAL`·`C_ALLOWED`의 원래 요청 스레드에 단건 답장입니다. 임의 본문·다른 채널·DM·멘션·첨부·코드 전문·토큰·설정 파일을 입력받지 않습니다. 기존 `approve`나 `execution-approve`는 답장 승인으로 사용할 수 없습니다.
+
+```sh
+pnpm harness reply-plan --fixture success --data-dir /private/tmp/harness-reply-data
+pnpm harness reply-inspect --task <uuid> --data-dir /private/tmp/harness-reply-data
+pnpm harness reply-approve --task <uuid> --plan-hash <sha256> --expires-in-minutes 30 --data-dir /private/tmp/harness-reply-data
+pnpm harness reply-send --task <uuid> --plan-hash <sha256> --data-dir /private/tmp/harness-reply-data
+pnpm harness reply-inspect --task <uuid> --approval-offset 0 --data-dir /private/tmp/harness-reply-data
+```
+
+`reply-plan`·`reply-inspect`가 출력한 `task.taskId`·`task.plan.planHash`를 그대로 사용합니다. 계획에서 대상·유효 본문을 검토하고 OS 소유자가 전송 전용 승인을 내립니다. `--expires-in-minutes`는 기본값 없이 필수이며 정수 1~60분만 허용합니다. 30분을 권장하고, 실제 승인 만료는 본문·source 만료보다 늦을 수 없습니다. 승인만으로 전송하지 않으며 `reply-send`가 승인 소비와 `SENDING` 시도를 원자 저장한 뒤 가짜 어댑터를 한 번 호출합니다.
+
+| `reply-plan --fixture` | 기대 결과 |
+| --- | --- |
+| `success` (기본값) | 승인 후 `SIMULATED`. 실제 Slack 전송을 뜻하지 않습니다. |
+| `not-sent` | 시도 `NOT_SENT`·Task `FAILED`. 자동 재시도 없이 새 승인 후에만 수동 재시도합니다. 고정 fixture이므로 재시도도 미전송으로 끝납니다. |
+| `unknown` | 결과 `UNKNOWN`. 새 승인·재전송을 차단합니다. |
+| `incomplete`, `gap` | 문맥 불완전·수신 공백으로 `BLOCKED`. 승인·전송을 차단합니다. |
+
+`reply-send`는 `SIMULATED` 이외 결과에서 JSON 결과를 출력하고 종료 코드 1을 반환합니다. 본문·대상·요청/문맥 revision이 바뀌거나 새 reply가 생기면 기존 승인을 사용할 수 없습니다. 아래 명령은 실제 Slack 이벤트와 연결되지 않은 합성 제어 경로입니다.
+
+```sh
+pnpm harness reply-cancel --task <uuid> --event-id synthetic-cancel-1 --data-dir /private/tmp/harness-reply-data
+pnpm harness reply-invalidate --task <uuid> --event reply --revision 2 --event-id synthetic-reply-2 --data-dir /private/tmp/harness-reply-data
+pnpm harness reply-recover --task <uuid> --data-dir /private/tmp/harness-reply-data
+pnpm harness reply-prune --data-dir /private/tmp/harness-reply-data
+```
+
+`reply-cancel`의 `--event-id`는 생략하면 새 ID를 만듭니다. `reply-invalidate`는 `--event edited|deleted|reply|gap|incomplete|expired`, 필수 `--revision 2..1000000000`과 `--event-id`를 받습니다. 초기 요청/문맥 revision은 1이며 같은 이벤트 ID·내용은 멱등 처리하고 다른 내용의 ID 재사용은 거부합니다. 오래된 revision은 최신 상태를 되돌리지 않습니다. 성공한 결과를 취소 이벤트로 다시 열거나 소비 승인을 복원하지 않습니다.
+
+중단된 `SENDING`은 문맥이 유효하면 시작·조회 시 그대로 남고 자동 전송하지 않습니다. `reply-recover`는 이를 `UNKNOWN`으로 확정하며 모의 전송을 재개하지 않습니다. 별도 본문/source 만료·무효화도 진행 중 시도를 `UNKNOWN`으로 차단합니다. 모든 `reply-*` 명령은 기존 전역 lease를 사용하므로 같은 데이터 디렉터리의 `slack-listen`이 실행 중이면 거부합니다. 답장 worker에는 네트워크·하위 프로세스·호스트 토큰 권한을 주지 않습니다.
+
+보관 정책은 계획을 만들 때 고정합니다.
+
+```sh
+pnpm harness reply-plan --body-retention-hours 24 --audit-retention-days 30 --data-dir /private/tmp/harness-reply-data
+```
+
+`--body-retention-hours`는 정수 1~168·기본 24입니다. 합성 source가 생성 후 24시간에 만료하므로 계획·본문은 설정값과 24시간 중 짧은 기한까지만 유효합니다. `--audit-retention-days`는 선택 정수 1~3650이며, 생략하면 `null`로 합성 감사 metadata를 DB 수명 동안 보관합니다. 이는 회사 운영 보관 정책이 아닙니다. 기간을 지정하면 terminal 작업의 감사 기한 뒤 metadata를 제거하되 최소 task ID·계획 해시 중복 marker는 DB 수명 동안 유지합니다.
+
+본문은 별도 payload에만 저장하고 승인 snapshot·시도·영속 보고서에 복제하지 않습니다. `reply-plan`·`reply-inspect`만 유효 본문을 stdout에 표시하며 사용자가 redirect한 출력은 사용자의 보관 정책을 따릅니다. 각 답장 명령 시작과 `reply-prune`에서 정리하므로 중지 중 만료 자료는 다음 실행까지 남을 수 있습니다. SQLite 논리 삭제는 디스크·백업의 물리적 완전 삭제를 보장하지 않습니다. 실제 Slack 전송·회사 자료·실제 문맥 최신성은 `not_run`이며 다음 별도 범위입니다. 상세 계획과 검증 범위는 [4-A 계획](docs/implementation-plan.md#단계-4-a-합성-답장-계획별도-승인모의-전송)과 [결과](docs/stage-4a-result.md)를 따릅니다.
 
 ## 모의 입력과 오류 재현
 
@@ -228,4 +273,4 @@ pnpm build
 
 `test`는 컴파일 후 Node 내장 test runner로 단위·통합·CLI 수용 테스트를 실행합니다. 합성 저장소는 별도 임시 경로에 준비합니다. 하네스 테스트가 통과해도 실제 Slack 권한·회사 보안·격리 실행기의 검증을 통과한 것은 아닙니다.
 
-전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1](docs/stage-1-result.md), [단계 2](docs/stage-2-result.md), [단계 3-A](docs/stage-3a-result.md), [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D 결과](docs/stage-3d-result.md)에 정리했습니다. 합성 실행 검증과 실제 Slack·회사 도입 승인을 구분합니다.
+전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1](docs/stage-1-result.md), [단계 2](docs/stage-2-result.md), [단계 3-A](docs/stage-3a-result.md), [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A 결과](docs/stage-4a-result.md)에 정리했습니다. 합성 실행·모의 전송 검증과 실제 Slack·회사 도입 승인을 구분합니다.

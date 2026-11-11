@@ -4,7 +4,7 @@
 
 이 문서는 `work-assistant-harness`의 구조와 단계별 설계를 설명한다. 실제 구현 경계는 아래 결과 문서로 구분하며, 후속 승인·실행 설계가 이미 사용 가능한 기능이라는 뜻은 아니다.
 
-2026-11-09에 단계 0·1의 합성 자료 기반 읽기 전용 CLI를, 2026-11-10에 단계 2의 Slack 수신과 단계 3-A~3-D의 로컬 승인·Docker 진단·독립 합성 실행·취소·중단 복구를 구현했다. 실제 구현과 검증 상태는 [stage-1-result.md](stage-1-result.md), [stage-2-result.md](stage-2-result.md), [stage-3a-result.md](stage-3a-result.md), [stage-3b-result.md](stage-3b-result.md), [stage-3c-result.md](stage-3c-result.md), [stage-3d-result.md](stage-3d-result.md)를 따른다. 실제 Slack·AI·회사 저장소를 실행 흐름에 연결하지 않는다.
+2026-11-09에 단계 0·1의 합성 자료 기반 읽기 전용 CLI를, 2026-11-10에 단계 2의 Slack 수신과 단계 3-A~3-D의 로컬 승인·Docker 진단·독립 합성 실행·취소·중단 복구를 구현했다. 2026-11-11의 후속 범위는 단계 4-A의 합성 답장 계획·별도 승인·모의 전송이다. 실제 구현과 검증 상태는 [stage-1-result.md](stage-1-result.md), [stage-2-result.md](stage-2-result.md), [stage-3a-result.md](stage-3a-result.md), [stage-3b-result.md](stage-3b-result.md), [stage-3c-result.md](stage-3c-result.md), [stage-3d-result.md](stage-3d-result.md), [stage-4a-result.md](stage-4a-result.md)를 따른다. 실제 Slack·AI·회사 저장소를 실행·전송 흐름에 연결하지 않는다.
 
 - 구현 순서와 상세 수용 기준: [implementation-plan.md](implementation-plan.md)
 - 권한과 승인 조건: [security-and-approval.md](security-and-approval.md)
@@ -145,6 +145,28 @@ execution-inspect → 한 DB snapshot의 Task·제어·승인 페이지·Run·li
 
 제어·조회만 전역 lease를 우회한다. 계획·승인·실행·복구는 전역 lease를 유지하므로 실제 Slack 수신과 합성 실행은 직렬화된다. 실제 Slack Task와 합성 요청을 연결하지 않으며 수신 공백 중 변경 감지도 보장하지 않는다.
 
+### 단계 4-A의 합성 답장 경로
+
+```text
+reply-plan → 고정 합성 요청·본문 → 본문 해시·목적지·revision·보관 정책 결합
+reply-inspect → 유효 본문·대상·계획 해시를 stdout에서 검토
+reply-approve → 로컬 OS 소유자·정확한 해시·필수 TTL → 전송 전용 승인
+reply-send → 정책·본문·source·승인 재검증
+  → 승인 소비 + SENDING 시도 원자 commit → 가짜 전송 어댑터 1회 호출
+  → SIMULATED / FAILED(NOT_SENT) / UNKNOWN
+reply-cancel / reply-invalidate → 요청·문맥 fence·미소비 승인 revoke
+reply-recover → 중단된 SENDING을 UNKNOWN으로 기록, 전송 재개 없음
+reply-prune / 각 명령 시작 → 만료 본문·설정된 terminal 감사 기록 정리
+```
+
+이 경로는 기존 조사 Task·코드 변경 승인·합성 실행 Run·Slack 수신 DB와 분리한다. 입력은 코드에 고정한 합성 요청과 일반 텍스트 요약이며 실제 Slack 이벤트·모델 응답·제품 저장소 경로·임의 본문을 받지 않는다. 목적지는 `W_LOCAL`·`C_ALLOWED`의 원래 요청 스레드뿐이다. DM·다른 채널·첨부·알림 멘션·코드 전문과 실제 Slack 쓰기 API는 제공하지 않는다.
+
+`replies.sqlite`에 답장 Task·본문 없는 계획/승인 snapshot·별도 만료 본문·전송 시도·제어 이벤트·최소 중복 marker를 저장한다. `ReplyStore`는 승인 생성·1회 소비·상태 변경·유효성 검사를 트랜잭션으로 수행한다. `MockReplyDeliveryPort`는 `mode: mock`인 가짜 어댑터 계약이며 실제 Slack 포트로 간주하지 않는다. 모든 답장 명령은 기존 전역 lease를 사용하므로 수신과 동시에 실행하지 않는다.
+
+승인은 현재 OS UID와 정확한 계획 해시·TTL 1~60분에 묶는다. 기본 TTL 없이 입력을 요구하며 본문·문맥 만료 이내로 제한한다. 본문·목적지·요청/문맥 revision 변경과 새 reply는 기존 승인을 무효화하고, 불완전·공백·만료·최신성 미확인은 전송을 막는다. `SIMULATED`는 외부 메시지 전송을 뜻하지 않는다. 확실한 미전송 `NOT_SENT`만 새 승인으로 수동 재시도하며 `UNKNOWN`과 중단된 `SENDING`은 재전송하지 않는다. 재시작 후 자동 전송이나 승인 소비 복원은 없다.
+
+본문은 기본 24시간이며 `bodyRetentionHours` 1~168시간과 source의 생성 후 24시간 기한 중 짧은 기한 뒤 제거하고 승인 snapshot·시도·영속 보고서에 복제하지 않는다. 유효 본문은 `reply-plan`·`reply-inspect`의 stdout에서만 보여 준다. 감사 metadata는 기본 DB 수명 동안 보관하거나 별도 1~3650일로 정하며, terminal 작업의 마지막 상태 갱신부터 해당 기간 뒤 감사 기록을 제거한 뒤에도 최소 task ID·계획 해시 marker를 유지한다. 정리는 명령 실행 시 수행하므로 중지 중 만료 자료는 다음 실행까지 남을 수 있고 물리적 완전 삭제를 보장하지 않는다. 자세한 정책과 실패 기준은 [단계 4-A 계획](implementation-plan.md#단계-4-a-합성-답장-계획별도-승인모의-전송)을 따른다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.
@@ -160,9 +182,10 @@ execution-inspect → 한 DB snapshot의 Task·제어·승인 페이지·Run·li
 | ApprovalService | 단계 3-A의 OS 소유자·계획·기준 커밋·만료·취소 검증과 기록용 승인. 합성 실행 승인은 별도 서비스가 담당 |
 | SandboxVerifier | 단계 3-B에서 로컬 Docker의 합성 probe·유효 정책·종료와 보호 경계를 확인. 대상 코드 실행 권한 없음 |
 | SyntheticExecutionService / IsolatedExecutionPort | 독립 합성 계획·새 승인·원자적 Run과 고정 실행, 단계 3-D의 취소·소유 container 복구·잔여 상태 관찰 |
+| SyntheticReplyService / ReplyStore / MockReplyDeliveryPort | 단계 4-A의 고정 합성 답장 계획·전송 전용 승인·원자 소비·모의 결과·무효화·명시적 복구·본문/감사 보관 |
 | TaskStore / Reporter | 상태·감사 기록 저장과 로컬 보고 |
 
-외부 기능은 `MessageSource`, `ModelPort`, `RepoReadPort`, `ExecutionPort`, `ApprovalPort`, `ReportSink`로 나눈다. 모의 조사는 `MockSlackSource`, `FixtureModel`, 제한된 로컬 저장소 읽기와 로컬 보고를 사용한다. 단계 3-A는 로컬 승인 기록, 단계 3-B는 `SandboxVerificationPort`의 고정 probe, 단계 3-C는 `ExecutionStore`·`IsolatedExecutionPort`의 독립 합성 실행을 제공한다. 실제 Slack 요청·모델·제품 저장소와 실행 흐름의 연결은 제공하지 않는다.
+외부 기능은 `MessageSource`, `ModelPort`, `RepoReadPort`, `ExecutionPort`, `ApprovalPort`, `ReportSink`로 나눈다. 모의 조사는 `MockSlackSource`, `FixtureModel`, 제한된 로컬 저장소 읽기와 로컬 보고를 사용한다. 단계 3-A는 로컬 승인 기록, 단계 3-B는 `SandboxVerificationPort`의 고정 probe, 단계 3-C는 `ExecutionStore`·`IsolatedExecutionPort`의 독립 합성 실행을 제공한다. 단계 4-A는 독립 `ReplyStore`·`MockReplyDeliveryPort`를 사용한다. 실제 Slack 요청·모델·제품 저장소와 실행·전송 흐름의 연결은 제공하지 않는다.
 
 특정 Codex SDK나 CLI를 필수 전제로 도메인 코드를 묶지 않는다. 실제 실행기를 선택할 때 해당 버전의 공식 문서, 인증과 권한 조건을 검증한다.
 
@@ -203,6 +226,7 @@ work-assistant-harness/
 - **Slack inbox / collection:** 이벤트 중복 키, 원본 메시지·revision, 수집 상태, 마스킹한 최소 문맥, 보관 만료와 분석 미실행 사유. 기존 Task의 조사 상태와 구분한다.
 - **Sandbox verification:** 정책·daemon·이미지 identity, probe별 결과와 실패 사유, 보호 영역 전후 상태와 종료·제거 확인. `sandbox-checks/<verificationId>/report.json`에 저장하며 Task·Approval·Run과 연결하지 않는다.
 - **Synthetic execution:** 별도 `execution.sqlite`에 실행용 Task·정확한 patch/명령/정책 계획·불변 승인·원자 소비와 Run을 저장한다. 작업물과 완료 보고서는 `executions/<task-id>/`에 보존한다. 기존 조사 승인과 혼용하지 않는다.
+- **Synthetic reply:** 별도 `replies.sqlite`의 답장 Task·본문 해시/목적지/revision/정책 계획·본문 없는 승인 snapshot·1회 소비와 전송 시도·제어 이벤트·보관 정책. 본문은 별도 만료 payload에만 저장하고 최소 중복 marker는 DB 수명 동안 유지한다.
 
 ```text
 RECEIVED → TRIAGED → ANALYZED
@@ -217,6 +241,12 @@ RECEIVED → TRIAGED → ANALYZED
 [단계 3-C·3-D 독립 합성 실행]
 AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED / CANCELLED / INTERRUPTED
         취소·무효화 → CANCELLED
+
+[단계 4-A 독립 합성 답장]
+AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
+        소유자 취소 → CANCELLED, 요청/문맥 변경·불완전·공백·만료 → BLOCKED
+        SENDING 무효화 → UNKNOWN
+        NOT_SENT인 FAILED만 새 승인 후 수동 재시도
 ```
 
 상태 변경은 트랜잭션으로 처리하고 이벤트 중복과 승인 재사용을 데이터베이스 제약으로 막는다. 재시작 후 기록을 복구하되, 중단된 변경을 자동 재실행하지 않는다. `REPORTED`는 보고가 끝났다는 뜻이며 모든 검사가 통과했다는 뜻이 아니다.
@@ -236,7 +266,8 @@ AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED / CA
 | 3-B | 실제 격리 backend 선정·실증 | 호스트·승인 DB·공유 Git 보호, 네트워크·자원·프로세스 제한을 실제 실패 테스트로 검증 |
 | 3-C | 고정 합성 patch·명령 사양·허용 검사 | 새 실행 승인 소비, 계획·커밋·revision·정책 변경과 범위 초과 차단 |
 | 3-D | 실행 취소·복구와 실제 diff 보고 | 요청 무효화·crash 경합 처리, 자동 재실행 없음, 승인·Run·잔여 작업물 보존 |
-| 4 | 답장, push·PR, Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증 |
+| 4-A | 합성 답장 계획·별도 승인·모의 전송·무효화·복구·보관 | 승인한 대상/본문만 모의 호출, 중복·불확실 재전송 차단, 실제 외부 전송 0 |
+| 4-B 이후 | 실제 Slack 답장, push·PR, Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-A 승인 범위 밖 |
 
 기존 `ExecutionPort`의 항상 거부 동작과 외부 메시지 전송 차단을 유지하며 합성 실행만 별도 명령으로 연다. 기존 `approve`·`cancel`과 합성 계획·승인·실행·복구는 전역 lease를 유지한다. 합성 실행의 취소·무효화·조회는 실행 DB의 짧은 트랜잭션으로 전달한다. 실제 Slack 수신과 실행은 직렬화하며 수신 공백의 변경 감지는 보장하지 않는다. 단계 3의 작업 트리는 작업 분리 수단이며 Docker 격리 환경을 대신하지 않는다.
 

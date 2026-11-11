@@ -4,7 +4,7 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 핵심 방향은 Slack에서 나를 부른 메시지를 모아 저장소를 읽고, 답변 초안이나 수정 계획을 나에게 보여 주는 것이다. 코드 변경은 내가 승인한 뒤에만 격리된 작업 공간에서 수행한다. 첫 버전은 실제 회사 계정 없이 로컬에서 검증할 수 있게 만든다.
 
-현재 구현 상태: 단계 0·1의 모의 조사, 단계 2의 수신·오프라인 검증, 단계 3-A의 로컬 승인, 단계 3-B의 Docker 격리 진단과 단계 3-C의 독립 합성 실행에 이어 2026-11-10에 단계 3-D의 합성 요청 무효화·취소·crash 복구·잔여 상태 관찰을 구현했다. 실제 검증은 [단계 3-B](stage-3b-result.md), [단계 3-C](stage-3c-result.md), [단계 3-D 결과](stage-3d-result.md)에 기록한다. 기존 조사 Task와 `approval-only-v1`은 실행에 연결하지 않으며 실제 Slack·AI·회사 저장소도 연결하지 않았다. 기존 범위는 [단계 1](stage-1-result.md), [단계 2](stage-2-result.md), [단계 3-A 결과](stage-3a-result.md), 현재 명령은 [README](../README.md)를 따른다. 회사 도입과 단계 4 선택 기능은 별도 범위다. 아래 범용 실행 명령 예시는 구현 제안이다.
+현재 구현 상태: 단계 0·1의 모의 조사, 단계 2의 수신·오프라인 검증, 단계 3-A의 로컬 승인, 단계 3-B의 Docker 격리 진단과 단계 3-C의 독립 합성 실행에 이어 2026-11-10에 단계 3-D의 합성 요청 무효화·취소·crash 복구·잔여 상태 관찰을 구현했다. 2026-11-11의 후속 요청 범위는 아래 단계 4-A의 합성 답장 계획·별도 승인·모의 전송이며, 구현·검증 상태는 [4-A 결과](stage-4a-result.md)에 기록한다. 실제 검증은 [단계 3-B](stage-3b-result.md), [단계 3-C](stage-3c-result.md), [단계 3-D 결과](stage-3d-result.md)에 기록한다. 기존 조사 Task와 `approval-only-v1`은 실행에 연결하지 않으며 실제 Slack·AI·회사 저장소도 연결하지 않았다. 기존 범위는 [단계 1](stage-1-result.md), [단계 2](stage-2-result.md), [단계 3-A 결과](stage-3a-result.md), 현재 명령은 [README](../README.md)를 따른다. 회사 도입과 실제 외부 전송은 별도 범위다. 아래 범용 실행 명령 예시는 구현 제안이다.
 
 ### 하네스가 맡을 역할
 
@@ -189,6 +189,52 @@ Socket Mode의 app-level 토큰에는 연결용 `connections:write`를 사용한
 
 안정화 후에만 요청자 답장, push와 PR, 회사 Gmail과 Calendar와 Drive를 각각 독립 기능으로 검토한다. 인증, 데이터 범위, 전송 대상, 승인 방식을 기능별로 정의한다. 초기 MVP를 완성하기 위한 필수 조건은 아니다.
 
+#### 단계 4-A 합성 답장 계획·별도 승인·모의 전송
+
+2026-11-11에 사용자가 권장 정책과 이 단계의 구현을 승인했다. 이는 하네스 기능의 개발 범위이며 실제 Slack 메시지 전송이나 회사 자료 처리의 승인이 아니다. 단계 0·1을 첫 범위로 정한 지침은 유지하고, 이 후속 요청만 합성 모의 전송으로 확장한다.
+
+**목적과 데이터 흐름:** 고정 합성 요청과 일반 텍스트 답장 요약으로 계획을 만든 뒤, 로컬 소유자가 대상·본문·계획 해시를 검토하고 전송 전용 승인을 내린다. SQLite에서 승인 소비와 전송 시도를 원자 저장한 뒤 가짜 어댑터를 한 번 호출한다. 실제 Slack 수신 기록, 조사 Task, 모델 출력과 제품 저장소를 입력으로 연결하지 않는다.
+
+```text
+reply-plan → 고정 합성 요청·요약·원래 스레드 → AWAITING_APPROVAL / BLOCKED
+reply-inspect → 대상·유효 본문·planHash·상태·승인/시도 이력 검토
+reply-approve → OS 소유자·planHash·TTL·본문/문맥 확인 → APPROVED
+reply-send → 동일 조건 재검증 → 승인 소비 + SENDING 시도 원자 commit
+  → 가짜 어댑터 → SIMULATED / FAILED(NOT_SENT) / UNKNOWN
+reply-cancel / reply-invalidate → 무효화·미소비 승인 취소
+reply-recover → 남은 SENDING을 UNKNOWN으로 확정, 재전송 없음
+reply-prune / 각 명령 시작 → 만료 본문·설정된 감사 기록 정리
+```
+
+**채택한 정책:**
+
+| 항목 | 단계 4-A 기준 |
+| --- | --- |
+| 대상 | 합성 `W_LOCAL`·`C_ALLOWED`에서 원래 요청의 스레드에 단건 답장만 허용한다. 다른 채널·DM·임의 수신자는 입력으로 열지 않는다. |
+| 본문 | 코드에 고정한 일반 텍스트 요약만 사용한다. 임의 본문·회사 자료·모델 출력·코드 전문·첨부·알림 멘션은 입력으로 받지 않는다. |
+| 승인 | `process.getuid()`의 `os-user:<uid>`가 정확한 `planHash`와 필수 TTL 1~60분을 제출한다. 기본 TTL은 없고 권장값은 30분이다. 승인 만료는 본문과 원문 문맥의 유효기한을 넘지 못한다. |
+| 문맥 | 대상·본문·요청 revision·문맥 revision 변경은 기존 승인을 무효화한다. 새 reply는 재검토하며 불완전 수집·수신 공백·만료·최신 여부 미확인은 승인과 전송을 차단한다. 4-A는 이를 합성 이벤트로 검증하며 실제 Slack 최신성은 보장하지 않는다. |
+| 재시도 | 자동 재시도는 없다. 확실한 미전송은 시도 `NOT_SENT`·Task `FAILED`로 남기며 새 승인 후에만 수동 재시도할 수 있다. `UNKNOWN`과 중단된 `SENDING`은 재전송하지 않는다. |
+| 보관 | 본문은 기본 24시간(`bodyRetentionHours` 1~168)이며 source의 생성 후 24시간 기한과 비교해 짧은 기한 뒤 제거한다. 감사 보관은 별도 `auditRetentionDays`로 정하며, 미지정 `null`은 합성 감사 metadata를 DB 수명 동안 보관한다. 1~3650일을 명시하면 terminal 작업의 마지막 상태 갱신부터 해당 기간 뒤 기록을 제거하되 최소 task ID·계획 해시 중복 marker는 DB 수명 동안 남긴다. 이 기본값은 회사 운영 보관 정책이 아니다. |
+
+**계획과 승인 계약:** `ReplyPlan`에 합성 정책 `synthetic-reply-v1`·`mode: mock`, 소유자, 원래 요청 identity와 요청/문맥 revision·완전성·공백·만료, 정확한 목적지, 본문 해시·바이트 수, 생성·만료 시각과 보관 정책을 묶는다. 본문은 별도 만료 payload에만 저장하고 승인 snapshot·전송 시도·로컬 영속 보고서에 복제하지 않는다. `reply-plan`·`reply-inspect`만 유효 본문을 stdout에 표시하며 사용자가 redirect한 출력은 사용자의 보관 정책을 따른다. 승인 snapshot은 본문 없는 불변 계획이다. 기존 코드 변경 승인과 실행 승인을 전송에 재사용하지 않는다.
+
+**상태·중복·복구 계약:** 별도 `replies.sqlite`에서 Task·계획 metadata·만료 본문·승인·시도·제어 이벤트·최소 중복 marker를 관리한다. 승인 삽입과 `APPROVED`, 승인 1회 소비와 `SENDING` 전환/시도 생성은 각각 한 트랜잭션이다. 취소·편집·삭제·새 reply·공백·불완전·만료는 generation fence와 요청/문맥 revision으로 오래된 승인을 차단한다. 같은 제어 이벤트 ID·payload는 멱등 처리하고 다른 payload 재사용은 거부한다. 완료한 전송 결과를 늦은 제어 이벤트로 다시 열지 않는다. 가짜 어댑터의 불확실한 결과·예외는 `UNKNOWN`으로 남긴다. 프로세스가 `SENDING`에서 중단되면 유효 문맥 동안 상태를 유지하고 명시적 복구로 `UNKNOWN`을 확정한다. 별도 만료·무효화도 진행 중 시도를 `UNKNOWN`으로 막는다. 승인 소비는 되돌리지 않으며 시작 시 자동 전송·복구 호출·재전송을 하지 않는다. 모든 `reply-*` 명령은 기존 전역 lease를 사용하며 실제 Slack 수신과 동시에 동작하지 않는다.
+
+**보관 실행과 한계:** 시작과 각 답장 명령에서 만료 자료를 정리하며 `reply-prune`을 수동 실행할 수 있다. 프로그램이 멈춰 있는 동안에는 다음 실행까지 만료 본문이 DB에 남을 수 있다. SQLite 논리 삭제는 백업·파일시스템·디스크의 물리적 완전 삭제를 보장하지 않는다. 감사 보관 기한을 설정해도 진행 중 작업은 삭제하지 않고, 최소 중복 marker와 DB 폐기 정책은 별도로 관리한다.
+
+**완료 기준:** 수용 테스트 15·16과 37~44를 합성 데이터로 검증한다. 계획·승인·전송·취소·무효화·복구·정리 명령과 경계 실패를 검증하고, 네트워크·실제 Slack 쓰기·제품 파일 변경·Git 원격 작업이 0인지 확인한다. 실제 Slack 토큰·전송·AI·회사 저장소 연결과 회사 보안 검토는 `not_run`이다.
+
+**검증 상태:** 최종 회귀 301개(기존 271개 + 신규 30개), lint·typecheck·build가 통과했다. 실제 child-process 강제 종료·새 프로세스 복구·동시 승인 소비·본문 보관·제한 worker의 파일/child/TCP 차단 근거와 실제 외부 연결의 `not_run` 범위는 [4-A 결과](stage-4a-result.md)에 기록한다.
+
+#### 후속 단계의 별도 범위
+
+- 4-B 후보: 기본 비활성 실제 Slack 전송 어댑터. 회사 승인·자격증명·최소 쓰기 권한·목적지·실제 문맥 최신성·불확실 전송 처리를 먼저 정하고 승인된 테스트 환경에서 검증한다.
+- 4-C 후보: commit 준비·push·PR을 각각 구분하고 원격·브랜치·diff·PR 본문의 별도 승인을 설계한다.
+- 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
+
+4-B~4-D는 진행 순서 제안이며 4-A의 구현 승인에 포함되지 않는다.
+
 ## 3 구조와 데이터 모델
 
 NestJS는 조립과 설정에 쓰고, 상태 전이와 승인 규칙은 외부 서비스에 의존하지 않는 TypeScript 코드로 둔다. 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조면 충분하다.
@@ -215,6 +261,7 @@ MessageSource, ModelPort, RepoReadPort, ExecutionPort, ApprovalPort, ReportSink�
 - Plan: planId, version, 원문 revision, 목적, 허용 파일과 변경 범위, testCommandIds, 위험, planHash.
 - Approval: approvalId, ownerId, taskId, planHash, baseCommit, 허용 동작, 만료 시각, 사용 시각, 취소 여부.
 - Evidence와 Run: 파일 경로와 줄, 커밋, diff 요약, 검사별 passed 또는 failed 또는 not\_run, 실패 사유.
+- 합성 답장: 별도 `replies.sqlite`의 `ReplyTask`, 본문 없는 `ReplyPlan`·승인 snapshot, 별도 만료 본문, 전송 시도·제어 이벤트와 최소 중복 marker. 기존 코드 승인·실행 Run·Slack inbox를 재사용하지 않는다.
 
 ### 상태 전이
 
@@ -230,6 +277,8 @@ RECEIVED → TRIAGED → ANALYZED
 상태는 데이터베이스 트랜잭션으로 바꾼다. 이벤트 ID와 승인 사용 기록에는 유일성 제약을 둔다. 재시작은 기록 복구이지, 중단된 수정 작업의 자동 재실행 허가가 아니다.
 
 단계 3-A는 `APPROVED`까지 저장하고 실행하지 않는다. 승인 만료는 취소 기록을 남긴 뒤 `APPROVED → AWAITING_APPROVAL`, 로컬 취소와 요청 무효화는 `CANCELLED`로 전환한다. 불변 승인 스냅샷과 `approval-only-v1` 정책은 Task와 별도로 보존한다. 단계 3-C·3-D의 독립 합성 실행은 별도 `execution.sqlite`에서 `AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED / CANCELLED / INTERRUPTED`와 새 `synthetic-execution-v1` 승인·Run·요청 무효화/lifecycle 기록을 관리한다. 기존 조사 상태 전이와 혼용하지 않는다.
+
+단계 4-A는 `replies.sqlite`에서 `AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN`을 별도 관리한다. 대기 중 소유자 취소는 `CANCELLED`, 요청/문맥 변경·불완전·공백·만료는 `BLOCKED`이며 `SENDING`의 무효화는 `UNKNOWN`으로 차단한다. `NOT_SENT`로 확인된 `FAILED`만 새 승인으로 수동 재시도하며 `SIMULATED`·`UNKNOWN`은 재전송하지 않는다. 중단된 `SENDING`은 문맥이 유효하면 명시적 복구 전까지 그대로 보존한다.
 
 ## 4 승인과 실행 경계
 
@@ -393,7 +442,7 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 12 | 승인된 수정과 테스트 | 별도 worktree만 변경. 결과와 실제 diff가 일치. |
 | 13 | 테스트 실패 또는 미실행 | failed와 not\_run을 구분하고 성공으로 표시하지 않음. |
 | 14 | 실행 중 취소와 프로세스 재시작 | 자동 재실행 없음. 중단 상태와 잔여 diff 보존. |
-| 15 | Slack 답장과 push와 PR 시도 | 별도 승인 없이 전송 또는 원격 변경 없음. |
+| 15 | Slack 답장과 push와 PR 시도 | 별도 승인 없이 전송 또는 원격 변경 없음. 4-A의 별도 승인은 모의 전송에만 유효하며 실제 Slack 쓰기·push·PR 차단은 유지. |
 | 16 | 토큰과 환경변수와 로그 검사 | Git 추적 파일과 모델 입력 및 보고서에 비밀 없음. |
 | 17 | 같은 eventId가 다른 envelopeId로 전달됨 | inbox·수집 결과는 하나이며 전달별 ACK. ACK에 업무 답변 payload 없음. |
 | 18 | inbox 저장 실패·포화·commit 후 ACK 실패 | 미보관 새 메시지는 성공 ACK 없음. 포화 편집은 무효화·BLOCKED를 commit 후 ACK하고 수집 생략. commit 이벤트는 재전달·재시작에도 중복 수집 없음. |
@@ -415,6 +464,14 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 34 | 고정 합성 patch 계약 (3-C) | 원본 해시·허용 파일·지원 파일 동작 검증. 범위 초과·미지원 파일 동작·경로 탈출을 적용 전에 거부. |
 | 35 | 명령·실행 정책 변경 (3-C) | 실행 파일·argv·cwd·환경·네트워크·한도·정책 버전이 승인에 결합. 변경 시 재승인, approval-only-v1 재사용 불가. |
 | 36 | 실행 중 무효화·취소·crash (3-D) | 승인 소비 전후·patch·검사 중 변경과 종료를 검증. 프로세스 트리 종료, 자동 재실행 없음, 불변 승인·Run·잔여 diff 보존과 정확한 결과 보고. |
+| 37 | 합성 답장 대상·본문·정책 경계 (4-A) | 원래 합성 workspace/channel/thread의 고정 일반 텍스트 단건 계획만 허용. 다른 목적지·임의 본문·멘션·첨부·코드 전문·다른 모드·정책·변조 해시 거부. 실제 Slack·모델·저장소 입력과 네트워크 없음. |
+| 38 | 답장 별도 승인·TTL (4-A) | OS UID 소유자·정확한 planHash·필수 정수 TTL 1~60분 확인. 기본값 없음. 승인 만료는 본문/source 만료 이내. 다른 소유자·UID 미지원·활성 중복·기존 코드 승인·만료/취소 승인으로 전송 불가. |
+| 39 | 승인 소비와 중복 전송 경합 (4-A) | 승인 소비·SENDING 시도·Task 전환이 원자적. 같은 승인으로 가짜 어댑터를 두 번 호출하지 않고 저장 실패 때 전송 0. SIMULATED 결과·승인 usedAt 보존. |
+| 40 | 요청·문맥 변경·취소 (4-A) | 편집·삭제·새 reply·본문/목적지/revision 변조 뒤 기존 승인 차단. 불완전·공백·만료는 승인/전송 불가. 이벤트 중복·다른 payload·역순 revision과 전송 제어 경합에서도 오래된 계획 재사용 없음. |
+| 41 | 미전송 실패와 불확실 결과 (4-A) | 확실한 미전송은 NOT_SENT/FAILED·자동 재시도 0이며 새 승인으로만 수동 재시도. UNKNOWN은 새 승인·재전송 금지. 원시 어댑터 오류·민감값 비노출. |
+| 42 | SENDING 중단·재시작·명시적 복구 (4-A) | 새 프로세스가 자동 전송하지 않고 유효 문맥의 SENDING을 보존. reply-recover가 UNKNOWN으로 확정하며 반복 복구 멱등·소비 승인 복원 없음·이후 재전송 금지. 별도 만료·무효화도 진행 중 시도를 UNKNOWN으로 차단. |
+| 43 | 본문·감사 보관과 만료 후 재생성 (4-A) | 기본 본문 24h·1~168h와 별도 감사 null/1~3650일 검증. 본문은 별도 payload만 존재하고 snapshot·attempt·영속 보고서에 복제 없음. 만료 승인 취소·본문 제거·terminal 감사 정리 뒤 최소 marker로 같은 task ID 재생성 거부. |
+| 44 | 답장 CLI·저장 경계와 회귀 (4-A) | 실제 명령·옵션·출력과 소유자·lease·private DB 경계를 검증. plan/inspect 외 stdout에 본문 없음. 기존 조사/실행/Slack 수신 승인과 DB 분리, 대상 전후 상태 불변과 실제 외부 전송 0 유지. |
 
 ### 최종 검증 묶음
 

@@ -12,6 +12,7 @@ import { acquireRuntimeLease, assertSafeEventFile, defaultDataDirectory, isInsid
 import { runSlackCommand, slackUsage } from './slack.js';
 import { runSandboxCheckCommand, sandboxUsage } from './sandbox.js';
 import { executionUsage, runExecutionCommand } from './execution.js';
+import { replyUsage, runReplyCommand } from './reply.js';
 
 const scenarios = new Set([
   'inquiry', 'change', 'unclear', 'invalid-json', 'invalid-summary', 'hallucinated-file',
@@ -145,10 +146,11 @@ const run = async (): Promise<void> => {
   }
 };
 
-if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n`);
-else (process.argv[2]?.startsWith('execution-') ? runExecutionCommand(process.argv.slice(2))
+if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${replyUsage}\n`);
+else (process.argv[2]?.startsWith('reply-') ? runReplyCommand(process.argv.slice(2))
+  : process.argv[2]?.startsWith('execution-') ? runExecutionCommand(process.argv.slice(2))
   : process.argv[2] === 'sandbox-check' ? runSandboxCheckCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('slack-') ? runSlackCommand(process.argv.slice(2)) : run()).catch((error: unknown) => {
-  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n`);
+  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${replyUsage}\n`);
   process.exitCode = 1;
 });
