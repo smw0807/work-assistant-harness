@@ -8,6 +8,8 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 2026-11-12에는 단계 4-C-1의 오프라인 브랜치 계획·별도 승인·모의 실행·제어·복구를 추가했다. 실제 Codex와 Git 작업은 연결하지 않으며 [4-C-1 결과](stage-4c1-result.md)에 검증 상태를 기록한다.
 
+후속 4-C-2는 독립 합성 Git 저장소에 별도 승인으로 실제 ref 하나를 생성하고 관찰·복구하는 경로다. 실제 Codex·회사 저장소·코드 변경·작업 결과 commit·원격 작업은 연결하지 않는다. 최종 검증 상태는 [4-C-2 결과](stage-4c2-result.md)를 따른다.
+
 ### 하네스가 맡을 역할
 
 하네스는 AI 모델 자체가 아니라 모델 주변의 실행 프로그램이다. 어떤 메시지를 받을지, 어떤 자료를 읽힐지, 어느 작업에서 멈출지, 누가 승인할지, 결과를 어디에 보관할지를 정한다. 모델은 해석과 추론을 맡고, 권한과 실행 여부는 일반 코드가 결정한다.
@@ -317,9 +319,38 @@ branch-recover → 중단된 SIMULATING을 UNKNOWN으로 확정
 
 **검증 상태:** 최종 회귀 397개(기존 367개 + 신규 30개), lint·typecheck·build가 통과했다. 실제 child 강제 종료·새 프로세스 복구, 원자 소비 경합·rollback과 제한 worker 검증을 포함한다. 실제 Git/Codex 작업은 `not_run`이며 모의 성공을 실제 연결 검증으로 해석하지 않는다.
 
+#### 단계 4-C-2 합성 Git 브랜치 생성·관찰·복구
+
+이번 범위는 **하네스가 새로 준비한 독립 합성 Git 저장소에 작업 유형별 브랜치 ref 하나를 생성하고 보존·충돌·중단 복구를 검증하는 것**이다. 4-C-1의 모의 경로는 유지한다. 회사 저장소·사용자의 기존 저장소·실제 Codex를 입력으로 받지 않는다. checkout·코드 수정·검사 스크립트 실행·작업 결과 commit·push·PR/MR 생성은 제공하지 않는다. fixture를 준비하며 만드는 고정 초기 커밋은 승인 후 작업 결과를 commit하는 기능과 구분한다.
+
+```text
+git-branch-plan --type <feature|fix|chore|refactor>
+  → 비공개 합성 source/workspace 초기화·소유 manifest·실제 기준 커밋/트리 hash
+  → <type>/task-<task-id> 계획 → AWAITING_APPROVAL
+git-branch-approve → OS 소유자·hash·TTL·source/workspace·ref 부재 재검증 → APPROVED
+git-branch-create → 재검증 → 승인 소비+RUNNING+claimed 원자 저장
+  → writing 기록 → 동기 DB guard의 generation 확인·배타적 ref 생성
+  → created 기록·전후 관찰 → finished / SUCCEEDED 또는 실패 상태
+git-branch-inspect → 저장된 계획·승인·시도 조회, RUNNING 자동 재개 없음
+git-branch-cancel → 미소비 승인 취소 또는 RUNNING의 generation fence
+git-branch-recover → 소유 작업 영역 관찰 → INTERRUPTED / CANCELLED / BLOCKED
+```
+
+- 새 정책 `local-synthetic-branch-v1`·`mode: local-synthetic`·`operation: create-branch`와 별도 `git-branches.sqlite`를 사용한다. 기존 4-C-1 계획·승인·receipt와 조사·실행·Slack 승인을 재사용하지 않는다. 유형과 private data directory 외에 임의 저장소·브랜치·원격·명령·patch 입력은 받지 않는다.
+- `<data-dir>/git-branches/<task-id>/`에 소유 manifest와 `source/`, `workspace/`를 배타적으로 준비한다. 두 저장소는 코드에 고정한 합성 파일·작성자·시각·초기 커밋을 각각 생성하며 `.git`·객체·hardlink를 공유하지 않는다. 작업 영역을 기존 저장소에서 복사하지 않고 같은 ID의 기존 경로도 초기화하지 않는다.
+- source는 디렉터리 `0555`·파일 `0444`로 동결한다. workspace도 같은 기본 권한을 사용하고 `.git/refs/heads`와 새 유형 디렉터리만 `0700`, 새 ref만 `0600`으로 둔다. `HEAD`와 `main`은 기준 커밋에 유지한다. 승인 후 바뀔 수 있는 것은 계획한 loose ref와 그 유형 디렉터리뿐이다.
+- 계획은 작업 유형·브랜치명·OS UID·정확한 작업 root·소유 token·실제 기준 커밋·source/workspace hash·정책·24시간 유효기한에 결합한다. 승인은 정확한 hash와 기본값 없는 정수 TTL 1~60분을 받고 계획 만료를 넘지 않는다. 승인과 생성 직전에 소유·기준·모든 경계와 ref 부재를 확인한다. 같은 OID의 기존 ref도 생성 충돌이며 덮어쓰지 않는다.
+- 동기 관찰은 고정된 파일 트리의 경로·소유자·권한·일반 파일·symlink/hardlink·엔트리 수·총 바이트를 먼저 검사한 뒤 제한된 읽기를 수행한다. 예상 밖 파일 이름·본문은 결과에 넣지 않는다. workspace hash에서는 계획한 ref와 선택적인 유형 디렉터리만 제외하며 원래 파일·Git metadata·main·HEAD는 보존해야 한다. 빈 유형 디렉터리는 `absent`, 정확한 ref는 `created`, 부분 파일·다른 OID·검증 실패는 `unsafe`다.
+- 승인 소비·`RUNNING`·최초 `claimed` 기록은 원자적이다. `writing` 단계와 `writeStartedAt`을 ref 생성 전에 기록하고, 생성 뒤 `created`·`refCreatedAt`, 완료 뒤 `finishedAt`과 관찰 결과를 보관한다. 짧은 동기 guard 안에서 generation을 다시 확인하고 `wx`에 해당하는 배타적 생성과 `O_SYNC` 동기 쓰기 요청을 수행한다. 제한 worker에서 허용되지 않는 `fsyncSync`를 위해 권한을 넓히지 않는다. 검증 범위는 프로세스 중단 복구이며 디렉터리 fsync나 OS·전원 장애 내구성까지 보장하지 않는다. 작업당 시도는 한 번이며 실패·중단 뒤 소비를 복원하지 않는다.
+- 대기 상태 취소는 승인 취소와 `CANCELLED`를 함께 저장한다. `RUNNING` 취소는 먼저 generation fence를 세우고 이미 만든 ref는 유지한다. 명시 복구는 소유 manifest·계획·영속 단계·현재 파일을 대조한다. 정확한 ref가 있더라도 중단을 성공으로 소급하지 않고 `INTERRUPTED`, 취소가 기록되어 있으면 `CANCELLED`, 경계가 불확실하면 `BLOCKED`로 보고한다. 재생성·재시도·수리·ref 삭제는 하지 않는다.
+- 모든 CLI 명령은 data directory 전역 lease로 직렬화한다. 실행 중 별도 CLI 취소는 같은 lease와 경합하므로 실시간 인터럽트 기능으로 설명하지 않는다. 제한 worker는 하네스 읽기와 private data directory 쓰기만 받고 네트워크·child·추가 worker·상속 토큰을 받지 않는다. source 동결·소유 확인·Node 권한은 신뢰하는 하네스와 같은 OS 사용자 안의 경계이며 악성 코드용 sandbox가 아니다.
+- 합성 repository·계획·승인·시도·관찰 기록은 보존하며 자동 삭제나 보관 만료 정책을 추가하지 않는다. 기존 사용자 작업과 회사 자료는 연결하지 않는다.
+
+**완료:** 아래 수용 71~80을 포함한 전체 회귀 442개와 lint·typecheck·build가 통과했다. [4-C-2 결과](stage-4c2-result.md)에 근거와 한계를 기록했다. 실제 Codex·회사 저장소·코드 변경·작업 결과 commit·원격 작업은 `not_run`으로 분리한다.
+
 #### 후속 단계의 별도 범위
 
-- 4-C 후속 후보: 4-C-1의 오프라인 계약 이후, 승인·격리 조건을 갖춘 대상 저장소의 실제 브랜치 작업 연결을 별도 계획으로 설계한다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
+- 4-C 후속 후보: 4-C-1의 오프라인 계약과 4-C-2의 독립 합성 브랜치 생성 이후, 승인·격리 조건을 갖춘 실제 Codex·대상 저장소 작업 연결을 별도 계획으로 설계한다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 
 4-C·4-D는 진행 순서 제안이며 4-B-2의 구현·단건 게시 승인에 포함되지 않는다.
@@ -336,7 +367,7 @@ branch-recover → 중단된 SIMULATING을 UNKNOWN으로 확정
 - 계획에 작업 유형·브랜치 이름·기준 브랜치와 커밋·허용 diff 범위를 명시한다. 유효한 수정 승인과 검증된 격리 환경을 확인한 뒤, 기준 커밋에서 `<type>/<short-description>` 형태의 작업 브랜치를 생성하고 해당 브랜치에서만 수정한다. 기준 브랜치를 직접 수정하지 않는다.
 - 기존 사용자 변경과 같은 이름의 브랜치를 덮어쓰거나 초기화하지 않는다. 재시작 시 같은 작업의 브랜치인지 확인하며, 다른 작업과 충돌하면 계획을 조정한다. 승인에 묶인 브랜치·기준 커밋·변경 범위가 달라지면 재승인한다.
 - Codex에는 허용된 수정·검사와 로컬 브랜치·diff·결과 보고까지만 지시한다. PR/MR 생성 경로를 제공하지 않으며, commit·push는 코드 수정 승인에서 분리한다. push에는 실제 원격·브랜치·커밋·diff를 검토한 별도 승인이 필요하다.
-- 4-C-1은 이 규칙의 오프라인 계획·승인·모의 결과만 검증한다. 실제 Codex 실행 연결·브랜치 생성·Git 원격 작업은 아직 구현되지 않았다. 실제 연결 전에는 작업 유형별 브랜치 선택, 승인 전 무변경, 기준 브랜치 보존, 이름 충돌·재시작, 승인 후 계획 변경, PR/MR 호출 없음과 미승인 push 차단을 검증한다. 기존 합성 검증 결과를 실제 연결의 검증으로 재사용하지 않는다.
+- 4-C-1은 오프라인 계획·승인·모의 결과를, 4-C-2는 독립 합성 저장소의 실제 ref 생성·보존·복구를 다룬다. 실제 Codex 실행 연결·회사 대상 저장소 변경·Git 원격 작업은 아직 구현되지 않았다. 실제 연결 전에는 작업 유형별 브랜치 선택, 승인 전 무변경, 기준 브랜치 보존, 이름 충돌·재시작, 승인 후 계획 변경, PR/MR 호출 없음과 미승인 push 차단을 해당 환경에서 검증한다. 기존 합성 검증 결과를 실제 연결의 검증으로 재사용하지 않는다.
 
 ## 3 구조와 데이터 모델
 
@@ -603,6 +634,16 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 68 | 중단·새 프로세스 복구 (4-C-1) | 실제 child 강제 종료 후 SIMULATING/소비 승인 보존, 시작·조회 자동 실행 없음. 명시적 recover로 UNKNOWN 확정, 반복 복구 멱등과 재승인·재실행 차단. |
 | 69 | CLI·worker·파일 경계 (4-C-1) | 실제 명령/필수 옵션·전역 lease·비공개 DB/sidecar·symlink/hardlink·출력 제한, worker의 네트워크/child/호스트 토큰 차단 검증. |
 | 70 | 외부 효과 없음과 회귀 (4-C-1) | 별도 합성 대상의 전후 파일/Git 상태 동일. 실제 저장소·Codex·Git 원격 호출 없음, commit/push/PR/MR 명령 없음, 기존 조사·실행·Slack 경계 유지. |
+| 71 | 독립 합성 저장소 준비와 소유 identity (4-C-2) | source/workspace가 고정 파일·초기 커밋으로 각각 생성되고 `.git`·객체·hardlink 공유 없음. 기존 경로 재초기화·실제 저장소 입력 거부. private root·소유 manifest·token과 정확한 root 검증. |
+| 72 | 네 유형과 실제 ref 생성 (4-C-2) | feature/fix/chore/refactor의 계획한 ref만 생성하고 Git 조회의 OID가 기준 커밋과 일치. source·main·HEAD·기존 파일/Git metadata 전후 동일, checkout·코드 수정 없음. |
+| 73 | 새 정책·별도 승인·TTL (4-C-2) | 4-C-1 및 기존 승인 재사용 거부. OS UID·정확한 계획 hash·필수 TTL 1~60분·24h 계획 검증, 만료·취소·변조·활성 중복 차단. 승인 전 ref 생성 없음. |
+| 74 | 충돌·기준 변경·배타적 생성 (4-C-2) | 같은 OID를 포함한 기존 ref를 덮어쓰지 않음. source/main/HEAD/객체/index/config/hash 변경과 임의 ref·packed-refs를 생성 전에 차단. 배타적 ref 생성 경합에서 중복 쓰기 없음. |
+| 75 | 경로·파일·관찰 한도 (4-C-2) | 경로 탈출·부모/파일 symlink·hardlink·잘못된 권한·추가 비밀 파일·과대 파일/엔트리를 차단. 예상 밖 본문/이름·원시 오류 비노출. 빈 유형 디렉터리 absent·부분 ref unsafe 구분. |
+| 76 | 원자 claim과 영속 단계 (4-C-2) | 승인 소비+RUNNING+claimed 원자 저장, 저장 실패 시 ref 쓰기 없음. writing/created/finished와 시각·전후 관찰을 보존하고 작업당 시도 한 번, 소비 복원 없음. |
+| 77 | 취소 fence와 완료 경합 (4-C-2) | 대기 취소는 승인 revoke와 CANCELLED 원자 처리. RUNNING 취소는 generation fence를 세워 새 쓰기를 막고 이미 생성한 ref는 보존. 늦은 성공이 취소를 덮어쓰지 않음. CLI lease 경합과 내부 제어 검증을 구분. |
+| 78 | 강제 종료·명시 복구 (4-C-2) | ref 생성 전후 실제 child 강제 종료 뒤 새 프로세스가 RUNNING·승인 소비·단계 증거를 보존. recover는 현재 ref 관찰과 함께 INTERRUPTED/CANCELLED/BLOCKED로 기록하며 자동 재실행·성공 소급·수리·삭제 없음. |
+| 79 | CLI·worker·DB 경계 (4-C-2) | 실제 git-branch 명령/필수 옵션·private DB/sidecar·OS 소유자·최소 환경·권한·출력 한도·전역 lease 검증. 임의 경로/명령·token·Codex·checkout·commit·push·PR/MR 입력 없음. |
+| 80 | 기존 경로 보존과 회귀 (4-C-2) | 4-C-1 및 조사·실행·Slack DB/승인 재사용 없음, 기존 기능 회귀 통과. 합성 fixture 초기 커밋과 실제 작업 결과 commit을 구분하며 회사 저장소·외부 연결·코드 실행은 not_run. |
 
 ### 최종 검증 묶음
 

@@ -8,6 +8,8 @@
 
 단계 4-C-1의 오프라인 브랜치 계약과 별도 모의 승인은 [stage-4c1-result.md](stage-4c1-result.md)를 따른다. 모의 통과는 실제 Codex·Git 작업 권한이나 격리 검증을 대신하지 않는다.
 
+단계 4-C-2의 새 승인은 하네스가 준비한 독립 합성 Git 저장소의 ref 생성에만 유효하다. 실제 Codex·회사 저장소·코드 실행 권한과 구분하며 검증 상태는 [stage-4c2-result.md](stage-4c2-result.md)를 따른다.
+
 전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 범위는 합성 데이터 기반의 로컬 조사이며 실제 회사 계정과 코드를 연결하지 않는다.
 
 ## 1. 신뢰 경계
@@ -245,6 +247,20 @@ OS UID 소유자·정확한 계획 hash·필수 정수 TTL 1~60분을 검증하�
 모든 명령은 전역 lease·비공개 DB/sidecar의 소유자·권한·symlink/hardlink 검사를 사용한다. worker는 최소 환경과 데이터 디렉터리 쓰기만 받고 네트워크·child·추가 worker·외부 native addon 권한과 상속 토큰을 차단한다. source·승인 snapshot·모의 receipt·제어 이력은 합성 metadata로 DB 수명 동안 남으며 자동 정리는 제공하지 않는다. 같은 OS 사용자와 하네스 코드는 기존처럼 신뢰한다.
 
 실제 Git·Codex·외부 모델·회사 저장소는 연결하지 않는다. commit·push·PR/MR 명령은 제공하지 않고 모의 승인을 실제 작업 권한으로 승격하지 않는다. 실제 연결에는 새로운 실행 정책·승인·격리·자료 처리 검증이 필요하며, [4-C-1 결과](stage-4c1-result.md)의 모의 통과를 그 검증으로 대신하지 않는다.
+
+### 단계 4-C-2의 독립 합성 Git 작업
+
+`local-synthetic-branch-v1`·`local-synthetic`·`create-branch`와 별도 `git-branches.sqlite`를 사용한다. 기존 4-C-1 모의 승인이나 코드 실행·Slack 승인을 실제 ref 생성에 사용하지 않는다. plan은 작업 유형과 private data directory만 받아 고정 합성 source/workspace를 배타적으로 준비한다. 회사/사용자 저장소 경로·원격·브랜치명·코드·명령은 입력으로 열지 않는다. 두 저장소의 초기 commit은 합성 fixture 준비이며 승인 후 변경을 commit하는 기능이 아니다.
+
+작업 root는 `<data-dir>/git-branches/<task-id>`로 고정하고 정확한 경로·OS UID·소유 manifest·token을 확인한다. source와 workspace는 Git 객체·hardlink·공유 `.git` 없이 각각 초기화한다. source의 파일 `0444`·디렉터리 `0555`를 유지하고 workspace도 기본 동결하되 `.git/refs/heads`와 새 유형 디렉터리만 `0700`, 생성 ref만 `0600`을 허용한다. source/workspace의 파일 목록·owner·권한·symlink/hardlink·엔트리 수·총 바이트를 먼저 검사한 뒤 nofollow와 전후 metadata 확인을 사용해 제한된 읽기를 수행한다. 예상 밖 파일의 본문·이름은 출력하지 않으며 원시 파일 오류도 정적 코드로 바꾼다.
+
+계획 hash는 작업 root·token·작업 유형·브랜치명·실제 기준 커밋·source/workspace hash·소유자·정책·24시간 유효기간을 결합한다. 정확한 planHash와 필수 정수 TTL 1~60분으로 새 승인을 만들며 승인 만료는 계획 만료 이내다. 승인과 실행 직전에 모든 경계와 ref 부재를 재검증한다. 동일 OID를 가리키는 ref도 이미 존재하면 생성하지 않는다. source·HEAD·main·기존 Git metadata는 유지하며 계획 ref와 선택적인 유형 디렉터리만 정규화 hash에서 제외한다.
+
+승인 소비·`RUNNING`·`claimed`를 한 트랜잭션으로 저장한다. `writing` 단계와 시작 시각을 먼저 기록하고 짧은 동기 DB guard에서 generation을 확인한 뒤 ref를 배타적으로 생성하며 `O_SYNC`로 동기 쓰기를 요청한다. Node 제한 worker에서 `fsyncSync`가 허용되지 않으므로 해당 호출을 위해 권한을 확장하지 않는다. 프로세스 중단 복구를 검증하며 디렉터리 fsync·OS/전원 장애 내구성은 보장하지 않는다. 생성 뒤 `created`와 `refCreatedAt`, 완료 뒤 `finishedAt`과 전후 관찰을 저장한다. 취소·실패·중단 뒤 승인 소비를 복원하지 않으며 작업당 시도는 한 번이다. 대기 취소는 승인 revoke와 `CANCELLED`를 함께 반영하고, `RUNNING` 취소는 generation fence를 세워 이후 쓰기를 막으며 이미 만든 ref는 보존한다.
+
+시작·inspect는 중단된 `RUNNING`을 유지한다. 명시 recover는 소유 identity·저장된 단계·현재 작업 영역을 확인하고 `INTERRUPTED`, 취소 기록이 있으면 `CANCELLED`, 경계 미확인은 `BLOCKED`로 보고한다. 정확한 ref가 관찰되더라도 성공으로 소급하지 않고 반복 복구는 기존 기록을 보존한다. 빈 유형 디렉터리는 부재, 부분 ref는 unsafe이며 자동 수리·재생성·ref 삭제는 하지 않는다.
+
+모든 CLI는 같은 data directory의 전역 lease를 사용하므로 실행 중 별도 CLI cancel은 lease와 경합한다. 내부 generation fence가 실시간 CLI 인터럽트나 대상 요청의 지속 감지를 보장하지 않는다. 제한 worker는 최소 환경·하네스 읽기·private data directory 쓰기만 받고 네트워크·child·추가 worker·상속 token을 차단한다. 합성 작업물과 감사 기록을 자동 정리하지 않는다. 파일 권한·소유 manifest·Node 권한은 같은 OS 사용자와 신뢰하는 하네스라는 경계 안에서 동작하며 악성 코드용 sandbox나 회사 보안 검토 통과를 뜻하지 않는다. 실제 Codex·회사 자료·checkout·코드 변경·작업 결과 commit·push·PR/MR은 별도 실행 경로로도 제공하지 않는다.
 
 ## 7. 회사 자료와 비밀정보
 

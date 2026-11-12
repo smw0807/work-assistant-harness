@@ -18,6 +18,8 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
 
 단계 4-C-1의 `branch-*`는 별도 DB에서 작업 유형별 브랜치 계획·승인·모의 결과·취소·복구를 제공합니다. 전체 회귀 397개와 lint·typecheck·build가 통과했습니다. 실제 브랜치 생성과 Codex 실행은 연결하지 않습니다. 사용법은 아래 4-C-1 절, 검증 결과는 [4-C-1 결과](docs/stage-4c1-result.md)를 따릅니다.
 
+단계 4-C-2의 `git-branch-*`는 별도로 준비한 합성 Git 저장소에 새 승인으로 브랜치 ref 하나를 생성하고 관찰·복구합니다. 전체 회귀 442개와 lint·typecheck·build가 통과했습니다. 실제 Codex·회사 저장소·코드 수정·작업 결과 commit·원격 작업은 연결하지 않습니다. 검증 범위는 [4-C-2 결과](docs/stage-4c2-result.md)를 따릅니다.
+
 ## 설치와 실행
 
 검증 환경은 macOS, Node.js **26.12.1**, pnpm **12.18.0**입니다. `.node-version`, `packageManager`, 직접 의존성 버전과 `pnpm-lock.yaml`을 고정했습니다. 다른 OS는 아직 검증하지 않았습니다.
@@ -273,6 +275,29 @@ pnpm harness branch-recover --task <uuid> --data-dir /private/tmp/harness-branch
 
 모든 명령은 전역 lease를 사용하므로 같은 데이터 디렉터리의 Slack 수신과 동시에 실행하지 않습니다. 제한 worker는 네트워크·하위 프로세스·추가 worker·상속 토큰 없이 비공개 데이터 디렉터리만 씁니다. metadata는 DB 수명 동안 보관하고 자동 정리하지 않습니다. 실제 Git/Codex 작업은 출력에서 `not_run`이며, 이 모의 승인은 후속 실제 실행 권한이 아닙니다. 상세 계약과 검증은 [4-C-1 계획](docs/implementation-plan.md#단계-4-c-1-오프라인-브랜치-계획승인모의-검증)과 [결과](docs/stage-4c1-result.md)를 따릅니다.
 
+## 단계 4-C-2 합성 Git 브랜치 생성
+
+4-C-1의 모의 승인과 분리한 경로입니다. `git-branch-plan`은 private data directory에 source와 workspace 합성 저장소를 각각 준비하고 `<type>/task-<task-id>` 브랜치를 계획합니다. 두 저장소의 고정 초기 커밋은 fixture 준비이며, 승인 후 작업 결과를 commit하는 기능은 없습니다. 실제 기존 저장소 경로·브랜치명·원격·코드·명령은 입력으로 받지 않습니다.
+
+```sh
+pnpm harness git-branch-plan --type fix --data-dir /private/tmp/harness-git-branch-data
+pnpm harness git-branch-inspect --task <uuid> --data-dir /private/tmp/harness-git-branch-data
+pnpm harness git-branch-approve --task <uuid> --plan-hash <sha256> --expires-in-minutes 30 --data-dir /private/tmp/harness-git-branch-data
+pnpm harness git-branch-create --task <uuid> --plan-hash <sha256> --data-dir /private/tmp/harness-git-branch-data
+pnpm harness git-branch-cancel --task <uuid> --data-dir /private/tmp/harness-git-branch-data
+pnpm harness git-branch-recover --task <uuid> --data-dir /private/tmp/harness-git-branch-data
+```
+
+`--type`은 필수이며 `feature|fix|chore|refactor`를 받습니다. `<uuid>`와 `<sha256>`는 plan 출력의 `task.taskId`와 `task.plan.planHash`로 바꿉니다. 위 명령은 각 기능의 예시이며 완료된 브랜치를 취소해 삭제하는 순서가 아닙니다. 계획은 24시간 유효하며 승인 TTL은 기본값 없는 정수 1~60분, 계획 만료 이내입니다. `git-branch-inspect`의 선택 옵션 `--approval-offset <0..1000000000>`은 기본 0이고 최신 승인 한 건과 `approvalPage.nextOffset`을 반환합니다.
+
+새 정책 `local-synthetic-branch-v1`과 `git-branches.sqlite`에 계획·승인·시도·전후 관찰을 저장합니다. 작업 영역은 `<data-dir>/git-branches/<uuid>/owner.json`, `source/`, `workspace/`입니다. source와 workspace는 Git 객체·메타데이터를 공유하지 않습니다. source는 읽기 전용으로 동결하고 workspace는 `.git/refs/heads`와 새 유형 디렉터리의 쓰기만 열어 둡니다. `HEAD`는 `main`에 유지되며 승인된 브랜치 ref 하나 외에 기존 파일·main·Git metadata를 바꾸지 않습니다. 실제 checkout·코드 변경·Codex 호출·작업 결과 commit·push·PR/MR은 수행하지 않습니다.
+
+승인과 생성 직전에 root·소유 token·기준 커밋·source/workspace hash·ref 부재를 재검증합니다. 같은 커밋을 가리키는 기존 ref도 덮어쓰지 않습니다. 승인 소비·`RUNNING`·`claimed`를 원자 저장하고 `writing → created → finished` 단계와 시각을 기록합니다. ref는 배타적으로 생성하며 `O_SYNC`로 동기 쓰기를 요청합니다. 복구 검증은 프로세스 중단 범위이고 디렉터리 fsync·OS/전원 장애 내구성은 보장하지 않습니다. 정상 확인 결과는 `SUCCEEDED`이며 `git-branch-create`는 성공 시 종료 코드 0, 그 외 결과는 1입니다. 실패·중단 뒤에도 같은 작업을 재승인·재실행하지 않습니다.
+
+새 프로세스의 inspect는 중단된 `RUNNING`을 보존합니다. `git-branch-recover`는 현재 파일을 조사해 `INTERRUPTED`, 취소가 기록되었으면 `CANCELLED`, 경계가 불확실하면 `BLOCKED`로 기록합니다. ref가 존재하더라도 중단 작업을 성공으로 소급하지 않습니다. 빈 유형 디렉터리는 ref 부재로, 부분 ref는 unsafe로 관찰하며 수리·재생성·삭제하지 않습니다. 대기 상태 cancel은 즉시 취소하지만 `RUNNING`의 내부 취소는 generation fence를 남긴 뒤 복구가 필요합니다. 모든 CLI 명령은 같은 전역 lease를 사용하므로 실행 중 별도 CLI cancel은 lease와 경합하며 실시간 중단 명령이 아닙니다.
+
+제한 worker는 네트워크·child·추가 worker·상속 토큰 없이 하네스와 private data directory만 접근합니다. 합성 작업물·감사 metadata는 자동 정리하지 않습니다. 같은 OS 사용자와 신뢰하는 하네스 코드를 전제로 하며 악성 코드 실행용 sandbox는 아닙니다. 상세 계약과 검증 범위는 [4-C-2 계획](docs/implementation-plan.md#단계-4-c-2-합성-git-브랜치-생성관찰복구)과 [결과](docs/stage-4c2-result.md)를 따릅니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.
@@ -361,4 +386,4 @@ pnpm build
 
 `test`는 컴파일 후 Node 내장 test runner로 단위·통합·CLI 수용 테스트를 실행합니다. 합성 저장소는 별도 임시 경로에 준비합니다. 하네스 테스트가 통과해도 실제 Slack 권한·회사 보안·격리 실행기의 검증을 통과한 것은 아닙니다.
 
-전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1](docs/stage-1-result.md), [단계 2](docs/stage-2-result.md), [단계 3-A](docs/stage-3a-result.md), [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A](docs/stage-4a-result.md), [단계 4-B-1 결과](docs/stage-4b1-result.md), [단계 4-B-2 결과](docs/stage-4b2-result.md)에 정리했습니다. 합성 실행·모의 전송·HTTP 계약 진단, 별도 승인된 실제 Slack 단건 시험과 회사 도입 승인을 구분합니다.
+전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1](docs/stage-1-result.md), [단계 2](docs/stage-2-result.md), [단계 3-A](docs/stage-3a-result.md), [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A](docs/stage-4a-result.md), [단계 4-B-1 결과](docs/stage-4b1-result.md), [단계 4-B-2 결과](docs/stage-4b2-result.md), [단계 4-C-1 결과](docs/stage-4c1-result.md), [단계 4-C-2 결과](docs/stage-4c2-result.md)에 정리했습니다. 합성 실행·모의 전송·HTTP 계약 진단·합성 Git ref 생성, 별도 승인된 실제 Slack 단건 시험과 회사 도입 승인을 구분합니다.
