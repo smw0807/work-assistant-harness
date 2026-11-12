@@ -11,13 +11,15 @@ import { SqliteExecutionStore } from '../adapters/sqlite-execution-store.js';
 import { SyntheticExecutionService } from '../application/execute-synthetic.js';
 import { HarnessError } from '../domain/errors.js';
 import {
-  BRANCH_EXECUTION_POLICY_VERSION, EXECUTION_POLICY_VERSION,
+  BRANCH_EXECUTION_POLICY_VERSION, CODEX_EXECUTION_POLICY_VERSION, EXECUTION_POLICY_VERSION,
   type ExecutionFixture, type ExecutionPolicyVersion, type ExecutionRun,
 } from '../domain/execution.js';
 import type { BranchWorkType } from '../domain/branch.js';
+import type { CodexProposalExport } from '../domain/codex-proposal.js';
 import type { SandboxConfig } from '../domain/sandbox.js';
 import { parseSandboxConfig } from '../policy/sandbox-policy.js';
 import { acquireRuntimeLease, assertSafeEventFile, defaultDataDirectory, prepareDataDirectory } from './runtime.js';
+import { consumeCodexProposal, readCodexConfig } from './codex-proposal.js';
 
 export const executionUsage = [
   'pnpm harness execution-plan [--fixture success|test-failure|timeout|output] [--config <local-json>] [--data-dir <private-directory>]',
@@ -39,10 +41,20 @@ export const branchExecutionUsage = [
   'pnpm harness branch-execution-recover --task <id> [--config <local-json>] [--data-dir <private-directory>]',
 ].join('\n');
 
+export const codexExecutionUsage = [
+  'pnpm harness codex-execution-plan --proposal <uuid> --codex-config <local-json> --config <local-docker-json> [--data-dir <private-directory>]',
+  'pnpm harness codex-execution-approve --task <uuid> --plan-hash <sha256> --base-commit <sha1> --expires-in-minutes <1..60> [--config <local-docker-json>] [--data-dir <private-directory>]',
+  'pnpm harness codex-execution-run --task <uuid> --plan-hash <sha256> --base-commit <sha1> [--config <local-docker-json>] [--data-dir <private-directory>]',
+  'pnpm harness codex-execution-inspect --task <uuid> [--approval-offset <0..1000000000>] [--data-dir <private-directory>]',
+  'pnpm harness codex-execution-cancel --task <uuid> [--event-id <synthetic-id>] [--data-dir <private-directory>]',
+  'pnpm harness codex-execution-invalidate --task <uuid> --event edited|deleted --revision <2..1000000000> --event-id <synthetic-id> [--data-dir <private-directory>]',
+  'pnpm harness codex-execution-recover --task <uuid> [--config <local-docker-json>] [--data-dir <private-directory>]',
+].join('\n');
+
 interface ExecutionProfile {
-  prefix: 'execution' | 'branch-execution';
-  directory: 'executions' | 'branch-executions';
-  database: 'execution.sqlite' | 'branch-execution.sqlite';
+  prefix: 'execution' | 'branch-execution' | 'codex-execution';
+  directory: 'executions' | 'branch-executions' | 'codex-executions';
+  database: 'execution.sqlite' | 'branch-execution.sqlite' | 'codex-execution.sqlite';
   policy: ExecutionPolicyVersion;
 }
 
@@ -52,6 +64,9 @@ const executionProfile: ExecutionProfile = {
 const branchExecutionProfile: ExecutionProfile = {
   prefix: 'branch-execution', directory: 'branch-executions', database: 'branch-execution.sqlite',
   policy: BRANCH_EXECUTION_POLICY_VERSION,
+};
+const codexExecutionProfile: ExecutionProfile = {
+  prefix: 'codex-execution', directory: 'codex-executions', database: 'codex-execution.sqlite', policy: CODEX_EXECUTION_POLICY_VERSION,
 };
 
 @Module({})
@@ -72,7 +87,8 @@ const parseArguments = (arguments_: string[], profile: ExecutionProfile): { comm
   if (!input.startsWith(`${profile.prefix}-`)) throw new HarnessError('UNKNOWN_COMMAND');
   const command = `execution-${input.slice(profile.prefix.length + 1)}`;
   const allowed: Record<string, string[]> = {
-    'execution-plan': ['--fixture', '--config', '--data-dir', ...(profile.policy === BRANCH_EXECUTION_POLICY_VERSION ? ['--type'] : [])],
+    'execution-plan': profile.policy === CODEX_EXECUTION_POLICY_VERSION ? ['--proposal', '--codex-config', '--config', '--data-dir']
+      : ['--fixture', '--config', '--data-dir', ...(profile.policy === BRANCH_EXECUTION_POLICY_VERSION ? ['--type'] : [])],
     'execution-approve': ['--task', '--plan-hash', '--base-commit', '--expires-in-minutes', '--config', '--data-dir'],
     'execution-run': ['--task', '--plan-hash', '--base-commit', '--config', '--data-dir'],
     'execution-inspect': ['--task', '--approval-offset', '--data-dir'],
@@ -90,16 +106,18 @@ const parseArguments = (arguments_: string[], profile: ExecutionProfile): { comm
     }
     options.set(name, value);
   }
-  const required = command === 'execution-plan' ? (profile.policy === BRANCH_EXECUTION_POLICY_VERSION ? ['--type'] : [])
+  const required = command === 'execution-plan' ? (profile.policy === CODEX_EXECUTION_POLICY_VERSION ? ['--proposal', '--codex-config', '--config']
+    : profile.policy === BRANCH_EXECUTION_POLICY_VERSION ? ['--type'] : [])
     : command === 'execution-invalidate' ? ['--task', '--event', '--revision', '--event-id']
     : ['execution-inspect', 'execution-cancel', 'execution-recover'].includes(command) ? ['--task']
     : ['--task', '--plan-hash', '--base-commit', ...(command === 'execution-approve' ? ['--expires-in-minutes'] : [])];
   if (required.some((key) => !options.has(key))) throw new HarnessError('INVALID_ARGUMENTS');
   if (options.has('--task') && !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(options.get('--task')!)) throw new HarnessError('INVALID_ARGUMENTS');
+  if (options.has('--proposal') && !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(options.get('--proposal')!)) throw new HarnessError('INVALID_ARGUMENTS');
   if (options.has('--plan-hash') && !/^[a-f0-9]{64}$/.test(options.get('--plan-hash')!)) throw new HarnessError('INVALID_ARGUMENTS');
   if (options.has('--base-commit') && !/^[a-f0-9]{40}$/.test(options.get('--base-commit')!)) throw new HarnessError('INVALID_ARGUMENTS');
   if (options.has('--expires-in-minutes') && !/^(?:[1-9]\d{0,2}|1[0-3]\d{2}|14[0-3]\d|1440)$/.test(options.get('--expires-in-minutes')!)) throw new HarnessError('INVALID_ARGUMENTS');
-  if (profile.policy === BRANCH_EXECUTION_POLICY_VERSION && options.has('--expires-in-minutes')
+  if (profile.policy !== EXECUTION_POLICY_VERSION && options.has('--expires-in-minutes')
     && Number(options.get('--expires-in-minutes')) > 60) throw new HarnessError('INVALID_ARGUMENTS');
   if (options.has('--approval-offset') && (!/^(?:0|[1-9]\d{0,9})$/.test(options.get('--approval-offset')!)
     || Number(options.get('--approval-offset')) > 1_000_000_000)) throw new HarnessError('INVALID_ARGUMENTS');
@@ -136,6 +154,12 @@ const persistRunReport = async (run: ExecutionRun): Promise<string> => {
   return reportPath;
 };
 
+const readSandboxConfig = async (requested: string): Promise<SandboxConfig> => {
+  const path = await assertSafeEventFile(requested);
+  try { return parseSandboxConfig(JSON.parse(await readFile(path, 'utf8'))); }
+  catch { throw new HarnessError('INVALID_SANDBOX_CONFIG'); }
+};
+
 const runProfileCommand = async (arguments_: string[], profile: ExecutionProfile): Promise<void> => {
   process.umask(0o077);
   const { command, options } = parseArguments(arguments_, profile);
@@ -149,6 +173,16 @@ const runProfileCommand = async (arguments_: string[], profile: ExecutionProfile
   const abort = (): void => { controller.abort(); };
   process.on('SIGINT', abort); process.on('SIGTERM', abort);
   try {
+    const ownerId = process.getuid ? `os-user:${process.getuid()}` : '';
+    const context = { ownerId, now: new Date() };
+    let proposal: CodexProposalExport | null = null;
+    let planConfig: SandboxConfig | null = null;
+    if (profile.policy === CODEX_EXECUTION_POLICY_VERSION && command === 'execution-plan') {
+      // 입력 설정부터 검사한다. export 이후 DB/원본 준비가 실패해도 제안 소비는 되돌리지 않는다.
+      planConfig = await readSandboxConfig(options.get('--config')!);
+      const codexConfig = await readCodexConfig(options.get('--codex-config')!);
+      proposal = consumeCodexProposal(dataDirectory, options.get('--proposal')!, codexConfig, context);
+    }
     const root = join(dataDirectory, profile.directory);
     try { await privateDirectory(root); }
     catch (error) {
@@ -156,9 +190,7 @@ const runProfileCommand = async (arguments_: string[], profile: ExecutionProfile
       await privateDirectory(root, true);
     }
     store = new SqliteExecutionStore(join(dataDirectory, profile.database), profile.policy);
-    const taskId = options.get('--task') ?? randomUUID();
-    const ownerId = process.getuid ? `os-user:${process.getuid()}` : '';
-    const context = { ownerId, now: new Date() };
+    const taskId = proposal?.proposalId ?? options.get('--task') ?? randomUUID();
     if (command !== 'execution-plan') {
       const existing = store.find(taskId);
       if (!existing) throw new HarnessError('EXECUTION_TASK_NOT_FOUND');
@@ -187,10 +219,7 @@ const runProfileCommand = async (arguments_: string[], profile: ExecutionProfile
       process.stdout.write(`${JSON.stringify({ ...snapshot, reportPaths }, null, 2)}\n`);
       return;
     }
-    const configPath = await assertSafeEventFile(options.get('--config') ?? join(sourceRoot, 'config/sandbox.example.json'));
-    let config: SandboxConfig;
-    try { config = parseSandboxConfig(JSON.parse(await readFile(configPath, 'utf8'))); }
-    catch { throw new HarnessError('INVALID_SANDBOX_CONFIG'); }
+    const config = planConfig ?? await readSandboxConfig(options.get('--config') ?? join(sourceRoot, 'config/sandbox.example.json'));
     const taskDirectory = await privateDirectory(join(root, taskId), command === 'execution-plan');
     const recovering = command === 'execution-recover' ? store.listRuns(taskId)[0] : undefined;
     if (recovering && (dirname(recovering.artifactDirectory) !== taskDirectory
@@ -204,7 +233,10 @@ const runProfileCommand = async (arguments_: string[], profile: ExecutionProfile
     try {
       const service = application.get(SyntheticExecutionService);
       if (command === 'execution-plan') {
-        const task = await service.plan(taskId, taskDirectory, (options.get('--fixture') ?? 'success') as ExecutionFixture,
+        const task = proposal ? await service.planProposal(taskId, taskDirectory, proposal.workType, proposal.content, {
+          proposalId: proposal.proposalId, inputHash: proposal.inputHash, responseHash: proposal.responseHash,
+          configHash: proposal.configHash, validatorVersion: 'codex-proposal-v1',
+        }) : await service.plan(taskId, taskDirectory, (options.get('--fixture') ?? 'success') as ExecutionFixture,
           options.get('--type') as BranchWorkType | undefined);
         process.stdout.write(`${JSON.stringify({ task, nextApproval: `표시된 실행 계획 해시·기준 커밋과 필수 유효기간으로 ${profile.prefix}-approve를 호출하세요.` }, null, 2)}\n`);
       } else if (command === 'execution-recover') {
@@ -234,3 +266,4 @@ const runProfileCommand = async (arguments_: string[], profile: ExecutionProfile
 
 export const runExecutionCommand = (arguments_: string[]): Promise<void> => runProfileCommand(arguments_, executionProfile);
 export const runBranchExecutionCommand = (arguments_: string[]): Promise<void> => runProfileCommand(arguments_, branchExecutionProfile);
+export const runCodexExecutionCommand = (arguments_: string[]): Promise<void> => runProfileCommand(arguments_, codexExecutionProfile);

@@ -4,7 +4,7 @@ import { isAbsolute } from 'node:path';
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 import { HarnessError } from '../domain/errors.js';
 import {
-  EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION,
+  EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION, CODEX_EXECUTION_POLICY_VERSION,
   type ExecutionApproval, type ExecutionApprovalContext, type ExecutionApprovalRequest,
   type ExecutionRun, type ExecutionRunRequest, type ExecutionTask,
   type ExecutionControlRequest, type ExecutionRequestState, type ExecutionLifecycle,
@@ -59,7 +59,7 @@ export class SqliteExecutionStore implements ExecutionStore {
   private transactionOpen = false;
 
   constructor(private readonly filePath: string, private readonly expectedPolicy: ExecutionPolicyVersion = EXECUTION_POLICY_VERSION) {
-    if (![EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION].includes(expectedPolicy)) {
+    if (![EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION, CODEX_EXECUTION_POLICY_VERSION].includes(expectedPolicy)) {
       throw new HarnessError('INVALID_EXECUTION_POLICY');
     }
     this.protectFiles();
@@ -131,7 +131,7 @@ export class SqliteExecutionStore implements ExecutionStore {
   approve(request: ExecutionApprovalRequest, context: ExecutionApprovalContext): ExecutionApproval {
     assertContext(context);
     this.assertRequest(request, true);
-    const maximumMinutes = this.expectedPolicy === BRANCH_EXECUTION_POLICY_VERSION ? 60 : 1_440;
+    const maximumMinutes = this.expectedPolicy === EXECUTION_POLICY_VERSION ? 1_440 : 60;
     if (!Number.isSafeInteger(request.expiresInMinutes) || request.expiresInMinutes < 1 || request.expiresInMinutes > maximumMinutes) {
       throw new HarnessError('INVALID_EXECUTION_APPROVAL_REQUEST');
     }
@@ -607,7 +607,7 @@ export class SqliteExecutionStore implements ExecutionStore {
   private assertRequest(request: ExecutionRunRequest, approval = false): void {
     if (!request || !isText(request.taskId) || typeof request.planHash !== 'string' || !digest.test(request.planHash)
       || typeof request.baseCommit !== 'string' || !commit.test(request.baseCommit)
-      || (this.expectedPolicy === BRANCH_EXECUTION_POLICY_VERSION
+      || (this.expectedPolicy !== EXECUTION_POLICY_VERSION
         && !hasKeys(request, ['taskId', 'planHash', 'baseCommit', ...(approval ? ['expiresInMinutes'] : [])]))) {
       throw new HarnessError('INVALID_EXECUTION_APPROVAL_REQUEST');
     }
@@ -627,7 +627,7 @@ export class SqliteExecutionStore implements ExecutionStore {
       || (approval.usedAt !== null && !isTimestamp(approval.usedAt))
       || (approval.revokedAt !== null && !isTimestamp(approval.revokedAt))) throw new HarnessError('INVALID_STORED_EXECUTION_APPROVAL');
     const ttl = (Date.parse(approval.expiresAt) - Date.parse(approval.createdAt)) / 60_000;
-    const maximumMinutes = this.expectedPolicy === BRANCH_EXECUTION_POLICY_VERSION ? 60 : 1_440;
+    const maximumMinutes = this.expectedPolicy === EXECUTION_POLICY_VERSION ? 1_440 : 60;
     if (!Number.isInteger(ttl) || ttl < 1 || ttl > maximumMinutes
       || (approval.usedAt !== null && (approval.usedAt < approval.createdAt || approval.usedAt >= approval.expiresAt))
       || (approval.revokedAt !== null && approval.revokedAt < approval.createdAt)

@@ -12,6 +12,8 @@
 
 단계 4-C-3은 독립 합성 작업 브랜치의 생성·선택을 고정 patch·등록 Docker 검사·취소·복구와 연결한다. 별도 실행 정책·DB·새 승인을 사용하며 실제 Codex나 회사 저장소는 연결하지 않는다. 전체 회귀 481개와 실제 Docker 격리 진단·실행/취소/복구 12개 시나리오가 통과했으며 상태와 한계는 [stage-4c3-result.md](stage-4c3-result.md)에 기록한다.
 
+단계 4-C-4는 실제 Codex에 승인된 고정 합성 입력만 전송해 JSON 제안을 받은 뒤 새 실행 승인으로 독립 브랜치·Docker 검사에 연결한다. 모델 호출과 코드 실행은 서로 다른 정책·DB·승인을 사용한다. 실제 호출·격리·취소·복구와 기존 회귀의 최종 근거는 [stage-4c4-result.md](stage-4c4-result.md)를 따른다.
+
 - 구현 순서와 상세 수용 기준: [implementation-plan.md](implementation-plan.md)
 - 권한과 승인 조건: [security-and-approval.md](security-and-approval.md)
 - Codex 개발 지침: [루트 AGENTS.md](../AGENTS.md)
@@ -322,10 +324,11 @@ AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
 | 4-C-1 | 대상 작업 브랜치의 오프라인 계획·승인·모의 결과 | 별도 DB·정책, 유형별 계획·원자 소비·충돌/불확실·취소/복구 검증. 실제 Git/Codex 효과 없음 |
 | 4-C-2 | 독립 합성 Git 저장소의 ref 생성·관찰·복구 | 새 정책·승인·소유 증거·전후 hash·배타적 ref 생성·강제 종료 복구. HEAD/main 보존, 실제 Codex/회사 저장소 미연결 |
 | 4-C-3 | 독립 합성 작업 브랜치의 고정 수정·Docker 검사 | 새 실행 정책·승인 뒤 유형별 ref·HEAD 선택, 고정 patch·읽기 전용 검사 view·취소·관찰 복구. 전체 회귀와 실제 Docker 검증 완료 |
+| 4-C-4 | 실제 Codex 합성 제안·새 실행 승인 | 단건 호출 승인·외부 CLI 격리·부모 broker·JSON 검증·일회 export·별도 실행 승인. 실제 결과와 한계는 전용 결과 문서 참조 |
 | 4-C 후속 | 대상 저장소의 실제 Codex 작업 브랜치·commit 준비·push | 승인·격리·브랜치 보존과 행위별 승인 별도 검증. PR/MR 생성 제외. 미구현 후속 설계 |
 | 4-D | Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-B-2 승인 범위 밖 |
 
-4-C의 브랜치 규칙은 하네스가 Codex에 대상 저장소의 코드 수정을 지시할 때 적용한다. 승인된 기준 커밋에서 새 기능은 `feature/`, 오류 수정은 `fix/`, 유지보수는 `chore/`, 구조 개선은 `refactor/` 브랜치를 생성하고, 그 안에서 수정·허용된 검사 후 브랜치·diff·결과를 보고하도록 설계한다. PR 생성은 제외하고 GitLab MR로 대체하지 않는다. 이는 현재 하네스 저장소 개발 규칙이 아니다. 4-C-1은 계획·승인·모의 결과를, 4-C-2는 독립 합성 Git 저장소의 ref 생성·관찰·복구를 다룬다. 4-C-3는 새 합성 실행에서 브랜치 선택과 고정 수정·검사를 연결하며 실제 Codex와 회사 대상 저장소 연결은 후속 범위다. 상세 조건은 [4-C 계획](implementation-plan.md#후속-단계의-별도-범위)을 따른다.
+4-C의 브랜치 규칙은 하네스가 Codex에 대상 저장소의 코드 수정을 지시할 때 적용한다. 승인된 기준 커밋에서 새 기능은 `feature/`, 오류 수정은 `fix/`, 유지보수는 `chore/`, 구조 개선은 `refactor/` 브랜치를 생성하고, 그 안에서 수정·허용된 검사 후 브랜치·diff·결과를 보고하도록 설계한다. PR 생성은 제외하고 GitLab MR로 대체하지 않는다. 이는 현재 하네스 저장소 개발 규칙이 아니다. 4-C-1은 계획·승인·모의 결과를, 4-C-2는 독립 합성 Git 저장소의 ref 생성·관찰·복구를 다룬다. 4-C-3은 새 합성 실행에서 브랜치 선택과 고정 수정·검사를 연결하고 4-C-4는 고정 합성 입력의 실제 Codex 제안을 새 실행 승인으로 연결한다. 회사 대상 저장소와 Codex 직접 수정은 후속 범위다. 상세 조건은 [4-C 계획](implementation-plan.md#후속-단계의-별도-범위)을 따른다.
 
 4-C-1의 `branch-plan → branch-approve → branch-simulate`는 별도 `branches.sqlite`에서 `AWAITING_APPROVAL → APPROVED → SIMULATING → SIMULATED / FAILED / UNKNOWN`으로 진행한다. `synthetic-branch-v1`·`offline` 계획은 작업 유형·브랜치명·합성 repo/remote/base/diff·OS 소유자·24시간 유효기한에 결합한다. 필수 TTL 1~60분의 승인을 모의 시도와 원자 소비하며 작업당 시도는 한 번이다. 취소·변경은 미소비 승인을 취소하고 진행 중 결과는 `UNKNOWN`으로 차단한다. 시작·조회는 자동 실행하지 않으며 중단 상태의 명시적 복구는 recover를 사용한다. 제한 worker는 네트워크·child·호스트 토큰을 받지 않고 Git·Codex 포트도 연결하지 않는다. [4-C-1 결과](stage-4c1-result.md)에 검증 범위와 실제 연결의 미실행 상태를 기록한다.
 
@@ -349,6 +352,30 @@ branch-execution-recover → 영속 증거와 현재 작업물 관찰, 실행 �
 source의 main·HEAD와 작업 영역의 main은 기준 커밋에 남긴다. 작업 ref와 HEAD 선택을 끝낸 뒤 최초 Git hash를 저장하고 그 이후에는 Git metadata 전체를 불변으로 검사한다. fixed patch는 신뢰하는 하네스가 적용하며 Docker에는 `.git`과 쓰기 권한이 없는 view만 전달한다. 대상 코드의 호스트 import나 임의 코드 생성·실행은 제공하지 않는다. 합성 초기 commit과 별개인 작업 결과 commit·push·PR/MR도 제공하지 않는다.
 
 `workspace_preparing` 중단으로 최초 Git 증거 없이 작업물이 남으면 보수적으로 `BLOCKED`로 보존한다. 증거 저장 뒤 복구는 현재 HEAD·작업 ref·main·파일·view와 container 소유권을 검사해 `INTERRUPTED / CANCELLED / BLOCKED`로 기록한다. inspect·cancel·invalidate는 기존 3-D와 같이 전역 lease를 우회하는 짧은 DB 트랜잭션이며 실행·복구는 전역 lease를 유지한다. 승인·계획 TTL은 승인과 실행 진입에서 확인하고, 진행 중 실행은 generation fence·강제 시간 제한·최종 성공 재검증으로 제어한다. 자동 재시도·승인 복원·수리·작업물 삭제는 없다. 실제 검증 근거는 [4-C-3 결과](stage-4c3-result.md)를 따른다.
+
+4-C-4는 모델 제안과 실행을 두 단계로 분리한다. `CodexProposalService`는 `CodexProposalPort`에 고정 입력 문자열만 전달한다. 호출 계획·승인·시도는 `codex-proposals.sqlite`의 `synthetic-codex-proposal-v1`에 속하고, 검증된 결과를 받아 만드는 실행 계획은 `codex-execution.sqlite`의 `synthetic-codex-execution-v1`에 속한다. CLI 설정은 `codex-cli-proposal-v1`, 응답 검증 근거는 `codex-proposal-v1`으로 별도 식별한다.
+
+```text
+codex-proposal-plan → 전송할 합성 입력·설정·계획 hash 표시
+  → 별도 호출 승인 → usedAt + RUNNING 원자 저장
+  → 부모 broker: 선택한 credential 보유·고정 upstream body 구성
+  → guardian → 외부 SBPL → 빈 HOME의 native Codex CLI
+      Codex ↔ localhost broker capability ↔ 고정 OpenAI/ChatGPT endpoint
+  → JSON 검증 → READY → codex-execution-plan에서 EXPORTED 원자 소비
+  → 새 실행 계획·새 승인 → 독립 유형별 브랜치·하네스 patch·Docker 검사
+```
+
+계획에 보이는 입력은 합성 `src/message.mjs`를 `before`에서 `approved`로 바꾸라는 고정 요청이다. 호출 계획은 제안 UUID·OS UID·작업 유형·입력 hash·설정 hash·24시간 만료를 결합하고 필수 정수 TTL 1~60분의 승인을 받는다. 호출은 한 번만 claim하며 오류·취소·강제 종료 후 재호출하지 않는다. 검증된 `path/content`와 원시 응답 hash만 저장하고 잘못된 응답·원시 오류·token은 기록하지 않는다.
+
+실제 adapter는 macOS arm64 native Codex 0.154.0의 canonical 경로·권한·SHA-256·버전을 확인한다. CLI 자체의 read-only 옵션 외에 SBPL로 파일 읽기·쓰기·프로세스 실행·네트워크를 제한하고, 같은 profile로 host canary·영역 밖 쓰기·추가 exec·다른 TCP/Unix socket 거부를 실제 호출 전에 진단한다. Codex는 새 HOME/CODEX_HOME와 최소 환경을 사용하며 기존 설정·규칙·hooks·MCP·plugins·도구를 상속하지 않는다.
+
+사용자가 선택한 기존 ChatGPT 로그인 또는 전용 API 키는 부모만 읽고 broker의 고정 upstream 요청에 사용한다. 자식과 guardian에는 실제 credential 대신 매 호출 난수 capability만 전달한다. broker는 Codex가 보낸 본문을 그대로 전달하지 않고 계획한 모델·고정 입력·JSON schema·빈 tools로 새 요청을 구성한다. upstream 최대 한 번, redirect·재시도 없음, 전체 60초·최종 응답 16KiB·Codex 출력 128KiB·broker 입력/upstream 응답 각각 256KiB를 적용한다. 부모 IPC 단절·취소·시간 초과를 guardian이 감시해 자식 그룹을 종료하고, 정상 호출 흐름은 자식과 broker close를 기다린다.
+
+응답은 정확한 두 문자열 키와 한 파일, 8KiB 내용 한도·비밀 패턴·NUL·Unicode·무변경 검증을 통과해야 READY가 된다. Codex 이벤트에서 도구·다른 오류·불완전 응답을 거부하되 지정 모델의 정확한 metadata 부재 경고문만 예외로 허용한다. fallback metadata 사용은 모델 metadata가 완전하거나 최적의 동작이라는 보장이 아니다. 최종 JSON과 완료 turn을 각각 한 건 확인하며 유효한 JSON도 코드의 의미나 안전성을 승인한 것으로 취급하지 않는다.
+
+내보내기는 같은 UUID의 READY를 EXPORTED로 한 번 소비한 후 내용과 입력/응답/설정 hash를 반환한다. 이후 실행 DB나 source 준비가 실패해도 소비를 되돌리지 않는다. 새 실행 계획은 이 근거와 검증 버전·실제 patch·브랜치·기준·Docker 정책을 다시 hash에 묶어 소유자 승인을 받는다. 신뢰하는 하네스가 승인한 `src/message.mjs`만 쓰고, 제안 코드는 Git 없는 읽기 전용 Docker view의 등록 검사에서만 실행한다. 기존 4-C-3의 source/main·Git 증거·diff·취소·복구 경계를 유지한다.
+
+호출 경로의 inspect/cancel은 전역 lease를 우회하는 짧은 DB 트랜잭션이며 run/recover는 lease를 유지한다. 취소 generation은 늦은 응답을 READY로 저장하지 못하게 하고 READY 취소는 export를 차단한다. 중단된 RUNNING은 명시 recover로 INTERRUPTED가 되며 재호출하지 않는다. EXPORTED의 소비는 취소·복구로 되돌리지 않는다. 실행 경로의 제어·관찰은 기존 3-D와 같은 방식이다. 회사 자료·회사 저장소·Slack 요청·Codex 직접 작업 트리 수정·작업 결과 commit·push·PR/MR은 연결하지 않는다. 실제 호출과 종료·복구의 검증 범위는 [4-C-4 결과](stage-4c4-result.md)를 따른다.
 
 기존 `ExecutionPort`의 항상 거부 동작을 유지하며 합성 실행과 고정 Slack 단건 시험을 각각 별도 명령·승인으로 연다. 기존 `approve`·`cancel`과 합성 계획·승인·실행·복구는 전역 lease를 유지한다. 합성 실행의 취소·무효화·조회는 실행 DB의 짧은 트랜잭션으로 전달한다. 실제 Slack 수신과 실행은 직렬화하며 수신 공백의 변경 감지는 보장하지 않는다. 단계 3의 작업 트리는 작업 분리 수단이며 Docker 격리 환경을 대신하지 않는다.
 

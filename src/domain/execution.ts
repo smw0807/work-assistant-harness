@@ -4,7 +4,9 @@ import type { BranchWorkType } from './branch.js';
 
 export const EXECUTION_POLICY_VERSION = 'synthetic-execution-v1' as const;
 export const BRANCH_EXECUTION_POLICY_VERSION = 'synthetic-branch-execution-v1' as const;
-export type ExecutionPolicyVersion = typeof EXECUTION_POLICY_VERSION | typeof BRANCH_EXECUTION_POLICY_VERSION;
+export const CODEX_EXECUTION_POLICY_VERSION = 'synthetic-codex-execution-v1' as const;
+export type ExecutionPolicyVersion = typeof EXECUTION_POLICY_VERSION | typeof BRANCH_EXECUTION_POLICY_VERSION
+  | typeof CODEX_EXECUTION_POLICY_VERSION;
 export const EXECUTION_LIMITS = Object.freeze({
   memoryBytes: 128 * 1024 * 1024, pids: 64, nanoCpus: 500_000_000,
   outputBytes: 16 * 1024, timeoutMs: 3_000, scratchBytes: 16 * 1024 * 1024,
@@ -55,12 +57,20 @@ export interface ExecutionBranchPlan {
   expiresAt: string;
 }
 
+export interface ExecutionProposalMetadata {
+  proposalId: string;
+  inputHash: string;
+  responseHash: string;
+  configHash: string;
+  validatorVersion: 'codex-proposal-v1';
+}
+
 export interface ExecutionPlan {
   planId: string;
   version: 1;
   taskId: string;
   requestRevision: string;
-  repoId: 'synthetic-execution' | 'synthetic-branch-execution';
+  repoId: 'synthetic-execution' | 'synthetic-branch-execution' | 'synthetic-codex-execution';
   baseCommit: string;
   sourceHash: string;
   allowedFiles: string[];
@@ -68,6 +78,7 @@ export interface ExecutionPlan {
   commands: RegisteredExecutionCommand[];
   policy: ExecutionPolicy;
   branch?: ExecutionBranchPlan;
+  proposal?: ExecutionProposalMetadata;
   planHash: string;
 }
 

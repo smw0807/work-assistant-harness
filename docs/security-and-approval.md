@@ -12,6 +12,8 @@
 
 단계 4-C-3의 새 실행 승인은 독립 합성 작업 브랜치 선택·고정 patch·등록 Docker 검사에만 유효하다. 기존 실행·브랜치 승인을 재사용하지 않으며 전체 회귀 481개와 실제 Docker 격리 진단·실행/취소/복구 12개 시나리오를 통과했다. 확인된 결과와 제한은 [stage-4c3-result.md](stage-4c3-result.md)에 기록한다.
 
+단계 4-C-4는 고정 합성 입력의 실제 Codex 호출 승인과 검증된 제안을 적용할 실행 승인을 분리한다. 선택한 자격증명은 부모 broker만 보유하고 Codex에는 외부 OS 격리를 적용한다. 실제 호출·격리 진단·취소·강제 종료·복구와 회귀의 최종 확인 범위는 [stage-4c4-result.md](stage-4c4-result.md)를 따른다.
+
 전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 범위는 합성 데이터 기반의 로컬 조사이며 실제 회사 계정과 코드를 연결하지 않는다.
 
 ## 1. 신뢰 경계
@@ -279,6 +281,39 @@ OS UID 소유자·정확한 계획 hash·필수 정수 TTL 1~60분을 검증하�
 inspect·cancel·invalidate는 3-D와 같이 전역 lease를 우회하는 짧은 실행 DB 트랜잭션으로 동작한다. 실행·복구는 전역 lease를 유지한다. 무효화는 generation을 바꾸어 새 동작과 늦은 성공을 거부하고 이미 시작한 container는 저장된 소유 identity를 검증한 뒤 정리한다. 명시 recover는 저장한 Git/파일/view 증거와 현재 작업물을 비교하며 확인된 중단은 `INTERRUPTED`, 취소는 `CANCELLED`, 정리·관찰 불확실은 `BLOCKED`로 기록한다. 동일 승인·작업 재실행, 승인 소비 복원, 자동 수리·삭제는 제공하지 않는다. 원본·브랜치·실제 diff·검사·정리·복구 결과는 로컬 감사 기록으로 남긴다.
 
 이 단계의 fixture 초기 commit은 합성 준비이며 작업 결과 commit과 구분한다. 실제 Codex·회사 자료·Slack 요청 연결·임의 코드 수정/실행·작업 결과 commit·push·PR/MR은 제공하지 않는다. 실제 Docker 검증과 모의 backend 테스트, 회사 보안 검토를 구분하며 최종 근거는 [4-C-3 결과](stage-4c3-result.md)를 따른다.
+
+### 단계 4-C-4의 모델 호출·제안·실행 경계
+
+모델 호출과 제안 적용은 독립된 승인 대상이다. `codex-proposal-*`의 승인은 계획에 표시한 고정 합성 자료의 단건 전송만 허용하며 파일 변경이나 Docker 검사를 열지 않는다. 검증된 제안을 내보낸 뒤 `codex-execution-*`에서 새 계획을 검토·승인해야 한다. 기존 조사·3-C/D·4-C-1/2/3 승인을 재사용하지 않는다.
+
+| 경로 | 정책·저장 위치 | 승인 범위 |
+| --- | --- | --- |
+| 모델 호출 | `synthetic-codex-proposal-v1`, `codex-proposals.sqlite`, `codex-calls/<proposal-id>/` | 고정 입력의 모델 호출 한 번과 응답 검증 |
+| 제안 적용·검사 | `synthetic-codex-execution-v1`, `codex-execution.sqlite`, `codex-executions/<task-id>/` | 새 계획에 포함된 1파일 patch·작업 브랜치·등록 Docker 검사 |
+
+CLI 설정 버전 `codex-cli-proposal-v1`은 enabled·실행 파일 경로/SHA-256·모델·인증 방식·60초·16KiB 한도를 고정한다. 호출 계획은 이 설정 hash, 고정 입력 hash, 제안 UUID·OS 소유자·작업 유형·24시간 만료에 결합한다. 새 승인 TTL은 필수 정수 1~60분이고 계획 만료를 넘지 않는다. 승인·호출·내보내기에 설정 hash 일치를 요구하며 호출 직전에는 전달된 과거 시각이 아닌 실제 현재 시각으로 만료를 확인한다. 승인 소비·RUNNING·단일 시도를 외부 모델 포트 호출 전에 원자 저장한다.
+
+전송할 자료는 합성 `src/message.mjs`의 `export const message = 'before';`와 줄바꿈, 값을 `approved`로 바꾸라는 고정 요청이다. CLI가 계획과 함께 입력 전체·hash·모델·인증 방식·고정 목적지·호출/시간/크기 한도를 표시한다. 회사 자료·Slack 본문·사용자 저장소·임의 요청 문구를 붙이지 않는다. 승인 전 모델 호출은 없으며 READY도 실행 승인이 아니다.
+
+기존 ChatGPT 로그인 사용은 사용자가 그 인증 방식을 명시적으로 선택한 경우에만 허용한다. 이번 합성 연결의 기존 로그인 경로도 그 선택에 따른다. 신뢰하는 부모가 run 경로에서 `~/.codex/auth.json`의 canonical 경로·현재 UID·비공개 권한·일반 파일·단일 링크·32KiB 한도와 token 만료를 검사한다. 서명·계정 유효성은 upstream 응답으로 확인하며 로컬 만료 검사를 인증 검증 완료로 설명하지 않는다. refresh token을 사용해 갱신하거나 auth 파일·기존 설정을 복제·수정하지 않는다. API 키 방식은 전용 `CODEX_PROPOSAL_API_KEY`만 읽는다. 실제 credential은 DB·계획·보고서·자식 환경·원시 로그에 넣지 않는다.
+
+Codex는 새 private HOME/CODEX_HOME와 최소 환경에서 실행한다. 기존 사용자 설정·rules·hooks·MCP·plugins·apps·shell·multi-agent·web·기타 모델 도구를 상속하거나 활성화하지 않는다. `--ignore-user-config`, `--ignore-rules`, `--ephemeral`, `--strict-config`, read-only와 기능 비활성화를 사용하되 이것만으로 격리를 주장하지 않는다. 실제 실행 파일은 macOS arm64 native Codex 0.154.0의 canonical 경로·일반 파일·링크·권한·SHA-256을 검사하고 격리 안의 version 출력도 정확히 비교한다.
+
+외부 macOS SBPL은 기본 거부에서 지정 실행 파일·필요한 시스템 library·전용 작업 디렉터리와 localhost broker의 TCP 포트만 허용한다. 합성 실행 작업 트리와 승인 DB, 기존 HOME·자격증명은 Codex가 읽지 못하게 분리한다. 모델 호출 전에 동일 profile 생성기로 host canary 읽기, 영역 밖 쓰기, 추가 process 실행, 다른 TCP 포트와 Unix socket 접속의 거부 및 broker 접속 성공을 진단한다. 이것은 해당 OS·native CLI·profile의 검증 범위이며 다른 OS나 임의 코드 실행 환경의 보안 검토를 대신하지 않는다.
+
+Codex 자식과 guardian에는 실제 credential 대신 매 호출 생성한 난수 capability를 전달한다. localhost broker는 constant-time capability 비교, 정확한 POST 경로·요청 조건·단일 수신/호출을 확인한다. 자식의 body·도구·자격증명·주소를 그대로 중계하지 않고 부모가 승인한 모델·고정 합성 입력·출력 JSON schema와 `tools: []`, `store: false`를 포함한 body를 새로 만든다. API 키는 `https://api.openai.com/v1/responses`, ChatGPT 로그인은 `https://chatgpt.com/backend-api/codex/responses`만 사용한다. redirect와 retry를 거부하며 upstream 요청은 최대 한 번이다. 프롬프트나 모델 출력으로 목적지·전송 자료·도구 권한을 넓힐 수 없다.
+
+호출 전체는 60초, 최종 모델 JSON은 16KiB, Codex stdout/stderr 합계는 128KiB, broker 입력과 upstream stream은 각각 256KiB로 제한한다. 원시 stderr는 크기만 세고 보존·출력하지 않는다. credential을 갖지 않는 guardian은 부모 IPC 연결을 감시하고 취소·시간 초과·부모 단절 때 sandbox 자식 프로세스 그룹을 SIGKILL한다. 일반 취소·완료는 child close와 broker close까지 기다린 뒤 run이 반환하고 lease를 해제한다. 부모 자체의 강제 종료와 남은 프로세스 정리 실증은 결과 문서에 별도 근거를 남긴다.
+
+Upstream은 256KiB 안의 완성 JSON 또는 SSE 완료 이벤트를 검증하고, 도구 호출 없는 assistant text 한 건만 CLI용 SSE로 정규화한다. 응답이 미완료이거나 도구 호출을 포함하면 거부한다. 실제 사용량을 새로 추정하지 않으며 CLI 중계용 usage 0은 과금·토큰 사용량 근거가 아니다. 오류 원문은 저장하지 않고 HTTP 상태·알려진 protocol field만 정적 실패 코드로 분류한다.
+
+Codex 이벤트는 최종 agent message와 완료 turn을 각각 한 건 요구하고 도구 호출·다른 오류·불완전 turn을 거부한다. 지정 모델에 대해 정확히 정한 metadata 부재 경고문만 예외로 허용하며 비공개 model catalog를 복제하지 않는다. 경고는 fallback metadata를 사용했다는 사실로 기록해야 하며 모델 metadata가 완전하거나 최적 성능·호환성을 검증했다는 뜻이 아니다. 응답 본문은 `path`와 `content` 두 문자열 키만 가진 JSON이어야 한다. 중복/추가 키·다른 경로·8KiB 초과 내용·빈 내용·NUL·잘못된 Unicode·비밀 패턴·원본과 동일한 내용은 거부한다. 유효한 내용과 원시 응답 SHA-256만 저장하고 잘못된 원문·오류 본문·token은 저장하지 않는다. 이 검사는 코드 의미·무해함·검사 통과를 증명하지 않는다.
+
+호출 취소는 generation을 바꾸어 늦은 결과를 READY로 저장하지 못하게 한다. 이미 수신한 READY를 취소하면 결과의 감사 기록은 보존하되 export를 거부한다. inspect는 중단된 RUNNING을 유지하고 recover만 INTERRUPTED로 확정한다. 실패·취소·중단 뒤에는 같은 제안을 다시 호출하거나 승인 소비를 복원하지 않는다. proposal inspect/cancel은 짧은 DB 트랜잭션으로 전역 lease를 우회하고 run/recover는 lease를 유지한다.
+
+실행 계획으로 내보내기는 READY에서 EXPORTED로 전환하는 단일 트랜잭션이다. commit 후에만 결과를 반환하며 같은 UUID·작업 유형·입력/응답/설정 hash를 새 실행 계획으로 옮긴다. 변환 뒤 실행 DB나 source 준비가 실패해도 소비를 되돌리지 않는다. 실행 계획 hash는 `validatorVersion: codex-proposal-v1`과 제안 근거, 실제 patch 내용·전후 hash, 브랜치·기준·source·등록 명령·Docker 정책을 포함한다. 소유자가 새 실행 계획을 승인하기 전에는 source fixture 준비 외 작업 브랜치·patch·Docker 검사를 만들지 않는다.
+
+제안 적용은 신뢰하는 하네스가 승인한 `src/message.mjs` 한 파일에 수행한다. Codex에게 작업 트리 쓰기 포트를 주지 않고 제안 코드를 호스트에서 import·실행하지 않는다. 실행 시 독립 Git의 main·source·선택 후 Git 증거를 유지하며 Git 없는 읽기 전용 Docker view에 기존 네트워크·nonroot·root filesystem·권한·자원·시간·출력 제한을 적용한다. 실제 diff·검사 결과·취소·복구는 기존 실행 기록으로 보관한다. 회사 자료·회사 저장소·Slack 요청 연결·작업 결과 commit·push·PR/MR은 허용하지 않는다. 모든 실증의 최종 범위와 제한은 [4-C-4 결과](stage-4c4-result.md)를 따른다.
 
 ## 7. 회사 자료와 비밀정보
 

@@ -1,16 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { HarnessError } from '../domain/errors.js';
-import { BRANCH_EXECUTION_POLICY_VERSION, EXECUTION_POLICY_VERSION } from '../domain/execution.js';
+import { BRANCH_EXECUTION_POLICY_VERSION, CODEX_EXECUTION_POLICY_VERSION, EXECUTION_POLICY_VERSION } from '../domain/execution.js';
 import type { BranchWorkType } from '../domain/branch.js';
 import type {
   ExecutionApprovalContext, ExecutionApprovalRequest, ExecutionCleanupResult, ExecutionCommandResult,
   ExecutionFixture, ExecutionLifecycleHooks, ExecutionPhase, ExecutionPlan, ExecutionProgress,
-  ExecutionRun, ExecutionRunRequest, ExecutionTask, IsolatedExecutionPort, ExecutionPolicyVersion,
+  ExecutionRun, ExecutionRunRequest, ExecutionTask, IsolatedExecutionPort, ExecutionPolicyVersion, ExecutionProposalMetadata,
 } from '../domain/execution.js';
 import type { SandboxConfig } from '../domain/sandbox.js';
 import type { ExecutionStore } from '../ports/execution.js';
-import { assertExecutionConfig, assertExecutionPlan, assertExecutionPlanReady, createExecutionPolicy, getExecutionCommand, hashExecutionPlan } from '../policy/execution-policy.js';
+import {
+  assertExecutionConfig, assertExecutionPlan, assertExecutionPlanReady, assertExecutionProposalContent,
+  assertExecutionProposalMetadata, createExecutionPolicy, getExecutionCommand, hashExecutionPlan, sha256,
+} from '../policy/execution-policy.js';
 import { assertSandboxHost } from '../policy/sandbox-policy.js';
 import { SyntheticExecutionWorkspace } from '../adapters/execution-workspace.js';
 
@@ -41,20 +44,39 @@ export class SyntheticExecutionService {
     private readonly observer: ExecutionServiceObserver = {},
     private readonly policyVersion: ExecutionPolicyVersion = EXECUTION_POLICY_VERSION,
   ) {
-    if (![EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION].includes(policyVersion)) {
+    if (![EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION, CODEX_EXECUTION_POLICY_VERSION].includes(policyVersion)) {
       throw new HarnessError('INVALID_EXECUTION_POLICY');
     }
   }
 
   async plan(taskId: string, directory: string, fixture: ExecutionFixture, workType?: BranchWorkType): Promise<ExecutionTask> {
-    const branchExecution = this.policyVersion === BRANCH_EXECUTION_POLICY_VERSION;
+    if (this.policyVersion === CODEX_EXECUTION_POLICY_VERSION) throw new HarnessError('EXECUTION_PROPOSAL_REQUIRED');
+    return this.createPlan(taskId, directory, fixture, workType);
+  }
+
+  async planProposal(
+    taskId: string, directory: string, workType: BranchWorkType, content: string, proposalMetadata: ExecutionProposalMetadata,
+  ): Promise<ExecutionTask> {
+    if (this.policyVersion !== CODEX_EXECUTION_POLICY_VERSION) throw new HarnessError('EXECUTION_POLICY_MISMATCH');
+    assertExecutionProposalContent(content);
+    assertExecutionProposalMetadata(proposalMetadata);
+    return this.createPlan(taskId, directory, 'success', workType, { content, metadata: { ...proposalMetadata } });
+  }
+
+  private async createPlan(
+    taskId: string, directory: string, fixture: ExecutionFixture, workType?: BranchWorkType,
+    proposal?: { content: string; metadata: ExecutionProposalMetadata },
+  ): Promise<ExecutionTask> {
+    const codexExecution = this.policyVersion === CODEX_EXECUTION_POLICY_VERSION;
+    const branchExecution = this.policyVersion !== EXECUTION_POLICY_VERSION;
+    const profileDirectory = codexExecution ? 'codex-executions' : 'branch-executions';
     if (branchExecution ? !workType || !['feature', 'fix', 'chore', 'refactor'].includes(workType) : workType !== undefined) {
       throw new HarnessError('INVALID_EXECUTION_WORK_TYPE');
     }
     if (branchExecution && !process.getuid) throw new HarnessError('APPROVAL_OWNER_UNSUPPORTED');
     if (branchExecution && (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(taskId)
       || !isAbsolute(directory) || normalize(directory) !== directory
-      || directory !== join(dirname(dirname(directory)), 'branch-executions', taskId)
+      || directory !== join(dirname(dirname(directory)), profileDirectory, taskId)
       || /[\\*,]/.test(directory) || [...directory].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127))) {
       throw new HarnessError('UNSAFE_EXECUTION_DIRECTORY');
     }
@@ -63,14 +85,16 @@ export class SyntheticExecutionService {
     const branchName = `${workType}/task-${taskId}`;
     const content: Omit<ExecutionPlan, 'planHash'> = {
       planId: randomUUID(), version: 1, taskId, requestRevision: 'synthetic-1',
-      repoId: branchExecution ? 'synthetic-branch-execution' : 'synthetic-execution',
+      repoId: codexExecution ? 'synthetic-codex-execution' : branchExecution ? 'synthetic-branch-execution' : 'synthetic-execution',
       baseCommit: source.baseCommit, sourceHash: source.sourceHash, allowedFiles: ['src/message.mjs'],
-      patches: source.patches, commands: source.commandIds.map(getExecutionCommand), policy: createExecutionPolicy(this.config, this.policyVersion),
+      patches: proposal ? [{ ...source.patches[0]!, content: proposal.content, afterHash: sha256(proposal.content) }] : source.patches,
+      commands: source.commandIds.map(getExecutionCommand), policy: createExecutionPolicy(this.config, this.policyVersion),
       ...(branchExecution ? { branch: {
         workType: workType!, name: branchName, baseBranch: 'main' as const, headRef: `refs/heads/${branchName}`,
         ownerId: `os-user:${process.getuid!()}`, sourceRoot: source.sourceRoot,
         createdAt: now, expiresAt: new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString(),
       } } : {}),
+      ...(proposal ? { proposal: proposal.metadata } : {}),
     };
     const plan: ExecutionPlan = { ...content, planHash: hashExecutionPlan(content) };
     assertExecutionPlan(plan);

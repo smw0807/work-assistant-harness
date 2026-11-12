@@ -22,6 +22,8 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
 
 단계 4-C-3의 `branch-execution-*`는 새 합성 실행 승인 후 유형별 브랜치를 생성·선택하고 고정 파일 patch와 등록 Docker 검사, 취소·복구를 연결합니다. 기존 3-C/D·4-C-2의 작업과 승인은 재사용하지 않습니다. 전체 회귀 481개와 lint·typecheck·build, 실제 Docker 격리 진단 및 실행·취소·복구 12개 시나리오가 통과했습니다. 근거는 [4-C-3 결과](docs/stage-4c3-result.md)에 기록합니다. 실제 Codex·회사 저장소·작업 결과 commit·push·PR/MR은 연결하지 않습니다.
 
+단계 4-C-4의 `codex-proposal-*`와 `codex-execution-*`는 합성 입력의 Codex 제안 호출과 제안 코드의 실행을 서로 다른 승인·DB로 분리합니다. 기존 단계의 검증 결과를 실제 Codex 연결 검증으로 간주하지 않으며, 명령과 현재 경계는 아래 4-C-4 절을 따릅니다.
+
 ## 설치와 실행
 
 검증 환경은 macOS, Node.js **26.12.1**, pnpm **12.18.0**입니다. `.node-version`, `packageManager`, 직접 의존성 버전과 `pnpm-lock.yaml`을 고정했습니다. 다른 OS는 아직 검증하지 않았습니다.
@@ -59,6 +61,8 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 - `runs/`: 명령별 결과와 대상 전후 해시를 기록한 JSON 실행 기록.
 - `execution.sqlite`, `executions/`: 독립 합성 작업·계획·승인·Run, 요청 revision·무효화·실행 단계 이력과 동결 원본·분리 작업 트리·읽기 전용 실행 view·보고서. 기존 `tasks.sqlite`의 작업과 승인을 실행에 사용하지 않습니다.
 - `branch-execution.sqlite`, `branch-executions/`: 유형별 브랜치에서 고정 patch·Docker 검사를 수행하는 새 합성 실행 profile의 계획·승인·Run·제어·Git/파일/view 증거와 보고서. 기존 실행·브랜치 DB와 승인을 공유하지 않습니다.
+- `codex-proposals.sqlite`, `codex-calls/`: 고정 합성 입력·Codex 설정 해시·호출 승인·단일 시도·검증한 제안과 호출별 격리 디렉터리. 인증값은 저장하지 않습니다.
+- `codex-execution.sqlite`, `codex-executions/`: 한 번 소비한 제안에서 만든 별도 실행 계획·새 실행 승인·분리 합성 원본·작업 브랜치·Docker 검사와 관찰 보고서.
 - `replies.sqlite`: 독립 합성 답장 Task·본문 없는 계획/승인 snapshot·전송 시도·제어 이력·보관 정책·최소 중복 marker. 답장 본문은 별도 만료 payload에만 보관하며 영속 보고서에 복제하지 않습니다.
 - `live-replies.sqlite`: 고정 단건 Slack 시험의 별도 계획·승인·시도와 대상 중복 hash marker. 원문·전송 본문·token은 저장하지 않습니다.
 
@@ -324,6 +328,41 @@ pnpm harness branch-execution-recover --task <uuid> --config /absolute/path/to/p
 `branch-execution-inspect`는 선택 `--approval-offset <0..1000000000>`으로 최신 승인 한 건과 다음 offset을 조회하고 누락된 완료 보고서를 재생성합니다. inspect·cancel·invalidate는 3-D와 같이 전역 lease를 우회하는 짧은 DB 트랜잭션으로 실행 중 상태를 조회·제어합니다. cancel의 event ID는 선택이고 invalidate는 `edited|deleted`, revision 2~1000000000과 event ID가 필수입니다. 실행·복구는 전역 lease를 유지합니다. 취소는 새 동작과 늦은 성공을 차단하고 소유권이 확인된 container를 정리하며 이미 만든 ref·파일을 되돌리지 않습니다.
 
 브랜치 생성·선택 중 최초 Git 증거 저장 전에 중단되어 작업 영역이 남으면 `BLOCKED`로 보존합니다. 증거 저장 뒤 명시 recover는 소유 container 정리와 현재 파일·Git·view 관찰만 수행하며 확인된 중단은 `INTERRUPTED`, 취소는 `CANCELLED`, 불확실한 경계는 `BLOCKED`입니다. 승인 소비 복원·자동 재실행·수리·작업물 삭제는 없습니다. 실제 Codex·회사 저장소·임의 patch나 명령·작업 결과 commit·push·PR/MR은 제공하지 않습니다. 최종 검증 상태와 한계는 [4-C-3 계획](docs/implementation-plan.md#단계-4-c-3-합성-작업-브랜치의-수정검사-연결)과 [결과](docs/stage-4c3-result.md)를 따릅니다.
+
+## 단계 4-C-4 Codex 합성 제안과 별도 실행 승인
+
+`codex-proposal-plan`은 고정 합성 입력만 보여 주고 호출 승인을 기다립니다. 임의 요청 본문·저장소·경로·명령을 입력받지 않습니다. 표시한 입력, 모델, 인증 방식, 고정 전송 endpoint, 호출 한도, 시간·출력 제한과 계획 해시를 검토해야 합니다. 계획은 24시간, 호출 승인은 필수 1~60분입니다.
+
+`config/codex.example.json`은 기본 비활성입니다. 저장소 밖의 비공개 설정에 실제 native Codex 0.154.0 경로·SHA-256·모델을 고정하고 `enabled: true`로 설정합니다. `authMode: "chatgpt"`는 현재 OS 사용자의 기존 `~/.codex/auth.json`을 **run에서만** 읽습니다. 유효한 로그인이 없으면 `CODEX_LOGIN_REQUIRED`로 멈추고 자동 refresh나 로그인 파일 변경을 하지 않습니다. 선택 가능한 `authMode: "api-key"`는 run 프로세스의 `CODEX_PROPOSAL_API_KEY`를 사용하며 누락 시 `API_KEY_REQUIRED`로 멈춥니다. 인증값을 CLI 옵션·설정 파일·명령 예제에 넣지 않습니다.
+
+```sh
+pnpm harness codex-proposal-plan --type fix --codex-config /absolute/path/to/private-codex.json --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-proposal-inspect --task <proposal-uuid> --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-proposal-approve --task <proposal-uuid> --plan-hash <proposal-sha256> --expires-in-minutes 30 --codex-config /absolute/path/to/private-codex.json --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-proposal-run --task <proposal-uuid> --plan-hash <proposal-sha256> --codex-config /absolute/path/to/private-codex.json --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-proposal-cancel --task <proposal-uuid> --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-proposal-recover --task <proposal-uuid> --data-dir /private/tmp/harness-codex-data
+```
+
+인증은 부모 broker 메모리에만 두고 Codex 자식에는 단건 broker capability를 제공합니다. 자식은 빈 HOME·CODEX_HOME과 고정 합성 입력을 사용하며 기존 사용자 설정·skills·MCP·로그인 파일을 전달받지 않습니다. macOS 외부 sandbox의 파일·프로세스·네트워크 제한과 호출 전 진단을 함께 요구합니다. 생성 코드는 호스트나 Codex 자식에서 실행하지 않습니다. 호출은 한 번만 허용하고 실패·취소·중단 후 같은 제안을 자동 재시도하지 않습니다. `recover`는 남은 `RUNNING`을 `INTERRUPTED`로 기록하며 승인 소비를 복원하지 않습니다.
+
+응답은 최대 16KiB의 정확한 JSON `{path, content}`여야 합니다. `path`는 `src/message.mjs` 하나로 제한하고 크기·비밀 패턴·동일 내용 등을 검사합니다. 검증을 통과한 `READY`도 실행 승인이 아닙니다. 다음 명령이 제안을 `EXPORTED`로 한 번 소비하고 같은 UUID의 새 실행 계획을 만듭니다. 원본·실행 DB 준비가 소비 이후 실패해도 `READY`로 되돌리지 않습니다.
+
+```sh
+pnpm harness codex-execution-plan --proposal <proposal-uuid> --codex-config /absolute/path/to/private-codex.json --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-execution-inspect --task <proposal-uuid> --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-execution-approve --task <proposal-uuid> --plan-hash <execution-sha256> --base-commit <sha1> --expires-in-minutes 30 --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-execution-run --task <proposal-uuid> --plan-hash <execution-sha256> --base-commit <sha1> --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-execution-cancel --task <proposal-uuid> --event-id synthetic-cancel-1 --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-execution-invalidate --task <proposal-uuid> --event edited --revision 2 --event-id synthetic-edit-2 --data-dir /private/tmp/harness-codex-data
+pnpm harness codex-execution-recover --task <proposal-uuid> --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-codex-data
+```
+
+새 실행 정책은 `synthetic-codex-execution-v1`입니다. 제안의 유형과 검증된 전체 파일 내용, 입력·설정·응답 해시, 기준 커밋, 등록 검사와 Docker 정책을 새 계획에 묶습니다. `--type`·`--fixture`로 이를 바꿀 수 없습니다. 실행 승인도 필수 1~60분이며 제안 호출 승인과 기존 단계 승인은 재사용하지 않습니다. 승인 뒤에만 독립 합성 작업 브랜치를 선택하고 제안 코드를 적용합니다. 등록 검사는 인증·네트워크 없는 Docker의 읽기 전용 view에서 실행합니다. 원본 HEAD·main과 작업 영역 main 보존, 취소·무효화·중단 복구 경계는 4-C-3과 같습니다.
+
+제안 inspect·cancel과 실행 inspect·cancel·invalidate는 전역 lease 중에도 동작하며 나머지는 lease를 요구합니다. 두 inspect 모두 `--approval-offset <0..1000000000>`을 지원합니다. 제안 run은 `READY`, 실행 run은 `SUCCEEDED`일 때만 종료 코드 0입니다. 회사 자료·회사 저장소·작업 결과 commit·push·PR/MR은 범위 밖입니다. 유형별 브랜치 규칙은 하네스가 맡기는 대상 작업에 적용하며 이 하네스 저장소의 개발 브랜치 규칙을 바꾸지 않습니다.
+
+기존 ChatGPT 로그인으로 실제 제안을 받아 별도 승인·브랜치 적용·Docker 검사까지 확인했습니다. 전체 530개 테스트와 지원 범위·실패 기록은 [4-C-4 결과](docs/stage-4c4-result.md)에 기록했습니다. 기본 테스트에서는 실제 macOS 종료 감시 테스트 3개를 건너뛰며, macOS arm64에서 `HARNESS_NATIVE_CODEX_PROBE=1 pnpm test`로 포함할 수 있습니다. 이 테스트는 실제 모델 호출이나 로그인 정보를 사용하지 않습니다.
 
 ## 모의 입력과 오류 재현
 

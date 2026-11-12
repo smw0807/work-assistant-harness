@@ -10,6 +10,8 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 후속 4-C-2는 독립 합성 Git 저장소에 별도 승인으로 실제 ref 하나를 생성하고 관찰·복구하는 경로다. 실제 Codex·회사 저장소·코드 변경·작업 결과 commit·원격 작업은 연결하지 않는다. 최종 검증 상태는 [4-C-2 결과](stage-4c2-result.md)를 따른다.
 
+4-C-3은 합성 작업 브랜치의 고정 수정·Docker 검사까지 연결했고 [4-C-3 결과](stage-4c3-result.md)에 완료 근거를 남겼다. 4-C-4는 별도 승인으로 고정 합성 입력만 실제 Codex에 보내 JSON 제안을 받은 뒤, 다시 승인한 독립 실행 계획에서 적용·검사하는 범위다. 회사 자료·회사 저장소·Git 원격 작업은 연결하지 않으며 실제 호출·격리·취소·복구와 회귀의 최종 결과는 [4-C-4 결과](stage-4c4-result.md)를 따른다.
+
 ### 하네스가 맡을 역할
 
 하네스는 AI 모델 자체가 아니라 모델 주변의 실행 프로그램이다. 어떤 메시지를 받을지, 어떤 자료를 읽힐지, 어느 작업에서 멈출지, 누가 승인할지, 결과를 어디에 보관할지를 정한다. 모델은 해석과 추론을 맡고, 권한과 실행 여부는 일반 코드가 결정한다.
@@ -374,9 +376,40 @@ branch-execution-recover → 저장한 소유권·Git/파일/view 증거로 관�
 
 **완료:** 수용 81~90을 포함한 전체 회귀 481개, lint·typecheck·build와 실제 로컬 Docker 격리 진단·실행/취소/강제 종료 복구 12개 시나리오를 통과했다. [4-C-3 결과](stage-4c3-result.md)에 근거와 한계를 기록했다. 실제 Codex 연결 시에는 patch 제안 방식과 격리 공간 직접 수정 방식, 인증·네트워크·자료 전송과 쓰기 권한을 별도 계획으로 확정한다.
 
+#### 단계 4-C-4 Codex 합성 제안과 별도 실행 승인
+
+실제 Codex는 고정 합성 입력으로 JSON 제안 한 건을 반환한다. 하네스가 검증된 결과를 새 실행 계획으로 한 번 옮기고, 소유자가 그 내용을 다시 승인한 뒤 독립 작업 브랜치에 적용한다. 모델 호출 승인과 파일 변경·Docker 검사 승인을 별개로 관리하며 실제 제품 저장소를 Codex에 직접 쓰게 하는 방식은 열지 않는다.
+
+```text
+codex-proposal-plan → 고정 합성 입력·모델/인증방식/설정·24h 계획 → AWAITING_APPROVAL
+codex-proposal-approve → 단건 전송·모델 호출의 별도 승인
+codex-proposal-run → 승인 소비 + RUNNING commit → Codex 격리 진단·단건 호출
+  → 정확한 JSON·파일·크기·비밀 패턴 검사 → READY / FAILED
+codex-execution-plan → READY를 EXPORTED로 한 번 소비
+  → 새 source·브랜치·제안 patch·검사·Docker 정책 계획 → AWAITING_APPROVAL
+codex-execution-approve → 제안 내용을 포함한 새 실행 승인
+codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 Docker 검사·diff
+각 경로의 cancel / recover → 취소·중단 기록, 자동 재호출·재실행 없음
+```
+
+- 호출 계획은 `synthetic-codex-proposal-v1`·`codex-proposals.sqlite`, 실행 계획은 `synthetic-codex-execution-v1`·`codex-execution.sqlite`와 `codex-executions/`로 분리한다. CLI 설정 버전 `codex-cli-proposal-v1`과 출력 검증 버전 `codex-proposal-v1`도 구분한다. 기존 조사·실행·브랜치 승인은 어느 새 경로에서도 사용하지 않는다.
+- 전송 입력은 `src/message.mjs`의 `export const message = 'before';`와 줄바꿈을 포함한 고정 합성 코드 및 값을 `approved`로 바꾸라는 요청뿐이다. CLI 계획에 전송할 전체 입력과 hash, 모델·인증 방식·고정 목적지·호출/시간/응답 한도를 표시한다. 회사 자료·임의 본문·추가 파일·명령·저장소 경로는 입력으로 제공하지 않는다.
+- 호출 계획 hash에 제안 UUID·OS 소유자·작업 유형·고정 입력 hash·Codex 설정 hash·생성 및 24시간 만료를 묶는다. 승인 TTL은 기본값 없는 정수 1~60분이며 계획 만료 이내다. 승인·호출·내보내기는 같은 설정 hash를 요구하고 호출 직전에 실제 현재 시각으로 승인·계획 만료를 다시 확인한다.
+- 호출 승인 소비와 `RUNNING`·단일 attempt를 SQLite 트랜잭션으로 먼저 확정한다. 한 제안은 실패·취소·중단을 포함해 한 번만 호출한다. 취소는 generation을 바꾸어 늦은 응답을 거부하며, 새 프로세스의 inspect는 중단된 `RUNNING`을 유지하고 명시 recover만 `INTERRUPTED`로 확정한다. READY 취소는 저장한 감사 결과를 보존하면서 내보내기를 차단한다.
+- 실제 Codex 실행기는 macOS arm64의 native `codex-cli 0.154.0`만 받는다. 절대 canonical 실행 경로·파일 종류·권한·SHA-256을 확인하고 격리된 `--version` 결과도 비교한다. CLI의 `read-only` 설정과 별개로 외부 macOS SBPL profile을 적용하며 호출마다 같은 profile 생성기로 host canary 읽기·영역 밖 쓰기·추가 실행·다른 TCP/Unix socket 거부와 전용 broker 접속을 먼저 진단한다.
+- 사용자가 명시적으로 선택한 기존 ChatGPT 로그인 또는 전용 `CODEX_PROPOSAL_API_KEY`는 신뢰하는 부모에서만 읽는다. 기존 로그인은 `~/.codex/auth.json`의 소유자·mode·링크·크기·만료를 검사하고 refresh·복제·설정 변경을 하지 않는다. Codex 자식은 빈 전용 HOME/CODEX_HOME, 최소 환경과 난수 broker capability만 받는다. 기존 사용자 설정·규칙·hooks·MCP·plugins·tools·토큰을 상속하지 않는다.
+- localhost broker는 정확한 capability·HTTP 경로·요청 조건을 검사하고 부모가 고정된 upstream body를 새로 구성한다. 승인된 모델·고정 합성 입력·출력 schema와 `tools: []`, `store: false`만 보내며 자식의 도구·본문·주소·자격증명을 전달하지 않는다. API 키는 고정 OpenAI Responses 주소, 기존 로그인은 고정 ChatGPT Codex Responses 주소를 사용한다. redirect와 호출 재시도는 허용하지 않고 upstream 전송은 최대 한 번이다.
+- 전체 호출 시간은 60초, 최종 JSON 응답은 16KiB, Codex stdout/stderr 합계는 128KiB, broker 입력 및 upstream 응답은 각각 256KiB로 제한한다. 부모 IPC를 감시하는 별도 guardian이 취소·시간 초과·부모 단절 때 sandbox 자식 프로세스 그룹을 SIGKILL한다. 정상 경로도 자식 close와 broker close를 기다린 뒤 호출 lease를 해제한다. 실제 강제 종료 정리 범위와 제한은 결과 문서에서 구분한다.
+- 최종 출력은 정확한 `{path: 'src/message.mjs', content: string}` JSON만 허용한다. 중복/추가 키·잘못된 JSON·다른 경로·빈 내용·8KiB 초과·NUL·잘못된 Unicode·비밀 패턴·원본과 같은 내용은 거부한다. 유효한 응답만 내용과 원시 응답 SHA-256을 저장하며 잘못된 원문·오류 본문·token은 DB와 출력에 남기지 않는다. 내용 검증은 코드의 정확성이나 무해함을 보장하지 않으므로 새 실행 승인을 요구한다.
+- Codex JSON 이벤트는 도구 호출·오류·불완전 turn을 거부하고 최종 agent message와 완료 turn을 각각 한 건 요구한다. 지정 모델의 정확한 metadata 부재 경고문만 예외로 허용한다. 이는 fallback metadata를 사용한다는 사실이며 모델 metadata의 완전성·최적 성능·호환성을 확인했다는 뜻이 아니다.
+- `codex-execution-plan`은 READY를 `EXPORTED`로 원자 소비하고 같은 UUID를 실행 작업 ID로 사용한다. 내보내기 이후 실행 DB/원본 준비가 중단되어도 READY로 되돌리거나 재사용하지 않는다. 새 실행 계획 hash에 제안 UUID·입력/응답/설정 hash·검증 버전, 실제 patch 전후 hash·내용, 브랜치·기준·source·등록 검사·Docker 정책을 결합하고 새 실행 승인을 받는다.
+- 실행은 4-C-3의 독립 Git·source/main 보존·브랜치 충돌 거부·불변 Git 증거·읽기 전용 Docker view·취소·복구를 유지한다. 신뢰하는 하네스가 승인된 한 파일만 쓰고 제안 코드를 호스트에서 import하거나 실행하지 않는다. 실제 Codex 직접 파일 수정·회사 자료/저장소·Slack 요청 연결·작업 결과 commit·push·PR/MR은 범위 밖이다.
+
+**완료:** 수용 91~102를 포함한 전체 회귀 530개(실제 macOS guardian/self-exec 검사 3개 포함), lint·typecheck·build와 기존 ChatGPT 로그인으로 받은 실제 Codex 제안의 새 승인·브랜치 적용·Docker 검사가 통과했다. 모의 취소·중단 복구와 실제 프로세스 정리, 실제 단건 호출은 구분해 기록한다. 모의 adapter, 격리 진단, 실제 호출과 회사 도입 승인을 혼용하지 않으며 최종 결과와 남은 한계는 [4-C-4 결과](stage-4c4-result.md)를 따른다.
+
 #### 후속 단계의 별도 범위
 
-- 4-C 후속 후보: 4-C-1의 오프라인 계약, 4-C-2의 독립 합성 브랜치 생성, 4-C-3의 합성 브랜치 수정·검사 연결 이후, 승인·격리 조건을 갖춘 실제 Codex·대상 저장소 작업 연결을 별도 계획으로 설계한다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
+- 4-C 후속 후보: 4-C-4의 고정 합성 Codex 제안·별도 실행 승인 이후 실제 대상 저장소 자료·Codex 직접 수정 방식·인증·전송 범위·격리를 별도 계획으로 설계한다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 
 4-C·4-D는 진행 순서 제안이며 4-B-2의 구현·단건 게시 승인에 포함되지 않는다.
@@ -393,7 +426,7 @@ branch-execution-recover → 저장한 소유권·Git/파일/view 증거로 관�
 - 계획에 작업 유형·브랜치 이름·기준 브랜치와 커밋·허용 diff 범위를 명시한다. 유효한 수정 승인과 검증된 격리 환경을 확인한 뒤, 기준 커밋에서 `<type>/<short-description>` 형태의 작업 브랜치를 생성하고 해당 브랜치에서만 수정한다. 기준 브랜치를 직접 수정하지 않는다.
 - 기존 사용자 변경과 같은 이름의 브랜치를 덮어쓰거나 초기화하지 않는다. 재시작 시 같은 작업의 브랜치인지 확인하며, 다른 작업과 충돌하면 계획을 조정한다. 승인에 묶인 브랜치·기준 커밋·변경 범위가 달라지면 재승인한다.
 - Codex에는 허용된 수정·검사와 로컬 브랜치·diff·결과 보고까지만 지시한다. PR/MR 생성 경로를 제공하지 않으며, commit·push는 코드 수정 승인에서 분리한다. push에는 실제 원격·브랜치·커밋·diff를 검토한 별도 승인이 필요하다.
-- 4-C-1은 오프라인 계획·승인·모의 결과를, 4-C-2는 독립 합성 저장소의 실제 ref 생성·보존·복구를, 4-C-3은 새 합성 작업 브랜치의 고정 수정·Docker 검사·취소·복구를 다룬다. 실제 Codex 실행 연결·회사 대상 저장소 변경·Git 원격 작업은 아직 구현되지 않았다. 실제 연결 전에는 작업 유형별 브랜치 선택, 승인 전 무변경, 기준 브랜치 보존, 이름 충돌·재시작, 승인 후 계획 변경, PR/MR 호출 없음과 미승인 push 차단을 해당 환경에서 검증한다. 기존 합성 검증 결과를 실제 연결의 검증으로 재사용하지 않는다.
+- 4-C-1은 오프라인 계획·승인·모의 결과를, 4-C-2는 독립 합성 저장소의 실제 ref 생성·보존·복구를, 4-C-3은 합성 작업 브랜치의 고정 수정·Docker 검사·취소·복구를, 4-C-4는 실제 Codex의 고정 합성 제안과 새 실행 승인을 다룬다. 회사 대상 저장소 변경·Git 원격 작업은 구현하지 않았다. 회사 연결 전에는 작업 유형별 브랜치 선택, 승인 전 무변경, 기준 브랜치 보존, 이름 충돌·재시작, 승인 후 계획 변경, PR/MR 호출 없음과 미승인 push 차단을 해당 환경에서 검증한다. 기존 합성 검증 결과를 회사 연결의 검증으로 재사용하지 않는다.
 
 ## 3 구조와 데이터 모델
 
@@ -440,6 +473,8 @@ RECEIVED → TRIAGED → ANALYZED
 단계 3-A는 `APPROVED`까지 저장하고 실행하지 않는다. 승인 만료는 취소 기록을 남긴 뒤 `APPROVED → AWAITING_APPROVAL`, 로컬 취소와 요청 무효화는 `CANCELLED`로 전환한다. 불변 승인 스냅샷과 `approval-only-v1` 정책은 Task와 별도로 보존한다. 단계 3-C·3-D의 독립 합성 실행은 별도 `execution.sqlite`에서 `AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED / CANCELLED / INTERRUPTED`와 새 `synthetic-execution-v1` 승인·Run·요청 무효화/lifecycle 기록을 관리한다. 기존 조사 상태 전이와 혼용하지 않는다.
 
 단계 4-A는 `replies.sqlite`에서 `AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN`을 별도 관리한다. 대기 중 소유자 취소는 `CANCELLED`, 요청/문맥 변경·불완전·공백·만료는 `BLOCKED`이며 `SENDING`의 무효화는 `UNKNOWN`으로 차단한다. `NOT_SENT`로 확인된 `FAILED`만 새 승인으로 수동 재시도하며 `SIMULATED`·`UNKNOWN`은 재전송하지 않는다. 중단된 `SENDING`은 문맥이 유효하면 명시적 복구 전까지 그대로 보존한다.
+
+단계 4-C-4의 호출 전용 `codex-proposals.sqlite`는 `AWAITING_APPROVAL → APPROVED → RUNNING → READY / FAILED / CANCELLED / INTERRUPTED`와 한 번의 `READY → EXPORTED`를 관리한다. 별도 `codex-execution.sqlite`는 새 실행 승인을 받은 후 기존 실행 상태 전이를 사용한다. 두 DB를 하나의 트랜잭션으로 묶지 않으며 export commit 뒤 후속 계획 생성 실패도 제안을 다시 소비할 권한으로 바꾸지 않는다.
 
 ## 4 승인과 실행 경계
 
@@ -680,6 +715,18 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 88 | CLI·보고·lease·입력 경계 (4-C-3) | branch-execution 명령/필수 유형·TTL·정확한 source/아티팩트 경로, inspect/제어 lease 우회와 실행 lease 유지, DB·보고서 안전성, 임의 실행 입력 거부. |
 | 89 | 실제 Docker 통합 (4-C-3) | 승인된 로컬 backend에서 정상/검사 실패/취소/강제 종료 복구, 원본과 main 보존, 네트워크 없는 readonly 검사·정리 확인. 모의 backend 통과와 구분. |
 | 90 | 기존 계약 보존 (4-C-3) | 기존 3-C/D·4-C-1/2·조사·Slack 전체 회귀 통과, 기본 ExecutionPort 거부·기존 승인 경계 유지. 실제 Codex/회사 연결/결과 commit/push/PR/MR not_run. |
+| 91 | 두 정책·두 승인·DB 분리 (4-C-4) | 호출 `synthetic-codex-proposal-v1`과 실행 `synthetic-codex-execution-v1`, 별도 DB/작업 경로·기존 승인 재사용 거부. 호출 승인이 수정·검사 권한이 되지 않음. |
+| 92 | 고정 전송 입력·계획·TTL (4-C-4) | 실제 전송할 합성 입력/hash·모델·인증방식·목적지·한도 표시. UUID/OS UID/type/inputHash/configHash/24h를 planHash에 결합, 필수 TTL 1~60분·현재시각·설정변경 차단. |
+| 93 | 원자 호출 소비·1회 제한 (4-C-4) | usedAt+RUNNING+단일 attempt 원자 저장, 동시 claim·저장 실패 rollback·만료/취소/재사용 거부. 실패·중단 후 동일 제안 재호출 없음. |
+| 94 | 정확한 JSON과 출력 한도 (4-C-4) | path/content만 허용, 중복·추가 키/잘못된 JSON·경로·8KiB 내용·16KiB 응답·비밀·NUL·잘못된 Unicode·무변경 거부. 유효 responseHash만 보관, invalid 원문·token·원시 오류 비노출. |
+| 95 | 선택한 인증과 자식 비밀 차단 (4-C-4) | 사용자 선택 기존 ChatGPT 로그인 또는 전용 API 키를 부모만 읽고 검증. credential 복제·refresh·기존 HOME/config/hooks/MCP 상속 없음, 자식은 빈 HOME와 난수 capability만 받음. |
+| 96 | 고정 broker와 단일 upstream (4-C-4) | capability·고정 POST 경로, 병렬/반복 요청 차단, 부모가 승인 입력·모델·schema·tools=[] body 재구성. 목적지 고정·redirect/재시도 없음·256KiB 입력/응답 한도·원시 토큰 비노출. |
+| 97 | native CLI 고정과 실제 SBPL 진단 (4-C-4) | macOS arm64·0.154.0·SHA-256·실행 경로/권한 검증. 외부 profile의 canary 읽기·영역 밖 쓰기·추가 exec·다른 TCP/Unix socket 거부와 broker 접속 확인. |
+| 98 | 호출 취소·부모 종료·복구 (4-C-4) | generation으로 늦은 응답 차단, 60초/128KiB 제한, IPC guardian의 SIGKILL과 child/broker 종료 확인. 재시작 RUNNING 보존→명시 INTERRUPTED, 소비 복원·자동 재호출 없음. |
+| 99 | READY 단일 내보내기와 경합 (4-C-4) | EXPORTED commit 후 한 번 반환, 경합·취소·만료·설정변경·중복 거부. export 저장 실패 rollback, commit 후 실행 계획 생성 중단은 소비 유지. |
+| 100 | 제안 provenance와 새 실행 승인 (4-C-4) | 같은 UUID·입력/응답/설정 hash·validatorVersion과 실제 patch·브랜치·기준·Docker 정책을 새 계획에 결합. 별도 소유자 승인 전 source 준비 외 수정·검사 없음. |
+| 101 | 실제 브랜치·Docker·Git 보존 (4-C-4) | 승인한 제안 한 파일만 하네스가 적용, source/main·Git 증거 유지. Git 없는 readonly Docker 검사·실제 diff·검사 실패·취소·강제 종료 복구, 호스트에서 제안 코드 실행 없음. |
+| 102 | 실제 호출·경고 한계·기존 회귀 (4-C-4) | 단건 실제 Codex/모의 port/격리 probe/실제 Docker 결과 분리, 정확한 metadata fallback 경고만 예외·도구/다른 오류 거부. 기존 회귀·승인 경계 유지, 회사 자료·원격·결과 commit·PR/MR 미실행. |
 
 ### 최종 검증 묶음
 
