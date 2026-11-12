@@ -26,6 +26,8 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
 
 단계 4-C-5의 `readonly-investigation-*`는 합성 다중 파일을 조사하고 별도 승인한 근거만 모의 worker에 전달합니다. 신규 53개를 포함한 전체 583개 테스트와 lint·typecheck·build가 통과했습니다. 실제 모델 호출은 제외했으며 경계와 수용 근거는 [4-C-5 결과](docs/stage-4c5-result.md)를 따릅니다.
 
+단계 4-C-6의 `readonly-transport-*`는 검토한 최종 요청을 별도 승인으로 가짜 전송기에 한 번 전달합니다. 신규 59개를 포함한 전체 642개 테스트와 lint·typecheck·build가 통과했습니다. 실제 모델·인증정보 접근·외부 전송은 제외했으며 [4-C-6 결과](docs/stage-4c6-result.md)에 수용 근거를 기록했습니다.
+
 ## 설치와 실행
 
 검증 환경은 macOS, Node.js **26.12.1**, pnpm **12.18.0**입니다. `.node-version`, `packageManager`, 직접 의존성 버전과 `pnpm-lock.yaml`을 고정했습니다. 다른 OS는 아직 검증하지 않았습니다.
@@ -390,6 +392,32 @@ pnpm harness readonly-investigation-prune
 계획·내용 payload는 생성 후 24시간, 승인 TTL은 1~60분입니다. 승인 소비·단일 attempt를 먼저 저장하며 실패·시간 초과·중단에도 다시 호출하지 않습니다. `cancel`·`invalidate`는 실행 중에도 generation을 변경해 늦은 응답을 막습니다. 부모 종료 후 `recover`는 신뢰하는 로컬 프로세스 기록으로 종료를 확인하면 `INTERRUPTED`, 확인할 수 없으면 `BLOCKED`를 기록합니다. 복구는 호출을 재개하지 않습니다.
 
 내용은 전용 `readonly-investigations.sqlite`의 payload에 저장하고 승인·감사에는 ID·해시·범위·상태를 보관합니다. 명령 시작과 `prune`에서 만료 payload를 제거하며 감사는 최초 terminal 전환부터 30일 후 정리합니다. 최소 중복 방지 marker는 유지하고 합성 원본·Git·남은 작업물은 자동 삭제하지 않습니다. 보고서는 `mode: mock`, 의미 정확성 미검증, 실제 모델/외부 전송 `not_run`을 표시합니다. 실행 계획으로 내보내는 명령은 없습니다. 검사별 결과와 미실행 범위는 [4-C-5 결과](docs/stage-4c5-result.md)를 따릅니다.
+
+## 단계 4-C-6 합성 문맥의 오프라인 전송 검증
+
+`readonly-transport-*`는 등록된 합성 문맥으로 최종 요청 본문을 만들고 새 승인 후 가짜 전송기에 한 번 전달합니다. `mode: offline`, `transport: fake` 전용이며 실제 모델·인증정보·외부 전송 경로를 연결하지 않습니다. 기존 `readonly-investigation-*`의 mock 계획·승인은 별도로 유지합니다.
+
+```sh
+pnpm harness readonly-transport-plan --fixture flow --selection all --transfer controller --profile json
+pnpm harness readonly-transport-inspect --task <uuid>
+# 최종 요청 본문과 requestBodyHash, task.plan.planHash를 검토한 뒤 승인
+pnpm harness readonly-transport-approve --task <uuid> --plan-hash <sha256> --expires-in-minutes 10
+pnpm harness readonly-transport-run --task <uuid> --plan-hash <sha256>
+pnpm harness readonly-transport-inspect --task <uuid>
+
+pnpm harness readonly-transport-cancel --task <uuid>
+pnpm harness readonly-transport-invalidate --task <uuid>
+pnpm harness readonly-transport-recover --task <uuid>
+pnpm harness readonly-transport-prune
+```
+
+모든 명령은 `--data-dir <private-directory>`를 선택적으로 받습니다. `plan`의 `--selection all|controller|service`와 `--transfer all|controller|service`는 읽기와 전달 근거를 각각 선택하며 기본값은 `all`입니다. `--request flow-question|change-request`의 기본값은 `flow-question`입니다. `--profile json|stream`은 고정 가짜 응답 형식이며 기본값은 `json`입니다. `stream`은 로컬 NDJSON 계약으로 외부 공급자의 스트리밍 규격을 검증하는 옵션이 아닙니다. 실제 모델명·URL·인증·live·임의 본문 옵션은 없습니다. 승인 이력은 `inspect --approval-offset <0..1000000000>`으로 조회합니다.
+
+`contextHash`는 전체 근거, `inputHash`는 선택한 문맥 입력, `requestBodyHash`는 모델·지시문·schema·도구/보관/stream 설정까지 포함한 최종 직렬화 본문을 식별합니다. 표시한 본문을 그대로 전달하며 요청은 256KiB, 전체 응답은 256KiB, 최종 조사 JSON은 16KiB, 전달은 한 번·최대 60초로 제한합니다. 수정 파일과 대상 명령 목록은 빈 배열입니다.
+
+승인은 명시적 TTL 1~60분, 계획·내용은 최대 24시간입니다. 단일 소비와 전달 예약을 먼저 저장하고 실패·취소·중단 후 재시도하지 않습니다. 부모 종료 후 명시 `recover`는 원본·본문 해시·프로세스 종료 증거를 확인하며 확실한 중단은 `INTERRUPTED`, 불확실하면 `BLOCKED`로 남깁니다. 검증된 내용만 private payload에 보관하고 잘못된 raw/부분 응답은 폐기합니다. 감사는 최초 terminal 전환부터 30일, 최소 소비 marker는 DB 수명 동안 유지합니다. 원본·Git·잔여 작업물은 자동 삭제하지 않습니다.
+
+결과는 `responseOrigin: synthetic`과 의미 정확성 미검증을 명시합니다. 실제 모델·인증 접근·외부 전송·공급자 API 호환성은 `not_run`입니다. 수용 기준과 실제 검증 결과는 [4-C-6 결과](docs/stage-4c6-result.md)를 따릅니다.
 
 ## 모의 입력과 오류 재현
 
