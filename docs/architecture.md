@@ -14,6 +14,8 @@
 
 단계 4-C-4는 실제 Codex에 승인된 고정 합성 입력만 전송해 JSON 제안을 받은 뒤 새 실행 승인으로 독립 브랜치·Docker 검사에 연결한다. 모델 호출과 코드 실행은 서로 다른 정책·DB·승인을 사용한다. 실제 호출·격리·취소·복구와 기존 회귀의 최종 근거는 [stage-4c4-result.md](stage-4c4-result.md)를 따른다.
 
+단계 4-C-5는 합성 다중 파일을 읽고 검토한 근거만 격리된 고정 응답 worker에 전달하는 `mock` 전용 조사다. 실제 모델 호출은 제외했고 읽기·전송·수정 권한 및 상태·보관 경계를 별도 정책/DB로 구현했다. 검증 결과는 [stage-4c5-result.md](stage-4c5-result.md)를 따른다.
+
 - 구현 순서와 상세 수용 기준: [implementation-plan.md](implementation-plan.md)
 - 권한과 승인 조건: [security-and-approval.md](security-and-approval.md)
 - Codex 개발 지침: [루트 AGENTS.md](../AGENTS.md)
@@ -216,6 +218,22 @@ plan·approve·send의 제한 worker만 token과 네트워크를 받는다. 고�
 
 저장소는 승인 소비와 `SENDING` 시도를 원자적으로 만든다. 확인된 receipt만 `SENT`, 명백한 거부는 `NOT_SENT`/`FAILED`, 게시 결과가 불확실하면 `UNKNOWN`이다. 중단된 `SENDING`은 명시적 recover에서 `UNKNOWN`으로 확정하며 재전송하지 않는다. `SENT`·`UNKNOWN`의 workspace/channel/root 대상 marker는 다른 작업 ID의 새 계획까지 차단한다. terminal 감사 metadata는 30일 후 정리하되 대상 marker는 DB 수명 동안 유지한다. 개인 테스트 workspace의 구체 계획과 별도 승인으로 실제 단건 게시를 검증했다. 로컬 `SENT` 시도 한 개와 원래 Slack 스레드의 댓글 한 개·고정 본문·receipt 일치 근거는 [4-B-2 결과](stage-4b2-result.md)에 기록한다. 회사 운영·AI·실제 업무 자동 답장은 검증하지 않았다.
 
+### 단계 4-C-5의 합성 다중 파일 조사
+
+새 `synthetic-readonly-investigation-v1` 경로는 등록된 합성 저장소의 여러 파일을 읽고, 검토·승인한 발췌문만 고정 응답 모델에 전달한다. 읽기 범위와 전송 근거를 계획에 고정하며 `writeAllowedFiles=[]`, `testCommandIds=[]`, `executionAllowed=false`를 유지한다. 기존 단일 파일 제안의 `READY → EXPORTED`와 실행 계획에 연결하지 않는다.
+
+```text
+등록 fixture 준비·동결 → 커밋/파일 검증 → 문맥 snapshot
+  → 정확한 전송 입력·hash 검토 → 새 조사 승인
+  → 승인 소비 + RUNNING → 제한된 오프라인 모델 worker
+  → 전송한 근거에 대한 JSON 참조 검증 → 로컬 보고서
+취소·무효화·명시 복구 → generation과 소비 이력 보존, 자동 재호출 없음
+```
+
+원본 root·Git metadata·전체 로컬 snapshot은 모델 worker에 전달하지 않는다. worker는 승인된 입력만 받아 고정 응답을 만들고 대상 파일을 import하거나 실행하지 않는다. 네트워크·추가 프로세스·대상 쓰기 권한과 호스트 환경 자격증명을 갖지 않는다. 실제 모델 adapter와 인증 설정은 이 조사 경로에 연결하지 않는다.
+
+새 조사 계약은 구형 `ChangePlan.allowedFiles`를 수정 권한으로 가져오지 않는다. 내용 payload와 본문 없는 승인/감사 기록을 분리하며 24시간 payload 만료, 최초 terminal 전환부터 30일 감사 보관, DB 수명의 소비 marker를 각각 적용한다. 오프라인 수용 결과와 실제 모델 미실행 상태는 [4-C-5 결과](stage-4c5-result.md)에 기록한다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.
@@ -325,6 +343,7 @@ AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
 | 4-C-2 | 독립 합성 Git 저장소의 ref 생성·관찰·복구 | 새 정책·승인·소유 증거·전후 hash·배타적 ref 생성·강제 종료 복구. HEAD/main 보존, 실제 Codex/회사 저장소 미연결 |
 | 4-C-3 | 독립 합성 작업 브랜치의 고정 수정·Docker 검사 | 새 실행 정책·승인 뒤 유형별 ref·HEAD 선택, 고정 patch·읽기 전용 검사 view·취소·관찰 복구. 전체 회귀와 실제 Docker 검증 완료 |
 | 4-C-4 | 실제 Codex 합성 제안·새 실행 승인 | 단건 호출 승인·외부 CLI 격리·부모 broker·JSON 검증·일회 export·별도 실행 승인. 실제 결과와 한계는 전용 결과 문서 참조 |
+| 4-C-5 | 합성 다중 파일 읽기 전용 조사 | 읽기/전송/수정 권한 분리·불변 문맥·단건 모의 호출·근거 보고·취소/복구. 실제 모델 호출 제외 |
 | 4-C 후속 | 대상 저장소의 실제 Codex 작업 브랜치·commit 준비·push | 승인·격리·브랜치 보존과 행위별 승인 별도 검증. PR/MR 생성 제외. 미구현 후속 설계 |
 | 4-D | Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-B-2 승인 범위 밖 |
 

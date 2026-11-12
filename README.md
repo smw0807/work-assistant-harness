@@ -24,6 +24,8 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
 
 단계 4-C-4의 `codex-proposal-*`와 `codex-execution-*`는 합성 입력의 Codex 제안 호출과 제안 코드의 실행을 서로 다른 승인·DB로 분리합니다. 기존 단계의 검증 결과를 실제 Codex 연결 검증으로 간주하지 않으며, 명령과 현재 경계는 아래 4-C-4 절을 따릅니다.
 
+단계 4-C-5의 `readonly-investigation-*`는 합성 다중 파일을 조사하고 별도 승인한 근거만 모의 worker에 전달합니다. 신규 53개를 포함한 전체 583개 테스트와 lint·typecheck·build가 통과했습니다. 실제 모델 호출은 제외했으며 경계와 수용 근거는 [4-C-5 결과](docs/stage-4c5-result.md)를 따릅니다.
+
 ## 설치와 실행
 
 검증 환경은 macOS, Node.js **26.12.1**, pnpm **12.18.0**입니다. `.node-version`, `packageManager`, 직접 의존성 버전과 `pnpm-lock.yaml`을 고정했습니다. 다른 OS는 아직 검증하지 않았습니다.
@@ -363,6 +365,31 @@ pnpm harness codex-execution-recover --task <proposal-uuid> --config /absolute/p
 제안 inspect·cancel과 실행 inspect·cancel·invalidate는 전역 lease 중에도 동작하며 나머지는 lease를 요구합니다. 두 inspect 모두 `--approval-offset <0..1000000000>`을 지원합니다. 제안 run은 `READY`, 실행 run은 `SUCCEEDED`일 때만 종료 코드 0입니다. 회사 자료·회사 저장소·작업 결과 commit·push·PR/MR은 범위 밖입니다. 유형별 브랜치 규칙은 하네스가 맡기는 대상 작업에 적용하며 이 하네스 저장소의 개발 브랜치 규칙을 바꾸지 않습니다.
 
 기존 ChatGPT 로그인으로 실제 제안을 받아 별도 승인·브랜치 적용·Docker 검사까지 확인했습니다. 전체 530개 테스트와 지원 범위·실패 기록은 [4-C-4 결과](docs/stage-4c4-result.md)에 기록했습니다. 기본 테스트에서는 실제 macOS 종료 감시 테스트 3개를 건너뛰며, macOS arm64에서 `HARNESS_NATIVE_CODEX_PROBE=1 pnpm test`로 포함할 수 있습니다. 이 테스트는 실제 모델 호출이나 로그인 정보를 사용하지 않습니다.
+
+## 단계 4-C-5 합성 다중 파일 읽기 전용 조사
+
+`readonly-investigation-*`는 등록된 `flow` fixture의 controller·service·설정·README를 읽고 승인한 근거만 격리된 고정 응답 worker에 전달합니다. `mode: mock` 전용이며 실제 모델·인증정보·네트워크를 사용하지 않습니다. 읽기와 전송 범위를 구분하고 `writeAllowedFiles=[]`, `testCommandIds=[]`, `executionAllowed=false`를 유지합니다.
+
+```sh
+# 네 파일을 읽고 controller 근거만 전송하는 계획
+pnpm harness readonly-investigation-plan --fixture flow --selection all --transfer controller
+pnpm harness readonly-investigation-inspect --task <uuid>
+# inspect의 task.plan.planHash와 payload.inputText를 검토한 뒤 명시적 TTL로 승인
+pnpm harness readonly-investigation-approve --task <uuid> --plan-hash <sha256> --expires-in-minutes 10
+pnpm harness readonly-investigation-run --task <uuid> --plan-hash <sha256>
+pnpm harness readonly-investigation-inspect --task <uuid>
+
+pnpm harness readonly-investigation-cancel --task <uuid>
+pnpm harness readonly-investigation-invalidate --task <uuid>
+pnpm harness readonly-investigation-recover --task <uuid>
+pnpm harness readonly-investigation-prune
+```
+
+모든 명령은 선택적으로 `--data-dir <private-directory>`를 받으며 같은 조사에는 같은 저장 위치를 사용해야 합니다. `plan`의 `--selection all|controller|service`는 읽기 구간을, `--transfer all|controller|service`는 그중 전달할 근거를 선택합니다(기본값 모두 `all`). 읽지 않은 파일을 전송 대상으로 고르면 거부합니다. 합성 요청은 `--request flow-question|change-request`만 허용하며 기본값은 `flow-question`입니다. 임의 root·본문·목적지·live 옵션은 받지 않습니다. 승인 이력은 `inspect --approval-offset <0..1000000000>`로 한 건씩 조회합니다.
+
+계획·내용 payload는 생성 후 24시간, 승인 TTL은 1~60분입니다. 승인 소비·단일 attempt를 먼저 저장하며 실패·시간 초과·중단에도 다시 호출하지 않습니다. `cancel`·`invalidate`는 실행 중에도 generation을 변경해 늦은 응답을 막습니다. 부모 종료 후 `recover`는 신뢰하는 로컬 프로세스 기록으로 종료를 확인하면 `INTERRUPTED`, 확인할 수 없으면 `BLOCKED`를 기록합니다. 복구는 호출을 재개하지 않습니다.
+
+내용은 전용 `readonly-investigations.sqlite`의 payload에 저장하고 승인·감사에는 ID·해시·범위·상태를 보관합니다. 명령 시작과 `prune`에서 만료 payload를 제거하며 감사는 최초 terminal 전환부터 30일 후 정리합니다. 최소 중복 방지 marker는 유지하고 합성 원본·Git·남은 작업물은 자동 삭제하지 않습니다. 보고서는 `mode: mock`, 의미 정확성 미검증, 실제 모델/외부 전송 `not_run`을 표시합니다. 실행 계획으로 내보내는 명령은 없습니다. 검사별 결과와 미실행 범위는 [4-C-5 결과](docs/stage-4c5-result.md)를 따릅니다.
 
 ## 모의 입력과 오류 재현
 
