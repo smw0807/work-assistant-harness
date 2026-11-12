@@ -16,6 +16,8 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 4-C-6은 승인한 합성 문맥으로 최종 요청 본문을 구성하고 가짜 transport에 전달하는 `offline`/`fake` 전용 경로다. 별도 승인·상태 저장소, 최종 본문 hash, 제한 worker와 JSON/NDJSON 응답 검증을 구현했다. 실제 모델 호출·인증정보 접근·외부 전송은 제외하며 수용 119~134와 실제 회귀 결과는 [4-C-6 결과](stage-4c6-result.md)를 따른다.
 
+4-C-7은 다중 파일 조사용 실제 모델 연결을 준비하는 오프라인 경로로 구현했다. 연결 후보 profile·인증정보 없는 HTTP 요청 명세·JSON/SSE 변환 계층을 메모리 가짜 전송기로 검증했다. 실제 모델 호출·인증정보 접근·외부 전송은 제외하며 수용 135~150과 전체 726개 회귀의 최종 결과는 [4-C-7 결과](stage-4c7-result.md)를 따른다. 실제 연결과 의미 정확성 검증은 완료 범위에 포함하지 않는다.
+
 ### 하네스가 맡을 역할
 
 하네스는 AI 모델 자체가 아니라 모델 주변의 실행 프로그램이다. 어떤 메시지를 받을지, 어떤 자료를 읽힐지, 어느 작업에서 멈출지, 누가 승인할지, 결과를 어디에 보관할지를 정한다. 모델은 해석과 추론을 맡고, 권한과 실행 여부는 일반 코드가 결정한다.
@@ -557,12 +559,82 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 
 **완료 기준:** 수용 119~134 통과, 기존 583개와 신규 테스트의 회귀 통과, lint·typecheck·build 통과, 검토한 최종 본문과 fake transport 입력의 byte/hash 일치, fake 전달 최대 1회·재시도 0회, 실제 모델 호출·실제 인증 접근·외부 전송·대상 수정/명령 실행 0이다. 기존 583개 통과 기록을 새 단계의 검증으로 대신하지 않는다. 실제 모델 연결·회사 저장소·Slack 업무 자료·직접 수정·원격 작업은 완료 조건에 포함하지 않는다.
 
+#### 단계 4-C-7 다중 파일 조사용 실제 모델 연결 준비 — 오프라인 계약 검증
+
+**상태: 오프라인 구현·검증 완료.** 2026-11-12 후속 요청에 따라 새 profile·요청 명세·정책/승인/DB·메모리 가짜 전송기·JSON/SSE 변환·제한 worker·복구/보관과 CLI를 구현했다. 수용 135~150과 전체 726개 테스트가 통과했으며 실제 모델 호출·인증정보 접근·외부 전송은 제외했다. 검사별 근거와 환경 제한을 해소한 재검증 기록은 [4-C-7 결과](stage-4c7-result.md)를 따른다.
+
+목표는 4-C-6의 합성 요청/응답 계약에서 한 단계 나아가, 실제 연결에 사용할 후보 형식의 요청 encoder·HTTP 응답 분류·JSON/SSE decoder를 네트워크 없이 검증하는 것이다. **4-C-6은 합성 JSON/NDJSON의 전달 경계를 검증했고, 4-C-7은 연결 profile과 HTTP 요청 명세 전체의 승인 결합, 공급자 형식 후보의 변환, live 전환 불가를 추가한다.** 인증·실제 목적지·실제 공급자 호환성 검증이 끝난 것으로 표현하지 않는다.
+
+```text
+등록 합성 fixture → 새 읽기 전용 문맥 → 전송할 근거 선택
+  → 고정 연결 후보 profile + 요청 encoder → 인증정보 없는 HTTP 요청 명세
+  → profile/본문/명세 hash와 검토 내용 표시 → 새 오프라인 승인
+  → 재검증·단일 소비·전달 예약 → 메모리 가짜 HTTP exchange 최대 1회
+  → HTTP 상태/헤더 → JSON 또는 SSE decoder → 조사 schema·근거 검증
+  → 오프라인 보고서 + 실제 연결의 미검증 항목, liveReady=false
+취소·만료·중단 → 소비 유지·명시 복구, 자동 재전달·인증·live fallback 없음
+```
+
+##### 범위와 기존 단계의 보존
+
+| 구분 | 4-C-7의 허용 범위 |
+| --- | --- |
+| 읽기 | 4-C-5 reader로 새로 준비한 등록 합성 fixture의 `readAllowedFiles`·`readRanges`만 수집한다. 전체 파일 비밀 검사·경로/링크/교체 경합·원본 identity 검증과 수집 한도를 유지한다. 실제 저장소·회사 코드·Slack 본문은 입력받지 않는다. |
+| 오프라인 전달 | 선택한 `transferEvidenceIds`와 고정 profile로 구성한 명세를 메모리 가짜 exchange에만 전달한다. 제한 worker IPC는 허용하되 신규 경로에 HTTP 서버·loopback 소켓·DNS·HTTP/TLS 연결은 만들지 않는다. |
+| 대상 수정·명령 | `writeAllowedFiles=[]`, `testCommandIds=[]`, `executionAllowed=false`를 계획·승인·보고서에서 유지한다. fixture 준비 이후 원본/Git 무변경이며 대상 설치·테스트·빌드·쉘·브랜치 생성·patch 적용을 제공하지 않는다. |
+| 인증 | `authentication=none`으로 고정한다. 실제 키·로그인 파일·keychain·사용자 설정·환경 토큰의 값 조회와 존재 확인, 인증 갱신·인증 시험·모델 목록 조회를 모두 제외한다. 부정 사례는 임시 경로의 합성 canary만 사용한다. |
+| 연결 코드 | 순수 profile/encoder/decoder와 fake 전용 broker를 구현한다. 실제 SDK/CLI·fetch transport·credential loader를 신규 경로의 의존 그래프에 연결하지 않는다. |
+| 결과 | 합성 조사 보고서와 오프라인 계약 점검 결과다. 실제 모델 응답·실행 계획·Slack 게시·commit·push·PR/MR로 내보내지 않는다. |
+
+- 신규 정책은 `synthetic-readonly-model-preflight-v1`, 실행은 `mode=offline`, `transport=in-memory-fake`, `responseOrigin=synthetic`으로 분리한다. 별도 상태 저장소·승인/attempt namespace를 사용하고 기존 4-C-5/4-C-6 계획·승인·DB·CLI·해시를 변환하지 않는다. 새 문맥을 수집하며 과거 결과나 만료 payload를 복사하지 않는다.
+- 4-C-4의 `startCodexBroker`는 실제 전송 기본값·credential 인자·고정 patch schema를 갖는다. 이를 호출·상속하거나 입력 제한을 완화하지 않는다. 로컬 `src/adapters/codex-broker.ts`에 기록된 요청/응답 형태는 후보 계약의 참고 자료로만 사용한다. 네트워크·인증과 분리된 순수 함수만 필요에 따라 재사용하며 구형 계약의 의미와 검증 강도를 보존한다.
+- 기존 `synthetic-json-v1`/`synthetic-stream-v1`은 그대로 둔다. 새 후보 JSON/SSE profile은 로컬 계약 버전이며 NDJSON을 SSE로 이름만 바꾸지 않는다. 현재 공급자 API 규격 확인·접속 실증은 수행하지 않고, 실제 서비스 적용 전 별도 검증이 필요함을 기록한다.
+
+##### 연결 후보 profile과 승인할 요청 명세
+
+- 초기 후보는 한 종류의 Responses 형태 계약에 대해 `responses-candidate-json-v1`과 `responses-candidate-sse-v1` 두 가지로 제한한다. 근거가 된 로컬 코드 경로·내용 hash, 지원 필드/이벤트 목록과 금지 형태를 버전 관리한 계약 fixture로 고정한다. 호환되지 않는 형식은 추측해서 보완하지 않는다.
+- profile에는 ID/버전, encoder/decoder/schema 버전, 합성 모델 ID, `POST`, 고정 시험 목적지 `https://model.invalid/v1/responses`, 허용 헤더, JSON/SSE 선택, redirect/retry 금지, 크기·시간 한도를 넣는다. 이 URL은 명세 검사용 문자열이며 절대 접속하지 않는다. 실제 endpoint·모델·인증 방식은 후속 live 계약에서 새로 정한다. CLI·환경·자료·worker의 URL/모델/헤더/profile 파일 override를 허용하지 않는다.
+- 요청 encoder는 선택 근거·합성 요청·지시문을 `input`으로, 조사 JSON schema를 `text.format`으로 구성하고 `tools=[]`, `store=false`, profile의 고정 `stream` 값을 포함한다. 4-C-4 patch schema나 4-C-6 `responseFormat`을 그대로 전송하지 않는다. 자동 추가 문맥·도구·대화 이력·이전 응답 재사용 필드를 제공하지 않는다.
+- 인증 없는 요청 명세는 method·고정 시험 URL·정규화된 비밀 없는 헤더·최종 본문 바이트·redirect/retry 정책을 포함한다. 헤더는 `Content-Type`과 profile에 맞는 `Accept`만 허용하고 Authorization·Cookie·계정 식별자·proxy 인증·임의 헤더를 거부한다. 실제 인증을 흉내 내는 발급 토큰 형태의 fixture나 가짜 Authorization 값도 만들지 않는다.
+- `contextHash`는 전체 근거, `inputHash`는 선택 근거·지시문·요청·schema 입력, `requestBodyHash`는 새 encoder가 만든 정확한 본문 바이트다. `connectionProfileHash`는 위 profile과 계약 fixture를, `requestEnvelopeHash`는 method/URL/정규화 헤더/본문 hash/전달 정책을 묶는다. 헤더명 대소문자·정렬·UTF-8 직렬화 규칙을 고정하고 중복 헤더·CR/LF·모호한 URL 표현은 거부한다.
+- 검토 화면은 최종 본문과 비밀 없는 명세 전체, 다섯 hash, 읽기/전달/빈 수정 범위, 후보 계약 근거와 한도를 보여 준다. `planHash`는 이 정보와 OS 소유자·요청 revision·원본 identity·정책/config·생성/만료를 결합한다. 승인 후 본문을 재직렬화하거나 profile·헤더를 덧붙이지 않는다. fake에서 포착한 명세와 저장·표시된 명세의 byte/hash 일치를 검증한다.
+- 계획/payload는 생성 후 최대 24시간, 승인 TTL은 명시적 1~60분이며 이른 만료를 넘지 않는다. dispatch 직전 현재 시각·소유자·generation·원본·모든 hash·profile/config를 다시 확인한다. 기존 승인 혼용, hash만 재계산한 변조, profile/codec/헤더/목적지 변경은 새 계획과 승인 없이는 거부한다.
+
+##### 가짜 HTTP와 JSON/SSE 변환 검증
+
+- 가짜 exchange는 생성 시 필수 주입하고 승인된 명세와 AbortSignal만 받는다. 구현이 반환하는 것은 합성 HTTP status·headers·바이트 chunk의 비동기 열이다. 요청/응답 헤더 입력은 중복을 보존하는 이름/값 쌍 목록으로 표현하며 CR/LF·개수·바이트와 대소문자를 무시한 중복을 검사한 뒤 명세용으로 정규화한다. worker가 임의 HTTP 요청을 중계하도록 하지 않고 실제 `fetch`, dispatcher, proxy, 네트워크 소켓, credential 공급자로 대체할 기본값·옵션을 두지 않는다.
+- HTTP 성공은 등록 profile의 status/content-type·encoding 조건을 모두 통과한 경우만 허용한다. 3xx와 Location은 따라가지 않고 401/403·429/Retry-After·5xx도 정적 오류로 끝낸다. 인증 갱신·대기 후 재시도·다른 모델/목적지 fallback은 모두 0회다. 중복/모순 헤더, 잘못된 MIME, 미지원 압축·charset, body 누락은 거부하며 오류 원문은 저장하지 않는다.
+- JSON 후보는 완성 응답 하나에서 완료 상태·합성 모델·허용된 output 구조와 assistant text 한 건만 추출한다. ID 형식과 응답 내부 참조 일관성을 검사하며 응답 ID를 요청 전에 알고 있다고 가정하지 않는다. 도구/함수 호출·refusal·실패/불완전 상태·복수 최종 text·내부 참조 불일치·중복/추가 필드를 거부한다. 허용 metadata는 계약에 명시한 타입/한도만 검사하며 실제 사용량·비용·모델 품질로 해석하지 않는다.
+- SSE 후보는 incremental UTF-8 decode와 SSE frame 경계를 따로 검사한다. LF/CRLF, 여러 `data:` 줄, UTF-8/JSON/구분자가 chunk 사이에서 나뉜 경우를 지원한다. 최초 시작 이벤트에서 응답 ID를, 항목 시작에서 항목 ID를 확정한 뒤 후속 event/type·ID·순서·text delta·최종 text의 일치를 확인한다. 알 수 없는 이벤트, 도구 이벤트, ID/순서 불일치, 중복/누락 완료, 완료 뒤 추가 data, 불완전 마지막 frame은 거부한다. 주석·빈 frame은 크기와 개수에 포함한 뒤 무시하고 `[DONE]`은 이 후보 계약에서 미지원으로 거부한다. 재연결·Last-Event-ID는 제공하지 않는다.
+- 4-C-6의 근거 64KiB·입력 128KiB·최종 본문 256KiB·전체 응답 body 256KiB·최종 조사 JSON 16KiB·worker stderr 16KiB·전체 60초·전달 최대 1회·재시도 0회를 유지한다. 전달/응답은 최대 55초, 중단/정리는 최대 5초로 나눠 전체 기한 안에 종료한다. 추가로 요청/응답 헤더는 각각 8KiB·16개 이하, 정규화 명세 metadata와 원본 본문 바이트의 합은 272KiB 이하, SSE frame은 64KiB·총 2,048개 이하로 제한한다. 명세 크기 계산에서 본문을 이중 JSON escaping하지 않는다. 주석·빈 frame·미지원 data도 전체 바이트/프레임 한도에 포함하고 초과를 자르지 않는다.
+- 추출한 text는 기존 조사 schema와 전달 근거 ID·줄 범위를 다시 검증한다. raw/decoded 비밀 패턴, 허구 인용·추가 실행 필드·과대 JSON을 거부하고 raw/부분/거부 응답은 폐기한다. SSE 조각이 유효해도 최종 envelope·조사 결과·종료 확인 전에는 성공 보고서를 만들지 않는다.
+
+##### 승인·격리·중단·결과의 경계
+
+- 새 승인 소비·단일 attempt·`RUNNING`과 전달 예약을 영속화한 뒤 fake에 전달한다. 예약에 profile/명세 hash까지 결합하고 commit 이전 DB 실패 시 전달 0회를 검증한다. 동시 run, 오류·timeout·예약 후 crash에도 전달 최대 1회·소비 유지·승인 복원 없음이 유지돼야 한다.
+- 취소/무효화 generation을 승인·claim·전달·HTTP headers·SSE frame·결과 저장 경계에서 확인한다. AbortSignal로 fake stream을 중단하고 iterator 정리와 worker 종료를 확인한다. abort를 무시하거나 iterator의 `return()`이 끝나지 않는 사례도 검증하며 정리 대기는 최대 5초 뒤 끝낸다. 늦은 chunk/완료/저장으로 결과가 부활하지 않으며 정리를 확인할 수 없으면 `BLOCKED`다. 실제 로컬 부모/worker 강제 종료 뒤 새 CLI recover가 원본·명세/profile hash·소유 프로세스 종료 증거를 확인해 `INTERRUPTED`/`BLOCKED`로 정리하며 재호출하지 않는다.
+- 제한 Node worker에는 승인된 요청과 고정 하네스 코드만 제공한다. source/DB/사용자 설정/인증 경로·상속 환경·네트워크·파일 쓰기·추가 프로세스/worker 권한은 주지 않는다. 신규 경로의 import graph와 설정 진입점 검사, 합성 canary 및 금지 API 호출 계수로 실제 transport·credential loader가 호출되지 않음을 확인한다. 실파일·실제 토큰의 존재를 확인하는 검사는 하지 않는다. 이 검증을 실제 모델 프로세스의 OS 격리 실증으로 표시하지 않는다.
+- 4-C-6의 private 디렉터리 0700/파일 0600·DB/sidecar 링크 보호·내용 payload 24h·최초 terminal 감사 30일·DB 수명 소비 marker를 새 명세/profile 기록에도 적용한다. 승인/감사에는 본문 없는 ID·범위·hash·상태만 남긴다. inspect/recover로 만료를 연장하지 않고 원본/Git/실패 작업물을 자동 정리하지 않는다.
+- 보고서는 `offlineContractVerified`의 검사별 결과, `mode=offline`, `transport=in-memory-fake`, `responseOrigin=synthetic`, `semanticAccuracyVerified=false`, `liveReady=false`를 표시한다. 실제 모델·인증정보 접근·외부 전송·실제 공급자 호환성·live 격리·의미 정확성 검증은 각각 `not_run`과 제외 사유를 기록한다. 후속 연결에 필요한 미검증 항목을 명시하되 준비 점검을 전송 승인이나 실행 가능한 live 설정으로 내보내지 않는다.
+- 미래 live는 실제 endpoint/model/인증 방식·전송 본문·격리 환경을 정한 새 정책·계획·승인으로 설계한다. 4-C-7의 mode 변경·승인 승격·결과 export로 열 수 없으며 4-C-5 수용 118의 선택 live 실증도 여전히 별도 범위다.
+
+##### 구현 순서와 오프라인 완료 판정
+
+1. **계약·순수 변환:** 신규 domain/policy에 profile·요청 명세·해시 계약을 정의하고 로컬 참고 근거와 JSON/SSE fixture를 고정한다. 요청 기대 바이트와 응답 기대 결과는 테스트 대상 encoder/decoder로 생성하지 않고 독립적인 golden fixture로 검토한다. 순수 encoder/decoder·HTTP 분류의 정상/부정/한도 테스트를 먼저 만든다. 실제 SDK·새 외부 의존성 설치는 포함하지 않는다.
+2. **계획·승인·예행 전달:** 새 application/store/port와 fake 전용 adapter를 연결한다. 기존 reader를 재사용하고 새 요청 명세 검토·승인·원자 소비·명세 포착 일치를 검사한다. 기존 CLI·정책·승인과 상호 재사용을 거부한다.
+3. **제한 worker·실패·복구:** 정상 JSON/SSE, HTTP 실패, chunk 분할·과대 응답·취소·timeout·실제 로컬 중단/새 프로세스 복구·보관 검증을 추가한다. 전후 원본/Git 무변경과 실제 인증/모델/외부 호출 0회를 확인한다.
+4. **CLI·회귀·결과:** 명령군 `readonly-model-preflight-{plan,inspect,approve,run,cancel,invalidate,recover,prune}`를 구현하며 fixture/선택 근거/등록 profile과 기존 승인 필수 옵션만 허용한다. 임의 URL·헤더·인증·live 옵션은 없다. README에 실제 명령을 기록하고 `docs/stage-4c7-result.md`에 수용 135~150 및 검사별 `passed`·`failed`·`not_run`, 실제 테스트 수와 제외 사유를 남긴다.
+
+**오프라인 검증 완료:** 신규 84개와 기존 642개, 전체 726개 테스트가 통과했다(실패 0·skip 0). lint·typecheck·build도 통과했다. 실제 모델·인증 접근·외부 전송·공급자 호환성·live 격리·의미 정확성은 `not_run`이고 `liveReady=false`를 유지한다. JSON/SSE 후보는 로컬에 고정한 제한된 형태이며 `usage`와 `[DONE]`도 미지원으로 거부한다.
+
+**완료 기준:** 신규 수용 135~150, 기존 642개와 신규 단위/통합/수용 회귀, lint·typecheck·build가 통과해야 한다. 기존 native/loopback 회귀는 합성 로컬 검증으로 따로 기록하며 실제 인증·외부 모델을 호출하는 검사는 실행하지 않는다. 검토한 명세와 fake 입력 일치, 전달 최대 1회·재시도 0회, 대상 파일/Git 변경·대상 코드 실행·실제 모델 호출·인증정보 접근·외부 전송 0이 필요하다. 현재 642개 통과 기록으로 이 단계의 검증을 대신하지 않으며, 모든 오프라인 검사를 통과해도 `liveReady=false`를 유지한다.
+
 #### 후속 단계의 별도 범위
 
-- 4-C 후속 후보: 4-C-6의 오프라인 전송 계약 검증 이후 실제 모델 단건 실증, 등록한 실제 대상 저장소의 읽기 전용 조사, Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·격리 검증은 4-C-6 완료에 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
+- 4-C 후속 후보: 4-C-6의 오프라인 전송 계약 구현과 4-C-7의 오프라인 연결 준비 구현에 이어 실제 모델 단건 실증, 등록한 실제 대상 저장소의 읽기 전용 조사, Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 
-4-C-5의 완료 기록, 4-C-6의 오프라인 구현 계획, 이 절의 후속 후보는 각각 구현·검증·운영 범위를 구분한다. 4-C-6 문서 추가가 실제 모델·회사 자료 처리나 외부 게시를 승인하지 않으며 후속 후보도 별도 계획 대상이다.
+4-C-5/4-C-6/4-C-7의 오프라인 완료 기록과 이 절의 후속 후보는 각각 구현·검증·운영 범위를 구분한다. 계획 추가가 실제 모델·인증 접근·회사 자료 처리나 외부 게시를 승인하지 않으며 후속 후보도 별도 계획 대상이다.
 
 **대상 저장소의 Codex 작업 규칙 (2026-11-12 결정):** 회사 대상 저장소는 GitLab으로 관리하며, 하네스의 코드 수정 지시에 다음 규칙을 적용한다. 이 규칙을 현재 하네스 저장소 개발에 적용하는 것은 아니다.
 
@@ -916,6 +988,22 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 132 | payload·감사·보관 (4-C-6) | private 경로/권한/링크, 내용·승인 기록 분리. 생성+24h 내용 만료/정리, 최초 terminal+30d 감사·DB 수명 marker, 조회/복구로 연장 없음·진행 중 자동 삭제/원본 자동 정리 없음. |
 | 133 | 구형 회귀와 구현 상태 (4-C-6) | 기존 583개와 신규 단위/통합/수용 회귀, lint·typecheck·build 결과 기록. 구현한 CLI만 문서화하고 fake 검증을 실제 연결 완료로 표시하지 않음. |
 | 134 | 오프라인 종단 완료 (4-C-6) | 문의/변경 요청·일부 근거 전송·실패/취소/복구에서 원본/Git 무변경, fake 전달 최대1회·재시도0회. 실제 모델/인증 접근/외부 전송/대상 코드·명령 실행0, 후속 live·실제 저장소는 범위 밖. |
+| 135 | 오프라인 전용과 기존 계약 보존 (4-C-7) | 새 정책/DB/승인 namespace, 필수 in-memory fake, live/구형/4-C-5/4-C-6 승인 혼용 거부. 실제 transport/credential loader/SDK/CLI import·호출 경로 없음, 누락/실패 시 fallback0, 기존 계약·hash·DB 무변경. |
+| 136 | 연결 후보 profile 고정 (4-C-7) | 로컬 근거 경로/hash와 지원 필드/이벤트 fixture를 고정. 등록 JSON/SSE profile만 허용하며 정책/codec/schema/한도 변경은 hash·승인에 반영. 임의 profile 파일·URL·모델·헤더·환경 override 거부, 실제 공급자 호환성 not_run. |
+| 137 | 읽기·전달·수정 권한과 최소 입력 (4-C-7) | 새 합성 문맥의 허용 파일/줄·선택 근거만 사용, 미선택 본문/호스트 경로/Git metadata 제외. writeAllowedFiles=[]·testCommandIds=[]·executionAllowed=false 유지. 악성 자료로 추가 읽기·도구·후속 호출·실행 export 불가. |
+| 138 | 후보 요청 encoder (4-C-7) | 선택 입력을 input·조사 schema를 text.format으로 구성하고 tools/store/stream 고정. patch schema·구형 responseFormat·추가 대화/도구 필드 거부. 독립 golden 바이트로 Unicode/escaping·필드 누락/추가·결정적 직렬화와 정확한 requestBodyHash 검증. |
+| 139 | 인증 없는 요청 명세·해시 (4-C-7) | context/input/body/profile/envelope hash 범위를 분리하고 method·시험 URL·헤더·전달 정책을 승인에 결합. 표시/저장/fake 포착 명세 일치, 중복/CRLF 헤더·모호한 URL·Authorization/Cookie/계정/proxy 값·본문 또는 명세 변조 거부. |
+| 140 | 승인·만료·변경 재검증 (4-C-7) | OS 소유자·planHash·명시 TTL1~60분·계획/payload24h·dispatch 현재 시각 검사. 원본/revision·다섯 hash·profile/config·모드 변경, hash 재계산 변조, 만료·취소·위조 승인을 소비 전 거부. |
+| 141 | 원자 소비·단건 fake 전달 (4-C-7) | 승인/attempt/명세 예약 commit 전 전달0, 동시 run도 최대1회. DB 실패·예약 후 crash·전달 불확실 시 소비 유지·자동 재전달/승인 복원0. worker가 임의 HTTP 요청을 전달시키지 못함. |
+| 142 | HTTP 상태·헤더·오류 처리 (4-C-7) | profile별 status/MIME/encoding/body 조건 확인. 3xx/Location·401/403·429/Retry-After·5xx·중복/모순 헤더·미지원 압축/charset·누락 body 거부. redirect·인증 갱신·retry·fallback0, 원시 오류 비보관. |
+| 143 | JSON 응답 후보 decoder (4-C-7) | 독립 fixture로 완료 상태·모델·허용 metadata/output·assistant text 한 건 확인. 잘못된 UTF-8/JSON·중복/추가 키·도구/refusal·실패/불완전·복수 text·ID 형식/내부 참조 불일치 거부. 추출 후 조사 schema·전송 근거/줄·raw/decoded 비밀 검증. |
+| 144 | SSE frame·이벤트·최종 일치 (4-C-7) | 독립 fixture로 LF/CRLF·여러 data 줄·임의 chunk/UTF-8 분할 처리. 시작에서 확정한 ID·event/type·순서·delta/최종 text 일치, 미지원/도구 이벤트·완료 중복/누락·완료 후 data·잘린 frame·[DONE] 거부. 주석/빈 frame 계수 후 무시, NDJSON 혼용·자동 재연결 없음. |
+| 145 | 명세·헤더·stream 자원 한도 (4-C-7) | 입력128KiB·본문256KiB·명세272KiB·요청/응답 헤더 각8KiB/16개·응답 body256KiB·SSE frame64KiB/2,048개·최종JSON16KiB·stderr16KiB·전체60초(전달/응답55초+정리5초)의 경계/초과 검사. 주석/빈 frame·멀티바이트·분할 초과도 계수, 무통보 절단 없음. |
+| 146 | 취소·timeout·늦은 응답 (4-C-7) | claim/전달/headers/frame/최종 저장 경계 generation 경합 검증. abort 후 iterator 정리·worker 종료 확인, abort 무시/return 미완료도 최대5초 뒤 BLOCKED, 늦은 chunk/완료와 payload 부활 거부·재전달0. |
+| 147 | 실제 로컬 중단·새 프로세스 복구 (4-C-7) | 부모/worker 강제 종료 후 RUNNING·소비 보존. recover가 원본/Git·profile/envelope/body hash·종료 증거를 검증해 INTERRUPTED/BLOCKED 기록. 만료·변조·누락·살아 있거나 재사용된 PID에 보수적 거부, 추측 종료·재호출0. |
+| 148 | 격리·인증정보 비접근 (4-C-7) | 합성 canary로 제한 worker의 비허용 읽기/쓰기·네트워크·child/worker 차단 실증. 신규 경로의 credential/config 탐색·실제 transport 호출0과 환경 비상속 확인. 실제 인증 경로 존재 확인/값 읽기·TCP/UDP/listener/DNS/외부 연결0(사전 구성 stdio/로컬 IPC 제외), live OS 격리 실증은 not_run. |
+| 149 | 보관·보고서·live 승격 차단 (4-C-7) | private 권한/링크 보호, 내용24h·최초 terminal 감사30일·DB 수명 marker 유지. raw/부분/거부 응답 비보관, 조회/복구로 기한 연장·원본 자동 정리 없음. offline/fake/synthetic·semanticAccuracyVerified=false·liveReady=false·제외 항목 not_run, live 설정/승인 export 없음. |
+| 150 | CLI·회귀·오프라인 종단 완료 (4-C-7) | 문의/변경 요청·부분 근거·JSON/SSE·실패/취소/복구를 검증. 기존642개+신규 회귀·lint/typecheck/build의 실제 결과와 구현 CLI 기록. 원본/Git 무변경·대상 실행/실제 모델/인증 접근/외부 전송0, fake 최대1회·retry0, 미구현·미실행을 passed로 표시하지 않음. |
 
 ### 최종 검증 묶음
 

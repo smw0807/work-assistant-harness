@@ -18,6 +18,8 @@
 
 단계 4-C-6은 최종 요청 본문을 새 승인으로 가짜 전송기에 한 번 전달하는 `offline` 전용 경로다. 실제 모델·인증 접근·외부 전송을 제외하며 [stage-4c6-result.md](stage-4c6-result.md)에 수용 119~134의 결과를 기록한다.
 
+단계 4-C-7은 별도 `synthetic-readonly-model-preflight-v1` 정책과 저장소에서 후보 profile·인증 없는 HTTP 명세·JSON/SSE 변환을 메모리 가짜 전송기로 검증한다. 문맥/입력/본문과 profile/명세 hash를 새 승인·단일 전달·복구에 결합하며 제한 worker는 실제 네트워크·인증 경로를 갖지 않는다. 보고서의 `liveReady=false`를 유지하고 실제 공급자 호환성과 의미 정확성을 미검증으로 기록한다. 구현 명령은 README, 수용 135~150과 회귀 결과는 [stage-4c7-result.md](stage-4c7-result.md)를 따른다.
+
 - 구현 순서와 상세 수용 기준: [implementation-plan.md](implementation-plan.md)
 - 권한과 승인 조건: [security-and-approval.md](security-and-approval.md)
 - Codex 개발 지침: [루트 AGENTS.md](../AGENTS.md)

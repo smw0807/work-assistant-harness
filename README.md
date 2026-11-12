@@ -419,6 +419,32 @@ pnpm harness readonly-transport-prune
 
 결과는 `responseOrigin: synthetic`과 의미 정확성 미검증을 명시합니다. 실제 모델·인증 접근·외부 전송·공급자 API 호환성은 `not_run`입니다. 수용 기준과 실제 검증 결과는 [4-C-6 결과](docs/stage-4c6-result.md)를 따릅니다.
 
+## 단계 4-C-7 다중 파일 모델 연결의 오프라인 준비
+
+`readonly-model-preflight-*`는 합성 다중 파일 문맥을 후보 요청 형식으로 바꾸고, 인증정보 없는 HTTP 명세를 새 승인 후 메모리 가짜 전송기로 검증합니다. `offline`/`in-memory-fake` 전용이며 `https://model.invalid/v1/responses`는 검토할 명세의 시험 문자열입니다. 실제 연결·인증정보 조회·모델 SDK/CLI 호출은 없습니다. 기존 4-C-5/4-C-6의 계획과 승인은 재사용하지 않습니다.
+
+```sh
+pnpm harness readonly-model-preflight-plan --fixture flow --selection all --transfer controller --profile json
+pnpm harness readonly-model-preflight-inspect --task <uuid>
+# 요청 본문, profile/envelope hash와 task.plan.planHash를 검토한 뒤 승인
+pnpm harness readonly-model-preflight-approve --task <uuid> --plan-hash <sha256> --expires-in-minutes 10
+pnpm harness readonly-model-preflight-run --task <uuid> --plan-hash <sha256>
+pnpm harness readonly-model-preflight-inspect --task <uuid>
+
+pnpm harness readonly-model-preflight-cancel --task <uuid>
+pnpm harness readonly-model-preflight-invalidate --task <uuid>
+pnpm harness readonly-model-preflight-recover --task <uuid>
+pnpm harness readonly-model-preflight-prune
+```
+
+모든 명령은 `--data-dir <private-directory>`를 선택적으로 받습니다. `plan`의 `--selection all|controller|service`와 `--transfer all|controller|service`는 읽기 범위와 전달 근거를 구분하며 기본값은 `all`입니다. `--request flow-question|change-request`의 기본값은 `flow-question`, `--profile json|sse`의 기본값은 `json`입니다. URL·모델·헤더·인증·live·임의 본문 옵션은 받지 않습니다. 승인 이력은 `inspect --approval-offset <0..1000000000>`로 조회합니다.
+
+`contextHash`·`inputHash`·`requestBodyHash`와 `connectionProfileHash`·`requestEnvelopeHash`를 승인과 전달 예약·복구에 결합합니다. `text.format`의 조사 schema, 빈 도구·수정 파일·대상 검사 목록을 유지합니다. JSON/SSE는 로컬 코드에 기록된 형식의 제한된 후보 계약입니다. SSE는 UTF-8/chunk·frame·ID·이벤트 순서·delta/최종 text 일치를 검사하며 도구·refusal·`[DONE]`·`usage`·추가 출력은 지원하지 않습니다. 공급자 호환성을 검증한 결과가 아닙니다.
+
+전달/응답 최대 55초와 정리 최대 5초, 전달 최대 1회·재시도 0회를 적용합니다. 취소 후 늦은 결과를 저장하지 않고 종료 증거가 불확실하면 `BLOCKED`로 남깁니다. 부모 강제 종료 뒤 `recover`는 재호출 없이 `INTERRUPTED`/`BLOCKED`로 정리합니다.
+
+상태는 별도 `readonly-model-preflights.sqlite`에 보관합니다. 계획/내용은 생성 후 24시간, 승인 TTL은 명시적 1~60분, 본문 없는 감사는 최초 terminal부터 30일이며 최소 소비 marker는 DB 수명 동안 유지합니다. 원본/Git/실패 작업물은 자동 삭제하지 않습니다. 보고서는 `liveReady=false`, 의미 정확성 미검증과 실제 모델·인증 접근·외부 전송·공급자 호환성·live 격리 `not_run`을 표시합니다. [4-C-7 결과](docs/stage-4c7-result.md)에 수용 135~150의 근거를 기록합니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.
