@@ -2,11 +2,11 @@ import * as gitFileSystem from 'node:fs';
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import * as fileSystem from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import git from 'isomorphic-git';
 import { HarnessError } from '../domain/errors.js';
 import {
-  EXECUTION_LIMITS,
+  BRANCH_EXECUTION_POLICY_VERSION, EXECUTION_LIMITS,
   type ExecutionDiff, type ExecutionFixture, type ExecutionPlan, type ExecutionSource,
   type ExecutionTask, type ExecutionWorkspace, type ExecutionWorkspaceEvidence,
   type ExecutionObservation, type ExecutionObservedChange,
@@ -88,6 +88,20 @@ const canonicalDirectory = async (directory: string, mode: number): Promise<stri
   if (!metadata.isDirectory() || metadata.isSymbolicLink() || (metadata.mode & 0o7777) !== mode
     || metadata.uid !== process.getuid?.()) throw metadataError();
   return directory;
+};
+
+const assertBranchSourceIdentity = async (task: ExecutionTask): Promise<void> => {
+  if (task.plan.policy.version !== BRANCH_EXECUTION_POLICY_VERSION) return;
+  const branch = task.plan.branch!;
+  if (branch.sourceRoot !== task.sourceRoot || branch.ownerId !== `os-user:${process.getuid?.()}`
+    || task.sourceRoot !== join(dirname(dirname(dirname(task.sourceRoot))), 'branch-executions', task.taskId, 'source')) {
+    throw new HarnessError('EXECUTION_SOURCE_CHANGED');
+  }
+  let parent = task.sourceRoot;
+  for (let level = 0; level < 3; level += 1) {
+    parent = dirname(parent);
+    await canonicalDirectory(parent, 0o700);
+  }
 };
 
 const readRegularFile = async (path: string, mode: number, maxBytes = EXECUTION_LIMITS.workspaceBytes): Promise<Buffer> => {
@@ -234,7 +248,7 @@ const observationNames = async (path: string, maximum: number): Promise<string[]
 
 const gitObjectId = (type: 'blob' | 'tree', bytes: Buffer): string => createHash('sha1')
   .update(`${type} ${bytes.length}\0`).update(bytes).digest('hex');
-const fixtureGitPaths = (baseCommit: string): Set<string> => {
+const fixtureGitPaths = (baseCommit: string, branch: ExecutionPlan['branch'] = undefined): Set<string> => {
   const blobs = Object.fromEntries(trackedPaths.map((path) => [path, gitObjectId('blob', Buffer.from(fixtureFiles[path]!))]));
   const treeId = (entries: { name: string; mode: string; oid: string }[]): string => gitObjectId('tree', Buffer.concat(entries
     .sort((left, right) => left.name.localeCompare(right.name, 'en'))
@@ -252,8 +266,17 @@ const fixtureGitPaths = (baseCommit: string): Set<string> => {
     paths.add(`objects/${oid.slice(0, 2)}`);
     paths.add(`objects/${oid.slice(0, 2)}/${oid.slice(2)}`);
   }
+  if (branch) {
+    paths.add(`refs/heads/${branch.workType}`);
+    paths.add(branch.headRef);
+  }
   return paths;
 };
+
+const sourcePaths = (baseCommit: string): Set<string> => new Set([
+  '', 'src', 'checks', ...trackedPaths,
+  ...[...fixtureGitPaths(baseCommit)].map((path) => path ? `.git/${path}` : '.git'),
+]);
 
 /** 전체 경로 집합을 먼저 검증하므로 추가된 비밀 파일은 Git 내부에서도 본문을 읽지 않는다. */
 const hashObservedTree = async (root: string, paths: Set<string>, frozen: boolean, maxBytes: number): Promise<string> => {
@@ -291,6 +314,52 @@ const hashObservedTree = async (root: string, paths: Set<string>, frozen: boolea
   };
   await visit('');
   return hash.digest('hex');
+};
+
+const verifyBranchReferences = async (root: string, plan: ExecutionPlan, selected: boolean): Promise<void> => {
+  const branch = plan.branch!;
+  const gitRoot = join(root, '.git');
+  const expectedHead = `ref: ${selected ? branch.headRef : 'refs/heads/main'}\n`;
+  if ((await readObservedFile(join(gitRoot, 'HEAD'), 256)).toString('utf8') !== expectedHead
+    || (await readObservedFile(join(gitRoot, 'refs/heads/main'), 41)).toString('utf8') !== `${plan.baseCommit}\n`
+    || (selected && (await readObservedFile(join(gitRoot, branch.headRef), 41)).toString('utf8') !== `${plan.baseCommit}\n`)) {
+    throw new HarnessError('EXECUTION_GIT_METADATA_CHANGED');
+  }
+};
+
+/** 새 합성 저장소의 기준 tree는 그대로 두고 승인된 ref와 symbolic HEAD만 선택한다. */
+const selectExecutionBranch = async (root: string, plan: ExecutionPlan): Promise<void> => {
+  const branch = plan.branch!;
+  const gitRoot = join(root, '.git');
+  await hashObservedTree(gitRoot, fixtureGitPaths(plan.baseCommit), false, 1024 * 1024);
+  await verifyBranchReferences(root, plan, false);
+  try {
+    await fileSystem.mkdir(join(gitRoot, 'refs/heads', branch.workType), { mode: 0o700 });
+    const ref = await fileSystem.open(join(gitRoot, branch.headRef), constants.O_WRONLY | constants.O_CREAT
+      | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_SYNC, 0o600);
+    try { await ref.writeFile(`${plan.baseCommit}\n`); }
+    finally { await ref.close(); }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new HarnessError('EXECUTION_BRANCH_COLLISION');
+    throw error;
+  }
+  // 중단 중 부분 HEAD/ref는 복구가 수리하지 않는다. 최초 Git 증거는 선택 완료 뒤에만 저장한다.
+  const headPath = join(gitRoot, 'HEAD');
+  const before = await fileSystem.lstat(headPath);
+  const handle = await fileSystem.open(headPath, constants.O_RDWR | constants.O_NOFOLLOW | constants.O_SYNC);
+  try {
+    const originalHead = Buffer.alloc(Buffer.byteLength('ref: refs/heads/main\n') + 1);
+    const { bytesRead } = await handle.read(originalHead, 0, originalHead.length, 0);
+    if (!sameMetadata(before, await handle.stat()) || !before.isFile() || before.nlink !== 1
+      || (before.mode & 0o7777) !== 0o600 || before.uid !== process.getuid?.()
+      || before.size !== Buffer.byteLength('ref: refs/heads/main\n')
+      || originalHead.subarray(0, bytesRead).toString('utf8') !== 'ref: refs/heads/main\n'
+      || !sameMetadata(before, await fileSystem.lstat(headPath))) throw metadataError();
+    await handle.truncate(0);
+    await handle.write(`ref: ${branch.headRef}\n`, 0, 'utf8');
+  } finally { await handle.close(); }
+  await hashObservedTree(gitRoot, fixtureGitPaths(plan.baseCommit, branch), false, 1024 * 1024);
+  await verifyBranchReferences(root, plan, true);
 };
 
 const changeKind = (metadata: gitFileSystem.Stats): ExecutionObservedChange['kind'] => metadata.isSymbolicLink()
@@ -345,9 +414,16 @@ export class SyntheticExecutionWorkspace {
     try {
       assertExecutionPlan(task.plan);
       if (task.baseCommit !== task.plan.baseCommit) throw new HarnessError('EXECUTION_SOURCE_CHANGED');
+      await assertBranchSourceIdentity(task);
       await canonicalDirectory(task.sourceRoot, 0o555);
       await validateTree(task.sourceRoot, true);
       await inspectTrackedFiles(task.sourceRoot);
+      if (task.plan.policy.version === BRANCH_EXECUTION_POLICY_VERSION) {
+        if (await hashObservedTree(task.sourceRoot, sourcePaths(task.baseCommit), true, 1024 * 1024) !== task.plan.sourceHash) {
+          throw new HarnessError('EXECUTION_SOURCE_CHANGED');
+        }
+        await verifyBranchReferences(task.sourceRoot, task.plan, false);
+      }
       await verifyGitSnapshot(task.sourceRoot, task.baseCommit);
       for (const path of trackedPaths) {
         if (!(await readRegularFile(join(task.sourceRoot, path), 0o444)).equals(Buffer.from(fixtureFiles[path]!))) throw new HarnessError('EXECUTION_SOURCE_CHANGED');
@@ -373,8 +449,12 @@ export class SyntheticExecutionWorkspace {
       for (const path of trackedPaths) {
         await fileSystem.chmod(join(worktreeRoot, path), path === 'src/message.mjs' ? 0o600 : 0o444);
       }
+      if (task.plan.policy.version === BRANCH_EXECUTION_POLICY_VERSION) await selectExecutionBranch(worktreeRoot, task.plan);
       await this.verifySource(task);
-      this.snapshots.set(worktreeRoot, { worktreeRoot, planHash: task.plan.planHash, containerRoot, viewHash: null, gitHash: await hashRepository(join(worktreeRoot, '.git')) });
+      const gitHash = task.plan.policy.version === BRANCH_EXECUTION_POLICY_VERSION
+        ? await hashObservedTree(join(worktreeRoot, '.git'), fixtureGitPaths(task.baseCommit, task.plan.branch), false, 1024 * 1024)
+        : await hashRepository(join(worktreeRoot, '.git'));
+      this.snapshots.set(worktreeRoot, { worktreeRoot, planHash: task.plan.planHash, containerRoot, viewHash: null, gitHash });
       return { worktreeRoot, containerRoot };
     } catch (error) {
       if (error instanceof HarnessError) throw error;
@@ -461,6 +541,7 @@ export class SyntheticExecutionWorkspace {
     };
     try {
       assertExecutionPlan(task.plan);
+      await assertBranchSourceIdentity(task);
       await canonicalDirectory(artifactDirectory, 0o700);
       const worktreeRoot = join(artifactDirectory, 'worktree');
       const containerRoot = join(artifactDirectory, 'container-view');
@@ -484,7 +565,8 @@ export class SyntheticExecutionWorkspace {
       }
       await this.observeFiles(worktreeRoot, task.plan, observation.changes);
       try {
-        const gitHash = await hashObservedTree(join(worktreeRoot, '.git'), fixtureGitPaths(task.baseCommit), false, 1024 * 1024);
+        const gitHash = await hashObservedTree(join(worktreeRoot, '.git'), fixtureGitPaths(task.baseCommit, task.plan.branch), false, 1024 * 1024);
+        if (task.plan.policy.version === BRANCH_EXECUTION_POLICY_VERSION) await verifyBranchReferences(worktreeRoot, task.plan, true);
         observation.gitUnchanged = evidence === null ? null : gitHash === evidence.gitHash;
         if (observation.gitUnchanged === false) observation.changes.push({
           path: '.git', kind: 'modified', beforeHash: evidence!.gitHash, afterHash: gitHash,
@@ -594,7 +676,11 @@ export class SyntheticExecutionWorkspace {
       await canonicalDirectory(workspace.worktreeRoot, 0o700);
       await validateTree(workspace.worktreeRoot, false);
       await inspectTrackedFiles(workspace.worktreeRoot);
-      if (await hashRepository(join(workspace.worktreeRoot, '.git')) !== snapshot.gitHash) throw new HarnessError('EXECUTION_GIT_METADATA_CHANGED');
+      const gitHash = plan.policy.version === BRANCH_EXECUTION_POLICY_VERSION
+        ? await hashObservedTree(join(workspace.worktreeRoot, '.git'), fixtureGitPaths(plan.baseCommit, plan.branch), false, 1024 * 1024)
+        : await hashRepository(join(workspace.worktreeRoot, '.git'));
+      if (gitHash !== snapshot.gitHash) throw new HarnessError('EXECUTION_GIT_METADATA_CHANGED');
+      if (plan.policy.version === BRANCH_EXECUTION_POLICY_VERSION) await verifyBranchReferences(workspace.worktreeRoot, plan, true);
       if (snapshot.viewHash !== null) {
         await canonicalDirectory(workspace.containerRoot, 0o555);
         await validateTree(workspace.containerRoot, true);

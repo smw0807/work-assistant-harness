@@ -10,6 +10,8 @@
 
 단계 4-C-2는 독립 합성 Git source/workspace를 준비하고 별도 승인 후 작업 유형별 ref 하나를 만드는 경로다. 현재 추가한 구현과 최종 검증 상태는 [stage-4c2-result.md](stage-4c2-result.md)를 따른다. 실제 Codex·회사 저장소·코드 변경·작업 결과 commit·원격 작업은 연결하지 않는다.
 
+단계 4-C-3은 독립 합성 작업 브랜치의 생성·선택을 고정 patch·등록 Docker 검사·취소·복구와 연결한다. 별도 실행 정책·DB·새 승인을 사용하며 실제 Codex나 회사 저장소는 연결하지 않는다. 전체 회귀 481개와 실제 Docker 격리 진단·실행/취소/복구 12개 시나리오가 통과했으며 상태와 한계는 [stage-4c3-result.md](stage-4c3-result.md)에 기록한다.
+
 - 구현 순서와 상세 수용 기준: [implementation-plan.md](implementation-plan.md)
 - 권한과 승인 조건: [security-and-approval.md](security-and-approval.md)
 - Codex 개발 지침: [루트 AGENTS.md](../AGENTS.md)
@@ -319,16 +321,34 @@ AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
 | 4-B-2 | 고정 시험 문구의 별도 live 계획·승인·원자 소비·단건 Slack 전송·복구 | 합성 검증과 실제 게시 승인 분리. 정확한 identity/문맥/receipt·대상 중복 차단, 실제 게시 상태 별도 기록 |
 | 4-C-1 | 대상 작업 브랜치의 오프라인 계획·승인·모의 결과 | 별도 DB·정책, 유형별 계획·원자 소비·충돌/불확실·취소/복구 검증. 실제 Git/Codex 효과 없음 |
 | 4-C-2 | 독립 합성 Git 저장소의 ref 생성·관찰·복구 | 새 정책·승인·소유 증거·전후 hash·배타적 ref 생성·강제 종료 복구. HEAD/main 보존, 실제 Codex/회사 저장소 미연결 |
+| 4-C-3 | 독립 합성 작업 브랜치의 고정 수정·Docker 검사 | 새 실행 정책·승인 뒤 유형별 ref·HEAD 선택, 고정 patch·읽기 전용 검사 view·취소·관찰 복구. 전체 회귀와 실제 Docker 검증 완료 |
 | 4-C 후속 | 대상 저장소의 실제 Codex 작업 브랜치·commit 준비·push | 승인·격리·브랜치 보존과 행위별 승인 별도 검증. PR/MR 생성 제외. 미구현 후속 설계 |
 | 4-D | Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-B-2 승인 범위 밖 |
 
-4-C의 브랜치 규칙은 하네스가 Codex에 대상 저장소의 코드 수정을 지시할 때 적용한다. 승인된 기준 커밋에서 새 기능은 `feature/`, 오류 수정은 `fix/`, 유지보수는 `chore/`, 구조 개선은 `refactor/` 브랜치를 생성하고, 그 안에서 수정·허용된 검사 후 브랜치·diff·결과를 보고하도록 설계한다. PR 생성은 제외하고 GitLab MR로 대체하지 않는다. 이는 현재 하네스 저장소 개발 규칙이 아니다. 4-C-1은 계획·승인·모의 결과를, 4-C-2는 독립 합성 Git 저장소의 ref 생성·관찰·복구를 다룬다. 실제 Codex와 회사 대상 저장소 연결은 후속 범위다. 상세 조건은 [4-C 계획](implementation-plan.md#후속-단계의-별도-범위)을 따른다.
+4-C의 브랜치 규칙은 하네스가 Codex에 대상 저장소의 코드 수정을 지시할 때 적용한다. 승인된 기준 커밋에서 새 기능은 `feature/`, 오류 수정은 `fix/`, 유지보수는 `chore/`, 구조 개선은 `refactor/` 브랜치를 생성하고, 그 안에서 수정·허용된 검사 후 브랜치·diff·결과를 보고하도록 설계한다. PR 생성은 제외하고 GitLab MR로 대체하지 않는다. 이는 현재 하네스 저장소 개발 규칙이 아니다. 4-C-1은 계획·승인·모의 결과를, 4-C-2는 독립 합성 Git 저장소의 ref 생성·관찰·복구를 다룬다. 4-C-3는 새 합성 실행에서 브랜치 선택과 고정 수정·검사를 연결하며 실제 Codex와 회사 대상 저장소 연결은 후속 범위다. 상세 조건은 [4-C 계획](implementation-plan.md#후속-단계의-별도-범위)을 따른다.
 
 4-C-1의 `branch-plan → branch-approve → branch-simulate`는 별도 `branches.sqlite`에서 `AWAITING_APPROVAL → APPROVED → SIMULATING → SIMULATED / FAILED / UNKNOWN`으로 진행한다. `synthetic-branch-v1`·`offline` 계획은 작업 유형·브랜치명·합성 repo/remote/base/diff·OS 소유자·24시간 유효기한에 결합한다. 필수 TTL 1~60분의 승인을 모의 시도와 원자 소비하며 작업당 시도는 한 번이다. 취소·변경은 미소비 승인을 취소하고 진행 중 결과는 `UNKNOWN`으로 차단한다. 시작·조회는 자동 실행하지 않으며 중단 상태의 명시적 복구는 recover를 사용한다. 제한 worker는 네트워크·child·호스트 토큰을 받지 않고 Git·Codex 포트도 연결하지 않는다. [4-C-1 결과](stage-4c1-result.md)에 검증 범위와 실제 연결의 미실행 상태를 기록한다.
 
 4-C-2의 `git-branch-plan → git-branch-approve → git-branch-create`는 별도 `git-branches.sqlite`에서 `AWAITING_APPROVAL → APPROVED → RUNNING → SUCCEEDED / FAILED / BLOCKED`로 진행한다. 초기 고정 fixture만 `isomorphic-git`으로 각각 준비하며 source/workspace 사이 Git 객체나 worktree metadata를 공유하지 않는다. 계획은 소유 manifest·root·token·기준 커밋·두 트리 hash·작업 브랜치와 새 `local-synthetic-branch-v1` 정책에 결합한다. 실행은 승인 소비와 `claimed`를 원자 저장하고 `writing`을 먼저 기록한 뒤, 동기 guard에서 generation을 확인하며 계획한 loose ref 하나만 배타적으로 생성한다. `created`와 `finished` 시각·전후 관찰을 영속화한다. checkout·코드 변경·검사 스크립트·작업 결과 commit은 수행하지 않는다.
 
 동기 workspace 관찰은 소유·경로·고정 파일 목록·한도를 먼저 검증하고 source와 정규화한 workspace hash를 비교한다. 계획 ref와 유형 디렉터리만 차이로 허용하며 main과 HEAD는 그대로 유지한다. `git-branch-inspect`는 중단된 `RUNNING`을 재개하지 않고, `git-branch-recover`는 현재 ref 유무와 안전성을 `INTERRUPTED / CANCELLED / BLOCKED` 결과에 남긴다. 존재하는 ref를 성공의 증거로 소급하지 않으며 자동 재생성·수리·삭제도 하지 않는다. `RUNNING` 내부 취소는 generation fence를 세우지만 CLI의 모든 명령은 전역 lease로 직렬화하므로 별도 cancel 프로세스가 실행 중 lease를 우회하지 않는다. [4-C-2 결과](stage-4c2-result.md)에 합성 Git 검증과 실제 회사 연결의 미실행 범위를 구분한다.
+
+4-C-3의 `branch-execution-*`는 기존 3-C/D의 실행 service·workspace·Docker adapter·취소·lifecycle을 새 profile로 사용한다. 정책은 `synthetic-branch-execution-v1`, DB는 `branch-execution.sqlite`, 작업물은 `branch-executions/<task-id>/`에 분리한다. 기존 정책의 계획 키와 동작을 유지하며 4-C-2의 workspace나 승인을 가져오지 않는다. 계획 hash는 작업 유형·브랜치명·main·예상 HEAD·OS 소유자·정확한 source 경로·24시간 유효기간과 기존 원본·patch·검사·Docker identity를 함께 고정한다. 승인 TTL은 필수 정수 1~60분이며 계획 만료를 넘지 않는다.
+
+```text
+branch-execution-plan → 합성 source 초기 commit·동결 → AWAITING_APPROVAL
+branch-execution-approve → 새 정책의 소유자·hash·기준·TTL 확인
+branch-execution-run → 원본·Docker 사전 확인 → 승인 소비 + RUNNING
+  → workspace_preparing → 독립 Git 초기화·ref 배타 생성·symbolic HEAD 선택
+  → workspace_ready → 선택 완료 Git hash 저장 → src/message.mjs 고정 patch
+  → Git 없는 읽기 전용 Docker view·등록 검사 → 원본·Git·diff 관찰·보고
+branch-execution-cancel / invalidate → generation fence·소유 container 정리
+branch-execution-recover → 영속 증거와 현재 작업물 관찰, 실행 재개 없음
+```
+
+source의 main·HEAD와 작업 영역의 main은 기준 커밋에 남긴다. 작업 ref와 HEAD 선택을 끝낸 뒤 최초 Git hash를 저장하고 그 이후에는 Git metadata 전체를 불변으로 검사한다. fixed patch는 신뢰하는 하네스가 적용하며 Docker에는 `.git`과 쓰기 권한이 없는 view만 전달한다. 대상 코드의 호스트 import나 임의 코드 생성·실행은 제공하지 않는다. 합성 초기 commit과 별개인 작업 결과 commit·push·PR/MR도 제공하지 않는다.
+
+`workspace_preparing` 중단으로 최초 Git 증거 없이 작업물이 남으면 보수적으로 `BLOCKED`로 보존한다. 증거 저장 뒤 복구는 현재 HEAD·작업 ref·main·파일·view와 container 소유권을 검사해 `INTERRUPTED / CANCELLED / BLOCKED`로 기록한다. inspect·cancel·invalidate는 기존 3-D와 같이 전역 lease를 우회하는 짧은 DB 트랜잭션이며 실행·복구는 전역 lease를 유지한다. 승인·계획 TTL은 승인과 실행 진입에서 확인하고, 진행 중 실행은 generation fence·강제 시간 제한·최종 성공 재검증으로 제어한다. 자동 재시도·승인 복원·수리·작업물 삭제는 없다. 실제 검증 근거는 [4-C-3 결과](stage-4c3-result.md)를 따른다.
 
 기존 `ExecutionPort`의 항상 거부 동작을 유지하며 합성 실행과 고정 Slack 단건 시험을 각각 별도 명령·승인으로 연다. 기존 `approve`·`cancel`과 합성 계획·승인·실행·복구는 전역 lease를 유지한다. 합성 실행의 취소·무효화·조회는 실행 DB의 짧은 트랜잭션으로 전달한다. 실제 Slack 수신과 실행은 직렬화하며 수신 공백의 변경 감지는 보장하지 않는다. 단계 3의 작업 트리는 작업 분리 수단이며 Docker 격리 환경을 대신하지 않는다.
 

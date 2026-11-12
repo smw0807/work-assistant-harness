@@ -11,6 +11,7 @@ import { createExecutionPolicy, getExecutionCommand } from '../src/policy/execut
 import type { SandboxConfig } from '../src/domain/sandbox.js';
 import { HarnessError } from '../src/domain/errors.js';
 import type { ExecutionContainerIntent, ExecutionLifecycleHooks } from '../src/domain/execution.js';
+import { BRANCH_EXECUTION_POLICY_VERSION } from '../src/domain/execution.js';
 
 type JsonObject = Record<string, unknown>;
 const imageId = `sha256:${'b'.repeat(64)}`;
@@ -159,6 +160,24 @@ const prepare = async (options: FakeOptions = {}) => {
   };
   return { executor, workspace, config, policy, control, temporary, fake, fileSystem, close };
 };
+
+test('브랜치 실행 Docker는 명시한 새 정책만 받고 기존 정책과 서로 권한을 교환하지 않는다', async () => {
+  const fixture = await prepare();
+  try {
+    const policy = createExecutionPolicy(fixture.config, BRANCH_EXECUTION_POLICY_VERSION);
+    const executor = new DockerIsolatedExecution(fixture.config, fixture.control, fixture.fake.runner, fixture.fileSystem, BRANCH_EXECUTION_POLICY_VERSION);
+    await assert.rejects(fixture.executor.preflight(fixture.config, policy), hasCode('EXECUTION_POLICY_MISMATCH'));
+    await assert.rejects(executor.preflight(fixture.config, fixture.policy), hasCode('EXECUTION_POLICY_MISMATCH'));
+    assert.equal(fixture.fake.calls.length, 0);
+    await executor.preflight(fixture.config, policy);
+    const result = await executor.execute(getExecutionCommand('synthetic-check-v1'), fixture.workspace);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.removed, true);
+    const create = fixture.fake.calls.find((call) => call.arguments[4] === 'create')!.arguments;
+    assert.equal(create[create.indexOf('--network') + 1], 'none');
+    assert.ok(create[create.indexOf('--mount') + 1]?.includes(',readonly,'));
+  } finally { await fixture.close(); }
+});
 
 test('실행 preflight는 매번 빈 private Docker config와 승인된 정책·이미지를 다시 확인한다', async () => {
   const fixture = await prepare();

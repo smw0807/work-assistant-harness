@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
+import { isAbsolute, normalize } from 'node:path';
 import { HarnessError } from '../domain/errors.js';
 import {
-  EXECUTION_LIMITS, EXECUTION_POLICY_VERSION,
-  type ExecutionCommandId, type ExecutionPlan, type ExecutionPolicy, type RegisteredExecutionCommand,
+  EXECUTION_LIMITS, EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION,
+  type ExecutionCommandId, type ExecutionPlan, type ExecutionPolicy, type ExecutionPolicyVersion, type RegisteredExecutionCommand,
 } from '../domain/execution.js';
 import type { SandboxConfig } from '../domain/sandbox.js';
 import { containsSensitiveText } from './redaction.js';
@@ -15,6 +16,11 @@ const exactKeys = (value: unknown, keys: string[]): boolean => isRecord(value)
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const identifier = (value: unknown): value is string => typeof value === 'string'
   && /^[a-zA-Z0-9][a-zA-Z0-9-]{0,79}$/.test(value);
+const uuid = (value: unknown): value is string => typeof value === 'string'
+  && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
+const timestamp = (value: unknown): value is string => typeof value === 'string'
+  && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+const branchPlanLifetimeMs = 24 * 60 * 60 * 1000;
 const commandPaths: Record<ExecutionCommandId, string> = {
   'synthetic-check-v1': '/workspace/checks/check.mjs',
   'synthetic-timeout-v1': '/workspace/checks/timeout.mjs',
@@ -49,15 +55,16 @@ export const hashExecutionConfig = (config: SandboxConfig): string => {
   }));
 };
 
-export const createExecutionPolicy = (config: SandboxConfig): ExecutionPolicy => ({
-  version: EXECUTION_POLICY_VERSION, backend: 'docker', serverVersion: config.serverVersion,
+export const createExecutionPolicy = (config: SandboxConfig, version: ExecutionPolicyVersion = EXECUTION_POLICY_VERSION): ExecutionPolicy => ({
+  version, backend: 'docker', serverVersion: config.serverVersion,
   imageId: config.imageId, nodeVersion: config.nodeVersion, configHash: hashExecutionConfig(config),
   limits: EXECUTION_LIMITS, network: 'none',
 });
 
 export const assertExecutionPolicy = (policy: ExecutionPolicy): void => {
   if (!exactKeys(policy, ['version', 'backend', 'serverVersion', 'imageId', 'nodeVersion', 'configHash', 'limits', 'network'])
-    || policy.version !== EXECUTION_POLICY_VERSION || policy.backend !== 'docker' || policy.network !== 'none'
+    || ![EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION].includes(policy.version)
+    || policy.backend !== 'docker' || policy.network !== 'none'
     || !/^\d+\.\d+\.\d+$/.test(policy.serverVersion) || !/^\d+\.\d+\.\d+$/.test(policy.nodeVersion)
     || !/^sha256:[a-f0-9]{64}$/.test(policy.imageId) || !digest(policy.configHash)
     || !exactKeys(policy.limits, Object.keys(EXECUTION_LIMITS))
@@ -68,7 +75,7 @@ export const assertExecutionPolicy = (policy: ExecutionPolicy): void => {
 
 export const assertExecutionConfig = (plan: ExecutionPlan, config: SandboxConfig): void => {
   assertExecutionPlan(plan);
-  if (!config.enabled || JSON.stringify(plan.policy) !== JSON.stringify(createExecutionPolicy(config))) {
+  if (!config.enabled || JSON.stringify(plan.policy) !== JSON.stringify(createExecutionPolicy(config, plan.policy.version))) {
     throw new HarnessError('EXECUTION_POLICY_CHANGED');
   }
 };
@@ -86,17 +93,55 @@ const planContent = (plan: Omit<ExecutionPlan, 'planHash'>): Omit<ExecutionPlan,
     network: command.network, timeoutMs: command.timeoutMs,
   })),
   policy: plan.policy,
+  ...(plan.policy.version === BRANCH_EXECUTION_POLICY_VERSION && plan.branch ? { branch: {
+    workType: plan.branch.workType, name: plan.branch.name, baseBranch: plan.branch.baseBranch, headRef: plan.branch.headRef,
+    ownerId: plan.branch.ownerId, sourceRoot: plan.branch.sourceRoot,
+    createdAt: plan.branch.createdAt, expiresAt: plan.branch.expiresAt,
+  } } : {}),
 });
 
 export const hashExecutionPlan = (plan: Omit<ExecutionPlan, 'planHash'>): string => sha256(JSON.stringify(planContent(plan)));
 
-/** 3-C는 기존 합성 일반 파일 한 개의 내용 교체만 허용한다. */
+const assertExecutionBranch = (plan: ExecutionPlan): void => {
+  const branch = plan.branch;
+  if (!exactKeys(branch, ['workType', 'name', 'baseBranch', 'headRef', 'ownerId', 'sourceRoot', 'createdAt', 'expiresAt'])
+    || !branch || !uuid(plan.taskId) || !['feature', 'fix', 'chore', 'refactor'].includes(branch.workType)
+    || branch.name !== `${branch.workType}/task-${plan.taskId}` || branch.baseBranch !== 'main'
+    || branch.headRef !== `refs/heads/${branch.name}`
+    || typeof branch.ownerId !== 'string' || !/^os-user:(0|[1-9]\d{0,15})$/.test(branch.ownerId)
+    || typeof branch.sourceRoot !== 'string' || Buffer.byteLength(branch.sourceRoot) > 4096
+    || !isAbsolute(branch.sourceRoot) || normalize(branch.sourceRoot) !== branch.sourceRoot
+    || /[\\*,]/.test(branch.sourceRoot)
+    || [...branch.sourceRoot].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+    || !branch.sourceRoot.endsWith(`/branch-executions/${plan.taskId}/source`)
+    || !timestamp(branch.createdAt) || !timestamp(branch.expiresAt)
+    || Date.parse(branch.expiresAt) - Date.parse(branch.createdAt) !== branchPlanLifetimeMs) {
+    throw new HarnessError('INVALID_EXECUTION_BRANCH_PLAN');
+  }
+};
+
+/** 저장된 만료 계획도 조회·복구할 수 있도록 실행 직전의 시간·소유 검사를 분리한다. */
+export const assertExecutionPlanReady = (plan: ExecutionPlan, ownerId: string, now: Date): void => {
+  assertExecutionPlan(plan);
+  if (plan.policy.version !== BRANCH_EXECUTION_POLICY_VERSION) return;
+  const branch = plan.branch!;
+  if (branch.ownerId !== ownerId) throw new HarnessError('APPROVAL_OWNER_MISMATCH');
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime()) || now.getTime() < Date.parse(branch.createdAt)) {
+    throw new HarnessError('INVALID_APPROVAL_TIME');
+  }
+  if (now.getTime() >= Date.parse(branch.expiresAt)) throw new HarnessError('EXECUTION_PLAN_EXPIRED');
+};
+
+/** 기존 실행과 브랜치 실행은 정책·저장소·필수 metadata를 함께 검증한다. */
 export const assertExecutionPlan = (plan: ExecutionPlan): void => {
+  const branchExecution = plan?.policy?.version === BRANCH_EXECUTION_POLICY_VERSION;
   if (!exactKeys(plan, [
     'planId', 'version', 'taskId', 'requestRevision', 'repoId', 'baseCommit', 'sourceHash',
     'allowedFiles', 'patches', 'commands', 'policy', 'planHash',
+    ...(branchExecution ? ['branch'] : []),
   ]) || !identifier(plan.planId) || !identifier(plan.taskId) || plan.version !== 1
-    || plan.requestRevision !== 'synthetic-1' || plan.repoId !== 'synthetic-execution'
+    || plan.requestRevision !== 'synthetic-1'
+    || plan.repoId !== (branchExecution ? 'synthetic-branch-execution' : 'synthetic-execution')
     || !/^[a-f0-9]{40}$/.test(plan.baseCommit) || !digest(plan.sourceHash) || !digest(plan.planHash)
     || !Array.isArray(plan.allowedFiles) || plan.allowedFiles.length !== 1 || plan.allowedFiles[0] !== 'src/message.mjs'
     || !Array.isArray(plan.patches) || plan.patches.length !== 1
@@ -111,5 +156,6 @@ export const assertExecutionPlan = (plan: ExecutionPlan): void => {
   }
   for (const command of plan.commands) assertExecutionCommand(command);
   assertExecutionPolicy(plan.policy);
+  if (branchExecution) assertExecutionBranch(plan);
   if (hashExecutionPlan(plan) !== plan.planHash) throw new HarnessError('PLAN_HASH_MISMATCH');
 };

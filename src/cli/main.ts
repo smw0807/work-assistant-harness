@@ -11,7 +11,7 @@ import type { WorkerOptions } from './harness.module.js';
 import { acquireRuntimeLease, assertSafeEventFile, defaultDataDirectory, isInside, prepareDataDirectory, safeReadFlag } from './runtime.js';
 import { runSlackCommand, slackUsage } from './slack.js';
 import { runSandboxCheckCommand, sandboxUsage } from './sandbox.js';
-import { executionUsage, runExecutionCommand } from './execution.js';
+import { executionUsage, runExecutionCommand, branchExecutionUsage, runBranchExecutionCommand } from './execution.js';
 import { replyUsage, runReplyCommand } from './reply.js';
 import { slackPostUsage, runSlackPostCommand } from './slack-post.js';
 import { liveSlackUsage, runLiveSlackCommand } from './live-slack.js';
@@ -150,8 +150,9 @@ const run = async (): Promise<void> => {
   }
 };
 
-if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n`);
-else (process.argv[2]?.startsWith('git-branch-') ? runLocalBranchCommand(process.argv.slice(2))
+if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${branchExecutionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n`);
+else (process.argv[2]?.startsWith('branch-execution-') ? runBranchExecutionCommand(process.argv.slice(2))
+  : process.argv[2]?.startsWith('git-branch-') ? runLocalBranchCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('branch-') ? runBranchCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('slack-live-') ? runLiveSlackCommand(process.argv.slice(2))
   : process.argv[2] === 'slack-post-check' ? runSlackPostCommand(process.argv.slice(2))
@@ -159,6 +160,6 @@ else (process.argv[2]?.startsWith('git-branch-') ? runLocalBranchCommand(process
   : process.argv[2]?.startsWith('execution-') ? runExecutionCommand(process.argv.slice(2))
   : process.argv[2] === 'sandbox-check' ? runSandboxCheckCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('slack-') ? runSlackCommand(process.argv.slice(2)) : run()).catch((error: unknown) => {
-  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n`);
+  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${branchExecutionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n`);
   process.exitCode = 1;
 });

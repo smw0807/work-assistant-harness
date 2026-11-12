@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { HarnessError } from '../domain/errors.js';
+import { BRANCH_EXECUTION_POLICY_VERSION, EXECUTION_POLICY_VERSION } from '../domain/execution.js';
+import type { BranchWorkType } from '../domain/branch.js';
 import type {
   ExecutionApprovalContext, ExecutionApprovalRequest, ExecutionCleanupResult, ExecutionCommandResult,
   ExecutionFixture, ExecutionLifecycleHooks, ExecutionPhase, ExecutionPlan, ExecutionProgress,
-  ExecutionRun, ExecutionRunRequest, ExecutionTask, IsolatedExecutionPort,
+  ExecutionRun, ExecutionRunRequest, ExecutionTask, IsolatedExecutionPort, ExecutionPolicyVersion,
 } from '../domain/execution.js';
 import type { SandboxConfig } from '../domain/sandbox.js';
 import type { ExecutionStore } from '../ports/execution.js';
-import { assertExecutionConfig, assertExecutionPlan, createExecutionPolicy, getExecutionCommand, hashExecutionPlan } from '../policy/execution-policy.js';
+import { assertExecutionConfig, assertExecutionPlan, assertExecutionPlanReady, createExecutionPolicy, getExecutionCommand, hashExecutionPlan } from '../policy/execution-policy.js';
 import { assertSandboxHost } from '../policy/sandbox-policy.js';
 import { SyntheticExecutionWorkspace } from '../adapters/execution-workspace.js';
 
@@ -36,18 +39,41 @@ export class SyntheticExecutionService {
     private readonly config: SandboxConfig,
     private readonly host = { platform: process.platform as string, architecture: process.arch as string },
     private readonly observer: ExecutionServiceObserver = {},
-  ) {}
+    private readonly policyVersion: ExecutionPolicyVersion = EXECUTION_POLICY_VERSION,
+  ) {
+    if (![EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION].includes(policyVersion)) {
+      throw new HarnessError('INVALID_EXECUTION_POLICY');
+    }
+  }
 
-  async plan(taskId: string, directory: string, fixture: ExecutionFixture): Promise<ExecutionTask> {
+  async plan(taskId: string, directory: string, fixture: ExecutionFixture, workType?: BranchWorkType): Promise<ExecutionTask> {
+    const branchExecution = this.policyVersion === BRANCH_EXECUTION_POLICY_VERSION;
+    if (branchExecution ? !workType || !['feature', 'fix', 'chore', 'refactor'].includes(workType) : workType !== undefined) {
+      throw new HarnessError('INVALID_EXECUTION_WORK_TYPE');
+    }
+    if (branchExecution && !process.getuid) throw new HarnessError('APPROVAL_OWNER_UNSUPPORTED');
+    if (branchExecution && (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(taskId)
+      || !isAbsolute(directory) || normalize(directory) !== directory
+      || directory !== join(dirname(dirname(directory)), 'branch-executions', taskId)
+      || /[\\*,]/.test(directory) || [...directory].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127))) {
+      throw new HarnessError('UNSAFE_EXECUTION_DIRECTORY');
+    }
     const source = await this.workspace.prepare(directory, fixture);
+    const now = new Date().toISOString();
+    const branchName = `${workType}/task-${taskId}`;
     const content: Omit<ExecutionPlan, 'planHash'> = {
-      planId: randomUUID(), version: 1, taskId, requestRevision: 'synthetic-1', repoId: 'synthetic-execution',
+      planId: randomUUID(), version: 1, taskId, requestRevision: 'synthetic-1',
+      repoId: branchExecution ? 'synthetic-branch-execution' : 'synthetic-execution',
       baseCommit: source.baseCommit, sourceHash: source.sourceHash, allowedFiles: ['src/message.mjs'],
-      patches: source.patches, commands: source.commandIds.map(getExecutionCommand), policy: createExecutionPolicy(this.config),
+      patches: source.patches, commands: source.commandIds.map(getExecutionCommand), policy: createExecutionPolicy(this.config, this.policyVersion),
+      ...(branchExecution ? { branch: {
+        workType: workType!, name: branchName, baseBranch: 'main' as const, headRef: `refs/heads/${branchName}`,
+        ownerId: `os-user:${process.getuid!()}`, sourceRoot: source.sourceRoot,
+        createdAt: now, expiresAt: new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString(),
+      } } : {}),
     };
     const plan: ExecutionPlan = { ...content, planHash: hashExecutionPlan(content) };
     assertExecutionPlan(plan);
-    const now = new Date().toISOString();
     const task: ExecutionTask = {
       taskId, status: 'AWAITING_APPROVAL', requestRevision: plan.requestRevision, baseCommit: plan.baseCommit,
       sourceRoot: source.sourceRoot, createdAt: now, updatedAt: now, plan,
@@ -58,6 +84,7 @@ export class SyntheticExecutionService {
 
   async approve(request: ExecutionApprovalRequest, context: ExecutionApprovalContext) {
     const task = this.requireTask(request.taskId);
+    assertExecutionPlanReady(task.plan, context.ownerId, context.now);
     assertExecutionConfig(task.plan, this.config);
     await this.workspace.verifySource(task);
     return this.store.approve(request, context);
@@ -65,13 +92,16 @@ export class SyntheticExecutionService {
 
   async run(request: ExecutionRunRequest, context: ExecutionApprovalContext, artifactDirectory: string, signal?: AbortSignal): Promise<ExecutionRun> {
     const task = this.requireTask(request.taskId);
+    const entryTime = task.plan.branch ? new Date() : context.now;
+    assertExecutionPlanReady(task.plan, context.ownerId, entryTime);
     assertExecutionConfig(task.plan, this.config);
     assertSandboxHost(this.host.platform, this.host.architecture);
     if (request.planHash !== task.plan.planHash || request.baseCommit !== task.baseCommit) throw new HarnessError('EXECUTION_CONTEXT_MISMATCH');
     if (this.store.requestState(task.taskId).invalidatedAt !== null) throw new HarnessError('EXECUTION_CANCELLED');
     const approval = this.store.listApprovalHistory(task.taskId, 0).approvals[0];
     if (!approval || approval.usedAt !== null || approval.revokedAt !== null
-      || approval.ownerId !== context.ownerId || Date.parse(approval.expiresAt) <= context.now.getTime()) throw new HarnessError('APPROVAL_REQUIRED');
+      || approval.ownerId !== context.ownerId || Date.parse(approval.expiresAt) <= entryTime.getTime()
+      || (task.plan.branch && Date.parse(approval.createdAt) > entryTime.getTime())) throw new HarnessError('APPROVAL_REQUIRED');
     if (signal?.aborted) throw new HarnessError('EXECUTION_ABORTED');
     const beforeHash = await this.workspace.verifySource(task);
     await this.backend.preflight(this.config, task.plan.policy);
@@ -111,6 +141,8 @@ export class SyntheticExecutionService {
       const workspace = await this.store.guard(run.runId, 'workspace_preparing', () => this.workspace.materialize(task, artifactDirectory));
       run.worktreeRoot = workspace.worktreeRoot;
       await checkpoint('workspace_ready', { worktreeRoot: workspace.worktreeRoot, workspace: await this.workspace.evidence(task.plan, workspace) });
+      if (task.plan.branch) run.checks.push({ name: 'approved_branch', status: 'passed',
+        reason: '계획한 작업 브랜치의 HEAD·ref와 보존된 main을 확인했습니다.' });
       live(); await checkpoint('patch_applying'); live();
       await this.store.guard(run.runId, 'patch_applying', () => this.workspace.apply(task.plan, workspace));
       run.diff = await this.workspace.inspectDiff(task.plan, workspace);
@@ -119,14 +151,23 @@ export class SyntheticExecutionService {
       live(); await checkpoint('view_preparing'); live();
       const containerRoot = await this.store.guard(run.runId, 'view_preparing', () => this.workspace.createContainerView(task.plan, workspace));
       await checkpoint('view_ready', { workspace: await this.workspace.evidence(task.plan, workspace) });
+      const verifyApprovedWorkspace = async (): Promise<void> => {
+        if (!task.plan.branch) return;
+        // 준비 뒤 교체된 검사 파일을 실행하지 않도록 create/start 직전에도 승인 증거를 대조한다.
+        await this.workspace.verifySource(task);
+        await this.workspace.inspectDiff(task.plan, workspace);
+        await this.workspace.evidence(task.plan, workspace);
+        live();
+      };
       for (const command of task.plan.commands) {
         live();
+        await verifyApprovedWorkspace();
         const hooks: ExecutionLifecycleHooks = {
           runId: run.runId,
           dispatch: (operation) => this.store.dispatch(run.runId, operation),
-          beforeCreate: async (container) => { live(); await checkpoint('container_creating', { container }); live(); },
+          beforeCreate: async (container) => { live(); await checkpoint('container_creating', { container }); live(); await verifyApprovedWorkspace(); },
           created: async (container) => { await checkpoint('container_created', { container }); },
-          beforeStart: async () => { live(); await checkpoint('container_starting'); live(); },
+          beforeStart: async () => { live(); await checkpoint('container_starting'); live(); await verifyApprovedWorkspace(); },
           finished: async (result) => { await checkpoint('command_finished', { command: result, cleanup: cleanupFromCommand(result) }); },
         };
         const result = await this.backend.execute(command, containerRoot, controller.signal, hooks);
@@ -238,6 +279,7 @@ export class SyntheticExecutionService {
     const task = this.store.find(taskId);
     if (!task) throw new HarnessError('EXECUTION_TASK_NOT_FOUND');
     assertExecutionPlan(task.plan);
+    if (task.plan.policy.version !== this.policyVersion) throw new HarnessError('EXECUTION_POLICY_MISMATCH');
     return task;
   }
 }

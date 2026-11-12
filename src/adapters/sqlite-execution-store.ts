@@ -4,15 +4,15 @@ import { isAbsolute } from 'node:path';
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 import { HarnessError } from '../domain/errors.js';
 import {
-  EXECUTION_POLICY_VERSION,
+  EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION,
   type ExecutionApproval, type ExecutionApprovalContext, type ExecutionApprovalRequest,
   type ExecutionRun, type ExecutionRunRequest, type ExecutionTask,
   type ExecutionControlRequest, type ExecutionRequestState, type ExecutionLifecycle,
   type ExecutionPhase, type ExecutionProgress, type ExecutionObservation,
-  type ExecutionSnapshot,
+  type ExecutionSnapshot, type ExecutionPolicyVersion,
 } from '../domain/execution.js';
 import type { ExecutionStore } from '../ports/execution.js';
-import { assertExecutionPlan, sha256 } from '../policy/execution-policy.js';
+import { assertExecutionPlan, assertExecutionPlanReady, sha256 } from '../policy/execution-policy.js';
 import { assertRuntimeFile, runtimePathMetadata } from '../policy/runtime-path.js';
 
 const taskKeys = ['taskId', 'status', 'requestRevision', 'baseCommit', 'sourceRoot', 'createdAt', 'updatedAt', 'plan'];
@@ -58,7 +58,10 @@ export class SqliteExecutionStore implements ExecutionStore {
   private readonly database: DatabaseSync;
   private transactionOpen = false;
 
-  constructor(private readonly filePath: string) {
+  constructor(private readonly filePath: string, private readonly expectedPolicy: ExecutionPolicyVersion = EXECUTION_POLICY_VERSION) {
+    if (![EXECUTION_POLICY_VERSION, BRANCH_EXECUTION_POLICY_VERSION].includes(expectedPolicy)) {
+      throw new HarnessError('INVALID_EXECUTION_POLICY');
+    }
     this.protectFiles();
     this.database = new DatabaseSync(filePath, { enableForeignKeyConstraints: true });
     this.protectFiles();
@@ -127,12 +130,18 @@ export class SqliteExecutionStore implements ExecutionStore {
 
   approve(request: ExecutionApprovalRequest, context: ExecutionApprovalContext): ExecutionApproval {
     assertContext(context);
-    this.assertRequest(request);
-    if (!Number.isSafeInteger(request.expiresInMinutes) || request.expiresInMinutes < 1 || request.expiresInMinutes > 1_440) {
+    this.assertRequest(request, true);
+    const maximumMinutes = this.expectedPolicy === BRANCH_EXECUTION_POLICY_VERSION ? 60 : 1_440;
+    if (!Number.isSafeInteger(request.expiresInMinutes) || request.expiresInMinutes < 1 || request.expiresInMinutes > maximumMinutes) {
       throw new HarnessError('INVALID_EXECUTION_APPROVAL_REQUEST');
     }
     return this.transaction(() => {
       let task = this.requireTask(request.taskId);
+      assertExecutionPlanReady(task.plan, context.ownerId, context.now);
+      const expiresAt = new Date(context.now.getTime() + request.expiresInMinutes * 60_000).toISOString();
+      if (task.plan.branch && expiresAt > task.plan.branch.expiresAt) {
+        throw new HarnessError('EXECUTION_APPROVAL_EXCEEDS_PLAN_EXPIRY');
+      }
       this.assertRequestActive(task.taskId, context.ownerId);
       const records = this.listApprovals(task.taskId);
       this.assertOwners(records, context.ownerId);
@@ -146,9 +155,9 @@ export class SqliteExecutionStore implements ExecutionStore {
       const approval: ExecutionApproval = {
         approvalId: randomUUID(), taskId: task.taskId, ownerId: context.ownerId,
         planHash: task.plan.planHash, baseCommit: task.baseCommit, requestRevision: task.requestRevision,
-        executionPolicy: EXECUTION_POLICY_VERSION, planSnapshot: structuredClone(task.plan),
+        executionPolicy: this.expectedPolicy, planSnapshot: structuredClone(task.plan),
         createdAt: context.now.toISOString(),
-        expiresAt: new Date(context.now.getTime() + request.expiresInMinutes * 60_000).toISOString(),
+        expiresAt,
         usedAt: null, revokedAt: null,
       };
       this.assertApproval(approval);
@@ -200,6 +209,7 @@ export class SqliteExecutionStore implements ExecutionStore {
         return new HarnessError('APPROVAL_EXPIRED');
       }
       if (task.status !== 'APPROVED') throw new HarnessError('TASK_NOT_APPROVED');
+      assertExecutionPlanReady(task.plan, context.ownerId, context.now);
       if (context.now.getTime() < Date.parse(approval.createdAt)) throw new HarnessError('INVALID_APPROVAL_TIME');
       if (approval.planHash !== task.plan.planHash || approval.baseCommit !== task.baseCommit
         || approval.requestRevision !== task.requestRevision || approval.taskId !== task.taskId
@@ -385,12 +395,15 @@ export class SqliteExecutionStore implements ExecutionStore {
     if (row) {
       const state = decode<ExecutionRequestState>(row.payload, 'INVALID_STORED_EXECUTION_REQUEST');
       this.assertRequestState(state);
-      if (state.taskId !== taskId) throw new HarnessError('INVALID_STORED_EXECUTION_REQUEST');
+      if (state.taskId !== taskId || (task.plan.branch && state.ownerId !== task.plan.branch.ownerId)) {
+        throw new HarnessError('INVALID_STORED_EXECUTION_REQUEST');
+      }
       return state;
     }
     const approvals = this.listApprovals(taskId);
     if (typeof process.getuid !== 'function' && approvals.length === 0) throw new HarnessError('APPROVAL_OWNER_UNSUPPORTED');
     const ownerId = approvals[0]?.ownerId ?? `os-user:${process.getuid?.()}`;
+    if (task.plan.branch && task.plan.branch.ownerId !== ownerId) throw new HarnessError('APPROVAL_OWNER_MISMATCH');
     this.assertOwners(approvals, ownerId);
     const state: ExecutionRequestState = {
       taskId: task.taskId, requestId: `synthetic:${task.taskId}`, ownerId, revision: 1, generation: 0,
@@ -583,13 +596,19 @@ export class SqliteExecutionStore implements ExecutionStore {
       throw new HarnessError('INVALID_EXECUTION_TASK');
     }
     assertExecutionPlan(task.plan);
+    if (task.plan.policy.version !== this.expectedPolicy) throw new HarnessError('EXECUTION_POLICY_MISMATCH');
     if (task.plan.taskId !== task.taskId || task.plan.requestRevision !== task.requestRevision
-      || task.plan.baseCommit !== task.baseCommit) throw new HarnessError('EXECUTION_CONTEXT_MISMATCH');
+      || task.plan.baseCommit !== task.baseCommit
+      || (task.plan.branch && (task.plan.branch.sourceRoot !== task.sourceRoot || task.plan.branch.createdAt !== task.createdAt))) {
+      throw new HarnessError('EXECUTION_CONTEXT_MISMATCH');
+    }
   }
 
-  private assertRequest(request: ExecutionRunRequest): void {
+  private assertRequest(request: ExecutionRunRequest, approval = false): void {
     if (!request || !isText(request.taskId) || typeof request.planHash !== 'string' || !digest.test(request.planHash)
-      || typeof request.baseCommit !== 'string' || !commit.test(request.baseCommit)) {
+      || typeof request.baseCommit !== 'string' || !commit.test(request.baseCommit)
+      || (this.expectedPolicy === BRANCH_EXECUTION_POLICY_VERSION
+        && !hasKeys(request, ['taskId', 'planHash', 'baseCommit', ...(approval ? ['expiresInMinutes'] : [])]))) {
       throw new HarnessError('INVALID_EXECUTION_APPROVAL_REQUEST');
     }
   }
@@ -603,17 +622,22 @@ export class SqliteExecutionStore implements ExecutionStore {
     if (!hasKeys(approval, approvalKeys) || !isText(approval.approvalId) || !isText(approval.taskId)
       || typeof approval.ownerId !== 'string' || !/^os-user:\d+$/.test(approval.ownerId)
       || !digest.test(approval.planHash) || !commit.test(approval.baseCommit) || !isText(approval.requestRevision)
-      || approval.executionPolicy !== EXECUTION_POLICY_VERSION || !isTimestamp(approval.createdAt)
+      || approval.executionPolicy !== this.expectedPolicy || !isTimestamp(approval.createdAt)
       || !isTimestamp(approval.expiresAt)
       || (approval.usedAt !== null && !isTimestamp(approval.usedAt))
       || (approval.revokedAt !== null && !isTimestamp(approval.revokedAt))) throw new HarnessError('INVALID_STORED_EXECUTION_APPROVAL');
     const ttl = (Date.parse(approval.expiresAt) - Date.parse(approval.createdAt)) / 60_000;
-    if (!Number.isInteger(ttl) || ttl < 1 || ttl > 1_440
+    const maximumMinutes = this.expectedPolicy === BRANCH_EXECUTION_POLICY_VERSION ? 60 : 1_440;
+    if (!Number.isInteger(ttl) || ttl < 1 || ttl > maximumMinutes
       || (approval.usedAt !== null && (approval.usedAt < approval.createdAt || approval.usedAt >= approval.expiresAt))
       || (approval.revokedAt !== null && approval.revokedAt < approval.createdAt)
       || (approval.usedAt !== null && approval.revokedAt !== null)) throw new HarnessError('INVALID_STORED_EXECUTION_APPROVAL');
     assertExecutionPlan(approval.planSnapshot);
-    if (approval.planSnapshot.planHash !== approval.planHash || approval.planSnapshot.taskId !== approval.taskId
+    const branch = approval.planSnapshot.branch;
+    if (approval.planSnapshot.policy.version !== this.expectedPolicy
+      || approval.planSnapshot.policy.version !== approval.executionPolicy
+      || (branch && (branch.ownerId !== approval.ownerId || approval.createdAt < branch.createdAt || approval.expiresAt > branch.expiresAt))
+      || approval.planSnapshot.planHash !== approval.planHash || approval.planSnapshot.taskId !== approval.taskId
       || approval.planSnapshot.baseCommit !== approval.baseCommit || approval.planSnapshot.requestRevision !== approval.requestRevision) {
       throw new HarnessError('INVALID_STORED_EXECUTION_APPROVAL');
     }
@@ -668,6 +692,7 @@ export class SqliteExecutionStore implements ExecutionStore {
     this.assertRun(run);
     if (row.run_id !== run.runId || row.task_id !== run.taskId || row.approval_id !== run.approvalId
       || row.status !== run.status) throw new HarnessError('INVALID_STORED_EXECUTION_RUN');
+    this.requireTask(run.taskId);
     return run;
   }
 

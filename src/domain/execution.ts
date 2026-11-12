@@ -1,7 +1,10 @@
 import type { CheckResult } from './types.js';
 import type { SandboxConfig } from './sandbox.js';
+import type { BranchWorkType } from './branch.js';
 
 export const EXECUTION_POLICY_VERSION = 'synthetic-execution-v1' as const;
+export const BRANCH_EXECUTION_POLICY_VERSION = 'synthetic-branch-execution-v1' as const;
+export type ExecutionPolicyVersion = typeof EXECUTION_POLICY_VERSION | typeof BRANCH_EXECUTION_POLICY_VERSION;
 export const EXECUTION_LIMITS = Object.freeze({
   memoryBytes: 128 * 1024 * 1024, pids: 64, nanoCpus: 500_000_000,
   outputBytes: 16 * 1024, timeoutMs: 3_000, scratchBytes: 16 * 1024 * 1024,
@@ -31,7 +34,7 @@ export interface ReplacementPatch {
 }
 
 export interface ExecutionPolicy {
-  version: typeof EXECUTION_POLICY_VERSION;
+  version: ExecutionPolicyVersion;
   backend: 'docker';
   serverVersion: string;
   imageId: string;
@@ -41,18 +44,30 @@ export interface ExecutionPolicy {
   network: 'none';
 }
 
+export interface ExecutionBranchPlan {
+  workType: BranchWorkType;
+  name: string;
+  baseBranch: 'main';
+  headRef: string;
+  ownerId: string;
+  sourceRoot: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface ExecutionPlan {
   planId: string;
   version: 1;
   taskId: string;
   requestRevision: string;
-  repoId: 'synthetic-execution';
+  repoId: 'synthetic-execution' | 'synthetic-branch-execution';
   baseCommit: string;
   sourceHash: string;
   allowedFiles: string[];
   patches: ReplacementPatch[];
   commands: RegisteredExecutionCommand[];
   policy: ExecutionPolicy;
+  branch?: ExecutionBranchPlan;
   planHash: string;
 }
 
@@ -91,7 +106,7 @@ export interface ExecutionApproval {
   planHash: string;
   baseCommit: string;
   requestRevision: string;
-  executionPolicy: typeof EXECUTION_POLICY_VERSION;
+  executionPolicy: ExecutionPolicyVersion;
   planSnapshot: ExecutionPlan;
   createdAt: string;
   expiresAt: string;

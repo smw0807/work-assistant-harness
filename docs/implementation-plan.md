@@ -348,9 +348,35 @@ git-branch-recover → 소유 작업 영역 관찰 → INTERRUPTED / CANCELLED /
 
 **완료:** 아래 수용 71~80을 포함한 전체 회귀 442개와 lint·typecheck·build가 통과했다. [4-C-2 결과](stage-4c2-result.md)에 근거와 한계를 기록했다. 실제 Codex·회사 저장소·코드 변경·작업 결과 commit·원격 작업은 `not_run`으로 분리한다.
 
+#### 단계 4-C-3 합성 작업 브랜치의 수정·검사 연결
+
+4-C-2의 ref 생성과 3-C/D의 고정 변경·Docker 검사·취소·복구를 하나의 새 합성 실행 흐름으로 연결한다. 새 `synthetic-branch-execution-v1` 정책과 `branch-execution.sqlite`, `branch-executions/` 경로를 사용하며 기존 실행·브랜치 정책과 승인은 서로 받지 않는다. 기존 3-C/D와 4-C-2 명령의 계약은 유지한다.
+
+```text
+branch-execution-plan --type <feature|fix|chore|refactor>
+  → 고정 합성 원본·기준 커밋 → 브랜치/허용 patch/등록 검사/격리 정책 계획
+branch-execution-approve → 소유자·계획 hash·기준·정책·TTL 확인
+branch-execution-run → 원본/실제 Docker 사전 확인 → 승인 소비+RUNNING 원자 저장
+  → workspace_preparing: 독립 Git 초기화·작업 ref 생성·HEAD 선택
+  → workspace_ready: Git 증거 확정 → 고정 파일 patch → 실제 diff 확인
+  → Git 없는 읽기 전용 view → 등록된 Docker 검사 → 원본·Git·diff 재검증·보고
+branch-execution-cancel / invalidate → generation fence·새 동작 차단·소유 container 정리
+branch-execution-recover → 저장한 소유권·Git/파일/view 증거로 관찰, 자동 재개 없음
+```
+
+- plan은 고정 합성 fixture와 필수 작업 유형만 받는다. `source/`는 기존 고정 파일·작성자·커밋으로 준비한 읽기 전용 원본이다. 승인 전 작업 브랜치 생성·코드 수정·Docker 실행은 하지 않는다. 초기 fixture commit과 작업 결과 commit은 구분한다.
+- 계획 hash에 `<type>/task-<task-id>` 브랜치·`main`·예상 HEAD ref·OS 소유자·정확한 source 경로·생성/24시간 만료와 기존 기준 커밋·source hash·정확한 1파일 patch·등록 명령·Docker identity/제한을 결합한다. 승인 TTL은 기본값 없는 정수 1~60분이며 계획 만료 이내다. 실제 기존 저장소·브랜치명·patch·명령·원격 입력은 제공하지 않는다.
+- 승인 후 원본과 공유하지 않는 독립 worktree를 준비하고 같은 기준 커밋에서 작업 ref를 배타적으로 생성한 뒤 HEAD를 그 ref로 선택한다. source의 HEAD와 main, 작업 영역의 main을 보존한다. 완성된 Git hash를 최초 workspace 증거로 저장하고 이후 재기준화하지 않는다. 변경 허용 파일은 `src/message.mjs` 하나이며 고정 내용 교체만 지원한다.
+- branch 생성과 선택은 `workspace_preparing` 의도 기록 뒤 수행하고 완료된 Git 증거를 `workspace_ready`에 저장한다. 증거 저장 전 중단으로 작업 영역이 불완전하면 보수적으로 `BLOCKED` 처리하고 보존한다. 이후 patch·view·container 생성/시작·검사·최종 관찰의 lifecycle과 변경 결과를 기존 3-D 저장 규칙으로 기록한다.
+- 기존 Docker 검사는 계속 Git 없는 읽기 전용 view와 네트워크 없음, 고정 등록 명령·이미지·자원/시간/출력 제한을 사용한다. 고정 patch는 신뢰하는 하네스가 승인된 합성 작업 영역에 적용하며 대상 코드를 호스트에서 import하거나 실행하지 않는다. 모델이나 임의 프로그램에 호스트 쓰기 권한을 주는 기능이 아니다.
+- 실행/복구는 전역 lease를 유지하고 inspect/cancel/invalidate는 짧은 DB 트랜잭션으로 실행 중 상태를 관찰·무효화한다. 새 동작과 늦은 성공을 generation으로 차단하며 소유권과 전체 ID가 확인된 자기 container만 종료/제거한다. 소비 승인은 복원하지 않고 작업당 실행은 한 번이다. 파일·ref·diff·보고서는 자동 삭제하지 않는다.
+- 보고서는 승인된 브랜치와 실제 Git 검증, 정확한 diff, 검사별 `passed`/`failed`/`not_run`, 원본 보존, container 정리와 중단 관찰을 구분한다. 기존 모의 backend 회귀와 실제 Docker 결과도 분리한다. 실제 Codex·회사 GitLab·회사 자료·작업 결과 commit·push·PR/MR은 연결하지 않는다.
+
+**완료:** 수용 81~90을 포함한 전체 회귀 481개, lint·typecheck·build와 실제 로컬 Docker 격리 진단·실행/취소/강제 종료 복구 12개 시나리오를 통과했다. [4-C-3 결과](stage-4c3-result.md)에 근거와 한계를 기록했다. 실제 Codex 연결 시에는 patch 제안 방식과 격리 공간 직접 수정 방식, 인증·네트워크·자료 전송과 쓰기 권한을 별도 계획으로 확정한다.
+
 #### 후속 단계의 별도 범위
 
-- 4-C 후속 후보: 4-C-1의 오프라인 계약과 4-C-2의 독립 합성 브랜치 생성 이후, 승인·격리 조건을 갖춘 실제 Codex·대상 저장소 작업 연결을 별도 계획으로 설계한다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
+- 4-C 후속 후보: 4-C-1의 오프라인 계약, 4-C-2의 독립 합성 브랜치 생성, 4-C-3의 합성 브랜치 수정·검사 연결 이후, 승인·격리 조건을 갖춘 실제 Codex·대상 저장소 작업 연결을 별도 계획으로 설계한다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 
 4-C·4-D는 진행 순서 제안이며 4-B-2의 구현·단건 게시 승인에 포함되지 않는다.
@@ -367,7 +393,7 @@ git-branch-recover → 소유 작업 영역 관찰 → INTERRUPTED / CANCELLED /
 - 계획에 작업 유형·브랜치 이름·기준 브랜치와 커밋·허용 diff 범위를 명시한다. 유효한 수정 승인과 검증된 격리 환경을 확인한 뒤, 기준 커밋에서 `<type>/<short-description>` 형태의 작업 브랜치를 생성하고 해당 브랜치에서만 수정한다. 기준 브랜치를 직접 수정하지 않는다.
 - 기존 사용자 변경과 같은 이름의 브랜치를 덮어쓰거나 초기화하지 않는다. 재시작 시 같은 작업의 브랜치인지 확인하며, 다른 작업과 충돌하면 계획을 조정한다. 승인에 묶인 브랜치·기준 커밋·변경 범위가 달라지면 재승인한다.
 - Codex에는 허용된 수정·검사와 로컬 브랜치·diff·결과 보고까지만 지시한다. PR/MR 생성 경로를 제공하지 않으며, commit·push는 코드 수정 승인에서 분리한다. push에는 실제 원격·브랜치·커밋·diff를 검토한 별도 승인이 필요하다.
-- 4-C-1은 오프라인 계획·승인·모의 결과를, 4-C-2는 독립 합성 저장소의 실제 ref 생성·보존·복구를 다룬다. 실제 Codex 실행 연결·회사 대상 저장소 변경·Git 원격 작업은 아직 구현되지 않았다. 실제 연결 전에는 작업 유형별 브랜치 선택, 승인 전 무변경, 기준 브랜치 보존, 이름 충돌·재시작, 승인 후 계획 변경, PR/MR 호출 없음과 미승인 push 차단을 해당 환경에서 검증한다. 기존 합성 검증 결과를 실제 연결의 검증으로 재사용하지 않는다.
+- 4-C-1은 오프라인 계획·승인·모의 결과를, 4-C-2는 독립 합성 저장소의 실제 ref 생성·보존·복구를, 4-C-3은 새 합성 작업 브랜치의 고정 수정·Docker 검사·취소·복구를 다룬다. 실제 Codex 실행 연결·회사 대상 저장소 변경·Git 원격 작업은 아직 구현되지 않았다. 실제 연결 전에는 작업 유형별 브랜치 선택, 승인 전 무변경, 기준 브랜치 보존, 이름 충돌·재시작, 승인 후 계획 변경, PR/MR 호출 없음과 미승인 push 차단을 해당 환경에서 검증한다. 기존 합성 검증 결과를 실제 연결의 검증으로 재사용하지 않는다.
 
 ## 3 구조와 데이터 모델
 
@@ -644,6 +670,16 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 78 | 강제 종료·명시 복구 (4-C-2) | ref 생성 전후 실제 child 강제 종료 뒤 새 프로세스가 RUNNING·승인 소비·단계 증거를 보존. recover는 현재 ref 관찰과 함께 INTERRUPTED/CANCELLED/BLOCKED로 기록하며 자동 재실행·성공 소급·수리·삭제 없음. |
 | 79 | CLI·worker·DB 경계 (4-C-2) | 실제 git-branch 명령/필수 옵션·private DB/sidecar·OS 소유자·최소 환경·권한·출력 한도·전역 lease 검증. 임의 경로/명령·token·Codex·checkout·commit·push·PR/MR 입력 없음. |
 | 80 | 기존 경로 보존과 회귀 (4-C-2) | 4-C-1 및 조사·실행·Slack DB/승인 재사용 없음, 기존 기능 회귀 통과. 합성 fixture 초기 커밋과 실제 작업 결과 commit을 구분하며 회사 저장소·외부 연결·코드 실행은 not_run. |
+| 81 | 새 계획·승인·정책 분리 (4-C-3) | branch/HEAD·owner/sourceRoot·24h 기한·기준·patch·검사·Docker 정책을 hash에 결합. 필수 TTL 1~60분, 기존/새 정책 양방향 거부와 별도 DB/작업 경로 검증. |
+| 82 | 네 작업 브랜치 선택과 기준 보존 (4-C-3) | 네 유형의 실제 ref와 HEAD 선택, source/main/기준 커밋 보존, 승인 전 작업 ref·코드 변경 없음. 충돌 시 덮어쓰기·reset 없음. |
+| 83 | 고정 patch·실제 diff·검사 연결 (4-C-3) | 승인된 1파일만 교체하고 정확한 before/after hash·diff를 보고. Git 없는 읽기 전용 view의 등록 검사로 정상과 검사 실패를 구분. |
+| 84 | 범위·경로·Git 변조 차단 (4-C-3) | source/worktree/HEAD/ref/main/객체·비허용 파일·링크·권한·한도 변경을 차단하고 예상 밖 본문·원시 오류를 노출하지 않음. |
+| 85 | 원자 소비와 단계 증거 (4-C-3) | 단일 승인/Run/claimed, workspace_preparing 의도 뒤 브랜치 준비·완료 뒤 불변 Git 증거. 저장 실패·중복 run·중간 실패 시 소비 복원·자동 재실행 없음. |
+| 86 | 제어·완료 경합 (4-C-3) | 취소/편집/삭제의 generation fence, patch/검사 dispatch/완료 전 재검증, 동일 제어 멱등, 늦은 성공 차단 및 자기 container만 정리. |
+| 87 | 실제 process 중단·재시작 복구 (4-C-3) | 브랜치 준비·patch·검사 단계 강제 종료 후 영속 Git/파일/소유 container 증거로 INTERRUPTED/CANCELLED/BLOCKED 구분. 부분 작업물 보존과 재실행 금지. |
+| 88 | CLI·보고·lease·입력 경계 (4-C-3) | branch-execution 명령/필수 유형·TTL·정확한 source/아티팩트 경로, inspect/제어 lease 우회와 실행 lease 유지, DB·보고서 안전성, 임의 실행 입력 거부. |
+| 89 | 실제 Docker 통합 (4-C-3) | 승인된 로컬 backend에서 정상/검사 실패/취소/강제 종료 복구, 원본과 main 보존, 네트워크 없는 readonly 검사·정리 확인. 모의 backend 통과와 구분. |
+| 90 | 기존 계약 보존 (4-C-3) | 기존 3-C/D·4-C-1/2·조사·Slack 전체 회귀 통과, 기본 ExecutionPort 거부·기존 승인 경계 유지. 실제 Codex/회사 연결/결과 commit/push/PR/MR not_run. |
 
 ### 최종 검증 묶음
 

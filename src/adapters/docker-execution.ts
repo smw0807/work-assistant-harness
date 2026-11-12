@@ -3,8 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { HarnessError } from '../domain/errors.js';
-import { EXECUTION_LIMITS } from '../domain/execution.js';
-import type { ExecutionCleanupResult, ExecutionCommandResult, ExecutionContainerIntent, ExecutionLifecycleHooks, ExecutionPolicy, IsolatedExecutionPort, RegisteredExecutionCommand } from '../domain/execution.js';
+import { EXECUTION_LIMITS, EXECUTION_POLICY_VERSION } from '../domain/execution.js';
+import type { ExecutionCleanupResult, ExecutionCommandResult, ExecutionContainerIntent, ExecutionLifecycleHooks, ExecutionPolicy, ExecutionPolicyVersion, IsolatedExecutionPort, RegisteredExecutionCommand } from '../domain/execution.js';
 import type { SandboxConfig } from '../domain/sandbox.js';
 import { DockerSandboxVerifier, type DockerCommandOptions, type DockerCommandResult, type DockerSandboxFileSystem } from './docker-sandbox.js';
 import { assertExecutionCommand, assertExecutionPolicy, createExecutionPolicy, getExecutionCommand } from '../policy/execution-policy.js';
@@ -111,6 +111,7 @@ export class DockerIsolatedExecution implements IsolatedExecutionPort {
     private readonly controlDirectory: string,
     private readonly runner: DockerExecutionCommandRunner = runDockerCommand,
     private readonly fileSystem: DockerSandboxFileSystem = hostFileSystem,
+    private readonly policyVersion: ExecutionPolicyVersion = EXECUTION_POLICY_VERSION,
   ) {
     this.config = Object.freeze({ ...config });
     this.environment = { LANG: 'C.UTF-8', TZ: 'UTC', HOME: controlDirectory, PATH: '/usr/bin:/bin' };
@@ -120,7 +121,7 @@ export class DockerIsolatedExecution implements IsolatedExecutionPort {
     this.verified = false;
     assertExecutionPolicy(policy);
     if (JSON.stringify(config) !== JSON.stringify(this.config) || !config.enabled
-      || JSON.stringify(policy) !== JSON.stringify(createExecutionPolicy(config))) throw new HarnessError('EXECUTION_POLICY_MISMATCH');
+      || JSON.stringify(policy) !== JSON.stringify(createExecutionPolicy(config, this.policyVersion))) throw new HarnessError('EXECUTION_POLICY_MISMATCH');
     await new DockerSandboxVerifier(config, this.controlDirectory, this.runner, this.fileSystem).preflight();
     this.verified = true;
   }

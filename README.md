@@ -20,6 +20,8 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
 
 단계 4-C-2의 `git-branch-*`는 별도로 준비한 합성 Git 저장소에 새 승인으로 브랜치 ref 하나를 생성하고 관찰·복구합니다. 전체 회귀 442개와 lint·typecheck·build가 통과했습니다. 실제 Codex·회사 저장소·코드 수정·작업 결과 commit·원격 작업은 연결하지 않습니다. 검증 범위는 [4-C-2 결과](docs/stage-4c2-result.md)를 따릅니다.
 
+단계 4-C-3의 `branch-execution-*`는 새 합성 실행 승인 후 유형별 브랜치를 생성·선택하고 고정 파일 patch와 등록 Docker 검사, 취소·복구를 연결합니다. 기존 3-C/D·4-C-2의 작업과 승인은 재사용하지 않습니다. 전체 회귀 481개와 lint·typecheck·build, 실제 Docker 격리 진단 및 실행·취소·복구 12개 시나리오가 통과했습니다. 근거는 [4-C-3 결과](docs/stage-4c3-result.md)에 기록합니다. 실제 Codex·회사 저장소·작업 결과 commit·push·PR/MR은 연결하지 않습니다.
+
 ## 설치와 실행
 
 검증 환경은 macOS, Node.js **26.12.1**, pnpm **12.18.0**입니다. `.node-version`, `packageManager`, 직접 의존성 버전과 `pnpm-lock.yaml`을 고정했습니다. 다른 OS는 아직 검증하지 않았습니다.
@@ -52,10 +54,11 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 데이터 폴더는 소스와 겹치지 않는 비공개 디렉터리여야 합니다. 새 폴더는 `0700`, SQLite와 보고서는 `0600`으로 만듭니다. 기존 폴더가 다른 사용자에게 열려 있으면 거부하며 임의로 권한을 바꾸지 않습니다. DB·저널의 symlink와 hardlink도 거부합니다.
 
 - `tasks.sqlite`: 작업, 이벤트 중복 제약, 상태 이력, 근거와 계획, 별도 승인 테이블의 불변 계획 스냅샷과 승인·취소 이력. 모의 조사 작업은 원문 메시지와 모델 원문을 저장하지 않습니다. Slack 수집 자료의 별도 보관 범위는 아래 단계 2를 따릅니다.
-- `harness-lock.sqlite`: 실행 소유권과 실시간 Slack 수신을 직렬화하는 SQLite 잠금. 합성 실행의 `execution-cancel`·`execution-invalidate`·`execution-inspect`는 짧은 별도 실행 DB 트랜잭션을 사용합니다. 프로세스 종료 시 OS가 잠금을 해제합니다.
+- `harness-lock.sqlite`: 실행 소유권과 실시간 Slack 수신을 직렬화하는 SQLite 잠금. 합성 실행의 `execution-cancel`·`execution-invalidate`·`execution-inspect` 및 대응하는 `branch-execution-*` 제어·조회는 짧은 별도 실행 DB 트랜잭션을 사용합니다. 프로세스 종료 시 OS가 잠금을 해제합니다.
 - `reports/`: 작업별 JSON 보고서. DB에 저장된 자료로 누락된 보고서를 재생성합니다.
 - `runs/`: 명령별 결과와 대상 전후 해시를 기록한 JSON 실행 기록.
 - `execution.sqlite`, `executions/`: 독립 합성 작업·계획·승인·Run, 요청 revision·무효화·실행 단계 이력과 동결 원본·분리 작업 트리·읽기 전용 실행 view·보고서. 기존 `tasks.sqlite`의 작업과 승인을 실행에 사용하지 않습니다.
+- `branch-execution.sqlite`, `branch-executions/`: 유형별 브랜치에서 고정 patch·Docker 검사를 수행하는 새 합성 실행 profile의 계획·승인·Run·제어·Git/파일/view 증거와 보고서. 기존 실행·브랜치 DB와 승인을 공유하지 않습니다.
 - `replies.sqlite`: 독립 합성 답장 Task·본문 없는 계획/승인 snapshot·전송 시도·제어 이력·보관 정책·최소 중복 marker. 답장 본문은 별도 만료 payload에만 보관하며 영속 보고서에 복제하지 않습니다.
 - `live-replies.sqlite`: 고정 단건 Slack 시험의 별도 계획·승인·시도와 대상 중복 hash marker. 원문·전송 본문·token은 저장하지 않습니다.
 
@@ -298,6 +301,30 @@ pnpm harness git-branch-recover --task <uuid> --data-dir /private/tmp/harness-gi
 
 제한 worker는 네트워크·child·추가 worker·상속 토큰 없이 하네스와 private data directory만 접근합니다. 합성 작업물·감사 metadata는 자동 정리하지 않습니다. 같은 OS 사용자와 신뢰하는 하네스 코드를 전제로 하며 악성 코드 실행용 sandbox는 아닙니다. 상세 계약과 검증 범위는 [4-C-2 계획](docs/implementation-plan.md#단계-4-c-2-합성-git-브랜치-생성관찰복구)과 [결과](docs/stage-4c2-result.md)를 따릅니다.
 
+## 단계 4-C-3 합성 작업 브랜치의 수정·검사
+
+`branch-execution-plan`은 `<data-dir>/branch-executions/<task-id>/source`에 고정 합성 Git 원본을 준비하고 `<type>/task-<task-id>` 브랜치·기준 커밋·허용 patch·등록 검사·Docker 정책을 함께 계획합니다. 원본 준비의 초기 commit은 fixture이며 작업 결과를 commit하는 기능은 없습니다. 승인 전에는 작업 브랜치·작업 트리·patch·Docker 실행을 만들지 않습니다.
+
+```sh
+pnpm harness branch-execution-plan --type fix --fixture success --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-branch-execution-data
+pnpm harness branch-execution-inspect --task <uuid> --data-dir /private/tmp/harness-branch-execution-data
+pnpm harness branch-execution-approve --task <uuid> --plan-hash <sha256> --base-commit <sha1> --expires-in-minutes 30 --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-branch-execution-data
+pnpm harness branch-execution-run --task <uuid> --plan-hash <sha256> --base-commit <sha1> --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-branch-execution-data
+pnpm harness branch-execution-cancel --task <uuid> --event-id synthetic-cancel-1 --data-dir /private/tmp/harness-branch-execution-data
+pnpm harness branch-execution-invalidate --task <uuid> --event edited --revision 2 --event-id synthetic-edit-2 --data-dir /private/tmp/harness-branch-execution-data
+pnpm harness branch-execution-recover --task <uuid> --config /absolute/path/to/private-sandbox.json --data-dir /private/tmp/harness-branch-execution-data
+```
+
+위 명령은 기능별 사용 예시입니다. 계획 출력의 `task.taskId`, `task.plan.planHash`, `task.baseCommit`을 승인·실행 입력으로 사용합니다. 필수 `--type`은 `feature|fix|chore|refactor`이며 선택 `--fixture`는 `success|test-failure|timeout|output`, 기본값은 `success`입니다. 계획은 24시간 유효하며 승인 TTL은 기본값 없는 정수 1~60분, 계획 만료 이내입니다. 승인·실행 진입 때 유효기간을 확인하고 실행 중에는 generation 검사와 등록 명령의 강제 시간 제한을 사용합니다. `--config` 생략 시 기본 비활성 설정으로 계획만 만들 수 있으며 실제 실행은 정확한 로컬 Docker identity와 `enabled: true`를 묶은 새 계획이 필요합니다.
+
+새 정책은 `synthetic-branch-execution-v1`, DB는 `branch-execution.sqlite`입니다. 3-C/D의 `synthetic-execution-v1`, 4-C-1의 모의 승인, 4-C-2의 ref 생성 승인을 사용하지 않습니다. 실행은 source와 Git 객체를 공유하지 않는 독립 worktree를 초기화한 뒤 ref를 배타적으로 만들고 symbolic HEAD를 그 브랜치로 선택합니다. source의 HEAD·main과 작업 영역의 main은 기준 커밋을 유지합니다. 선택 완료 뒤 전체 Git hash를 최초 증거로 저장하며 이후 patch·검사·복구에서 변경을 허용하지 않습니다. 기존 ref를 덮어쓰거나 reset하지 않습니다.
+
+고정 `src/message.mjs` patch는 신뢰하는 하네스가 호스트의 승인된 합성 작업 영역에 적용합니다. 대상 코드를 호스트에서 실행하지 않으며 Docker에는 `.git` 없는 읽기 전용 view만 제공합니다. 등록 명령·로컬 이미지·네트워크 없음·nonroot·읽기 전용 root·16MiB tmpfs와 기존 3-C의 자원·시간·출력 제한을 유지합니다. 브랜치 계획은 DB의 Task·승인 snapshot에 보관합니다. `branch-executions/<task-id>/run-<artifact-id>/report.json`과 DB Run에는 브랜치 검증과 검사별 `passed`·`failed`·`not_run`, 실제 diff, Git·원본·view 관찰을 기록합니다. `branch-execution-run`은 `SUCCEEDED`일 때 0, 그 외 결과는 1로 종료합니다.
+
+`branch-execution-inspect`는 선택 `--approval-offset <0..1000000000>`으로 최신 승인 한 건과 다음 offset을 조회하고 누락된 완료 보고서를 재생성합니다. inspect·cancel·invalidate는 3-D와 같이 전역 lease를 우회하는 짧은 DB 트랜잭션으로 실행 중 상태를 조회·제어합니다. cancel의 event ID는 선택이고 invalidate는 `edited|deleted`, revision 2~1000000000과 event ID가 필수입니다. 실행·복구는 전역 lease를 유지합니다. 취소는 새 동작과 늦은 성공을 차단하고 소유권이 확인된 container를 정리하며 이미 만든 ref·파일을 되돌리지 않습니다.
+
+브랜치 생성·선택 중 최초 Git 증거 저장 전에 중단되어 작업 영역이 남으면 `BLOCKED`로 보존합니다. 증거 저장 뒤 명시 recover는 소유 container 정리와 현재 파일·Git·view 관찰만 수행하며 확인된 중단은 `INTERRUPTED`, 취소는 `CANCELLED`, 불확실한 경계는 `BLOCKED`입니다. 승인 소비 복원·자동 재실행·수리·작업물 삭제는 없습니다. 실제 Codex·회사 저장소·임의 patch나 명령·작업 결과 commit·push·PR/MR은 제공하지 않습니다. 최종 검증 상태와 한계는 [4-C-3 계획](docs/implementation-plan.md#단계-4-c-3-합성-작업-브랜치의-수정검사-연결)과 [결과](docs/stage-4c3-result.md)를 따릅니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.
@@ -386,4 +413,4 @@ pnpm build
 
 `test`는 컴파일 후 Node 내장 test runner로 단위·통합·CLI 수용 테스트를 실행합니다. 합성 저장소는 별도 임시 경로에 준비합니다. 하네스 테스트가 통과해도 실제 Slack 권한·회사 보안·격리 실행기의 검증을 통과한 것은 아닙니다.
 
-전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1](docs/stage-1-result.md), [단계 2](docs/stage-2-result.md), [단계 3-A](docs/stage-3a-result.md), [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A](docs/stage-4a-result.md), [단계 4-B-1 결과](docs/stage-4b1-result.md), [단계 4-B-2 결과](docs/stage-4b2-result.md), [단계 4-C-1 결과](docs/stage-4c1-result.md), [단계 4-C-2 결과](docs/stage-4c2-result.md)에 정리했습니다. 합성 실행·모의 전송·HTTP 계약 진단·합성 Git ref 생성, 별도 승인된 실제 Slack 단건 시험과 회사 도입 승인을 구분합니다.
+전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1](docs/stage-1-result.md), [단계 2](docs/stage-2-result.md), [단계 3-A](docs/stage-3a-result.md), [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A](docs/stage-4a-result.md), [단계 4-B-1 결과](docs/stage-4b1-result.md), [단계 4-B-2 결과](docs/stage-4b2-result.md), [단계 4-C-1 결과](docs/stage-4c1-result.md), [단계 4-C-2 결과](docs/stage-4c2-result.md), [단계 4-C-3 결과](docs/stage-4c3-result.md)에 정리했습니다. 합성 실행·모의 전송·HTTP 계약 진단·합성 Git 작업, 별도 승인된 실제 Slack 단건 시험과 회사 도입 승인을 구분합니다.

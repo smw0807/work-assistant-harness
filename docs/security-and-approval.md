@@ -10,6 +10,8 @@
 
 단계 4-C-2의 새 승인은 하네스가 준비한 독립 합성 Git 저장소의 ref 생성에만 유효하다. 실제 Codex·회사 저장소·코드 실행 권한과 구분하며 검증 상태는 [stage-4c2-result.md](stage-4c2-result.md)를 따른다.
 
+단계 4-C-3의 새 실행 승인은 독립 합성 작업 브랜치 선택·고정 patch·등록 Docker 검사에만 유효하다. 기존 실행·브랜치 승인을 재사용하지 않으며 전체 회귀 481개와 실제 Docker 격리 진단·실행/취소/복구 12개 시나리오를 통과했다. 확인된 결과와 제한은 [stage-4c3-result.md](stage-4c3-result.md)에 기록한다.
+
 전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 범위는 합성 데이터 기반의 로컬 조사이며 실제 회사 계정과 코드를 연결하지 않는다.
 
 ## 1. 신뢰 경계
@@ -260,7 +262,23 @@ OS UID 소유자·정확한 계획 hash·필수 정수 TTL 1~60분을 검증하�
 
 시작·inspect는 중단된 `RUNNING`을 유지한다. 명시 recover는 소유 identity·저장된 단계·현재 작업 영역을 확인하고 `INTERRUPTED`, 취소 기록이 있으면 `CANCELLED`, 경계 미확인은 `BLOCKED`로 보고한다. 정확한 ref가 관찰되더라도 성공으로 소급하지 않고 반복 복구는 기존 기록을 보존한다. 빈 유형 디렉터리는 부재, 부분 ref는 unsafe이며 자동 수리·재생성·ref 삭제는 하지 않는다.
 
-모든 CLI는 같은 data directory의 전역 lease를 사용하므로 실행 중 별도 CLI cancel은 lease와 경합한다. 내부 generation fence가 실시간 CLI 인터럽트나 대상 요청의 지속 감지를 보장하지 않는다. 제한 worker는 최소 환경·하네스 읽기·private data directory 쓰기만 받고 네트워크·child·추가 worker·상속 token을 차단한다. 합성 작업물과 감사 기록을 자동 정리하지 않는다. 파일 권한·소유 manifest·Node 권한은 같은 OS 사용자와 신뢰하는 하네스라는 경계 안에서 동작하며 악성 코드용 sandbox나 회사 보안 검토 통과를 뜻하지 않는다. 실제 Codex·회사 자료·checkout·코드 변경·작업 결과 commit·push·PR/MR은 별도 실행 경로로도 제공하지 않는다.
+모든 CLI는 같은 data directory의 전역 lease를 사용하므로 실행 중 별도 CLI cancel은 lease와 경합한다. 내부 generation fence가 실시간 CLI 인터럽트나 대상 요청의 지속 감지를 보장하지 않는다. 제한 worker는 최소 환경·하네스 읽기·private data directory 쓰기만 받고 네트워크·child·추가 worker·상속 token을 차단한다. 합성 작업물과 감사 기록을 자동 정리하지 않는다. 파일 권한·소유 manifest·Node 권한은 같은 OS 사용자와 신뢰하는 하네스라는 경계 안에서 동작하며 악성 코드용 sandbox나 회사 보안 검토 통과를 뜻하지 않는다. 이 4-C-2 경로는 실제 Codex·회사 자료·checkout·코드 변경·작업 결과 commit·push·PR/MR을 제공하지 않는다.
+
+### 단계 4-C-3의 합성 작업 브랜치 실행
+
+새 `synthetic-branch-execution-v1` 정책을 `branch-execution.sqlite`와 `branch-executions/`에 분리한다. 3-A의 기록용 승인, 3-C/D의 `synthetic-execution-v1`, 4-C-1의 모의 승인, 4-C-2의 `local-synthetic-branch-v1`은 이 실행을 허용하지 않는다. 기존 계획의 정확한 키·승인·DB 경계를 유지하며 새 profile만 브랜치 metadata를 필수로 받는다. 명령은 고정 fixture와 `feature|fix|chore|refactor`를 받고 실제 저장소 경로·임의 브랜치명·patch·shell·등록 밖 명령·원격을 입력으로 제공하지 않는다.
+
+계획은 작업 ID·OS 소유자·정확한 `<data-dir>/branch-executions/<task-id>/source` 경로, `<type>/task-<task-id>`·main·예상 symbolic HEAD, 기준 커밋·source hash, 허용된 `src/message.mjs` patch와 등록 검사, Docker identity·격리 제한, 생성·24시간 만료를 hash에 결합한다. 새 승인에는 불변 계획을 보관하고 TTL은 필수 정수 1~60분이며 계획 만료 이내다. 승인 및 실행 진입에서 소유자·TTL·원본·기준·계획·정책을 다시 확인하고 실행은 실제 Docker 사전 검증 뒤 승인 소비·Run 생성·`RUNNING`을 원자 저장한다. TTL 경과가 진행 중 실행을 중간 재승인하는 모델은 아니며 시작 뒤에는 generation fence, 강제 명령 시간 제한과 최종 성공 재검증을 사용한다.
+
+합성 source는 고정 초기 commit으로 준비한 파일 `0444`·디렉터리 `0555`이고, 승인 전 작업 브랜치·patch·Docker 실행은 없다. 실행 후 독립 worktree를 같은 고정 파일로 초기화하여 source와 Git 객체·hardlink·공유 metadata 없이 분리한다. private 부모 경로·현재 OS 소유자·정확한 경로 집합·링크·모드·크기·엔트리 수를 확인한 뒤 승인된 ref를 배타적으로 생성하고 HEAD를 그 ref로 선택한다. 같은 OID의 기존 ref도 덮어쓰거나 reset하지 않는다. source의 HEAD·main과 worktree의 main은 기준 커밋에 남기며 작업 ref에도 새 작업 commit을 만들지 않는다.
+
+브랜치 생성·선택은 `workspace_preparing` 의도를 영속화한 뒤 수행한다. 선택 완료 Git hash를 최초 `workspace_ready` 증거로 저장하며 이후 hash를 새 기준으로 갱신하지 않는다. patch·검사 전후와 새 프로세스 관찰은 exact Git 경로 목록, HEAD·main·작업 ref의 실제 내용과 전체 Git hash를 검사한다. 예상 밖 Git 파일의 본문은 읽지 않으며 관찰 결과에 비밀 파일 이름·본문·원시 파일 오류를 남기지 않는다. 증거 저장 전 부분 생성이나 선택 중단으로 작업물이 남으면 `BLOCKED`로 보존하고 수리·재생성·삭제하지 않는다.
+
+고정 patch는 신뢰하는 하네스가 호스트의 합성 작업 영역에 적용한다. 대상 코드를 호스트에서 import하거나 실행하지 않으며, 모델이나 임의 프로그램에 호스트 쓰기 권한을 주지 않는다. 기존 Docker adapter는 `.git` 없는 읽기 전용 view와 고정 이미지·등록 argv, 네트워크 없음·nonroot·읽기 전용 root·capability 제거·권한 상승 금지·기본 seccomp, 자원·시간·출력 제한을 유지한다. 검사 코드의 쓰기 공간은 16MiB tmpfs뿐이다. 합성 Git 작업 영역이나 호스트의 Node 권한 설정 자체를 악성 코드용 sandbox로 설명하지 않는다.
+
+inspect·cancel·invalidate는 3-D와 같이 전역 lease를 우회하는 짧은 실행 DB 트랜잭션으로 동작한다. 실행·복구는 전역 lease를 유지한다. 무효화는 generation을 바꾸어 새 동작과 늦은 성공을 거부하고 이미 시작한 container는 저장된 소유 identity를 검증한 뒤 정리한다. 명시 recover는 저장한 Git/파일/view 증거와 현재 작업물을 비교하며 확인된 중단은 `INTERRUPTED`, 취소는 `CANCELLED`, 정리·관찰 불확실은 `BLOCKED`로 기록한다. 동일 승인·작업 재실행, 승인 소비 복원, 자동 수리·삭제는 제공하지 않는다. 원본·브랜치·실제 diff·검사·정리·복구 결과는 로컬 감사 기록으로 남긴다.
+
+이 단계의 fixture 초기 commit은 합성 준비이며 작업 결과 commit과 구분한다. 실제 Codex·회사 자료·Slack 요청 연결·임의 코드 수정/실행·작업 결과 commit·push·PR/MR은 제공하지 않는다. 실제 Docker 검증과 모의 backend 테스트, 회사 보안 검토를 구분하며 최종 근거는 [4-C-3 결과](stage-4c3-result.md)를 따른다.
 
 ## 7. 회사 자료와 비밀정보
 
