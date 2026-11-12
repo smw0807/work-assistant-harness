@@ -6,6 +6,8 @@
 
 2026-11-09에 단계 0·1의 합성 자료 기반 읽기 전용 CLI를, 2026-11-10에 단계 2의 Slack 수신과 단계 3-A~3-D의 로컬 승인·Docker 진단·독립 합성 실행·취소·중단 복구를 구현했다. 2026-11-11의 후속 범위는 단계 4-A의 합성 답장 계획·별도 승인·모의 전송, 단계 4-B-1의 오프라인 Slack HTTP 계약 진단과 단계 4-B-2의 고정 시험 문구 단건 전송이다. 실제 구현과 검증 상태는 [stage-1-result.md](stage-1-result.md), [stage-2-result.md](stage-2-result.md), [stage-3a-result.md](stage-3a-result.md), [stage-3b-result.md](stage-3b-result.md), [stage-3c-result.md](stage-3c-result.md), [stage-3d-result.md](stage-3d-result.md), [stage-4a-result.md](stage-4a-result.md), [stage-4b1-result.md](stage-4b1-result.md), [stage-4b2-result.md](stage-4b2-result.md)를 따른다. 실제 Slack 단건 시험은 기본 비활성인 별도 live 경로로 분리하며 AI·회사 저장소·자동 업무 답장을 연결하지 않는다.
 
+2026-11-12에는 단계 4-C-1의 오프라인 브랜치 계획·승인·모의 결과와 제어·복구를 추가했다. 실제 Git·Codex 작업과 구분하며 검증 범위는 [stage-4c1-result.md](stage-4c1-result.md)를 따른다.
+
 - 구현 순서와 상세 수용 기준: [implementation-plan.md](implementation-plan.md)
 - 권한과 승인 조건: [security-and-approval.md](security-and-approval.md)
 - Codex 개발 지침: [루트 AGENTS.md](../AGENTS.md)
@@ -313,10 +315,13 @@ AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
 | 4-A | 합성 답장 계획·별도 승인·모의 전송·무효화·복구·보관 | 승인한 대상/본문만 모의 호출, 중복·불확실 재전송 차단, 실제 외부 전송 0 |
 | 4-B-1 | 비활성 기본 포트와 오프라인 Slack HTTP 계약 진단 | 합성 identity·문맥·직렬화·receipt·불확실 결과·제한 worker 검증, 실제 전송 0. 승인 권한 생성 없음 |
 | 4-B-2 | 고정 시험 문구의 별도 live 계획·승인·원자 소비·단건 Slack 전송·복구 | 합성 검증과 실제 게시 승인 분리. 정확한 identity/문맥/receipt·대상 중복 차단, 실제 게시 상태 별도 기록 |
-| 4-C | 대상 저장소의 Codex 작업 브랜치·commit 준비·push | 작업 유형별 브랜치와 승인된 변경 범위 검증, commit·push 별도 승인. PR/MR 생성 제외. 미구현 후속 설계 |
+| 4-C-1 | 대상 작업 브랜치의 오프라인 계획·승인·모의 결과 | 별도 DB·정책, 유형별 계획·원자 소비·충돌/불확실·취소/복구 검증. 실제 Git/Codex 효과 없음 |
+| 4-C 후속 | 대상 저장소의 실제 Codex 작업 브랜치·commit 준비·push | 승인·격리·브랜치 보존과 행위별 승인 별도 검증. PR/MR 생성 제외. 미구현 후속 설계 |
 | 4-D | Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-B-2 승인 범위 밖 |
 
-4-C의 브랜치 규칙은 하네스가 Codex에 대상 저장소의 코드 수정을 지시할 때 적용한다. 승인된 기준 커밋에서 새 기능은 `feature/`, 오류 수정은 `fix/`, 유지보수는 `chore/`, 구조 개선은 `refactor/` 브랜치를 생성하고, 그 안에서 수정·허용된 검사 후 브랜치·diff·결과를 보고하도록 설계한다. PR 생성은 제외하고 GitLab MR로 대체하지 않는다. 이는 현재 하네스 저장소 개발 규칙이 아니며 Codex 실행 연결과 브랜치 정책은 아직 구현되지 않았다. 상세 조건은 [4-C 계획](implementation-plan.md#후속-단계의-별도-범위)을 따른다.
+4-C의 브랜치 규칙은 하네스가 Codex에 대상 저장소의 코드 수정을 지시할 때 적용한다. 승인된 기준 커밋에서 새 기능은 `feature/`, 오류 수정은 `fix/`, 유지보수는 `chore/`, 구조 개선은 `refactor/` 브랜치를 생성하고, 그 안에서 수정·허용된 검사 후 브랜치·diff·결과를 보고하도록 설계한다. PR 생성은 제외하고 GitLab MR로 대체하지 않는다. 이는 현재 하네스 저장소 개발 규칙이 아니다. 4-C-1은 고정 합성 source에서 이 계약의 계획·승인·모의 결과만 구현하며 실제 Codex 연결과 브랜치 생성은 후속 범위다. 상세 조건은 [4-C 계획](implementation-plan.md#후속-단계의-별도-범위)을 따른다.
+
+4-C-1의 `branch-plan → branch-approve → branch-simulate`는 별도 `branches.sqlite`에서 `AWAITING_APPROVAL → APPROVED → SIMULATING → SIMULATED / FAILED / UNKNOWN`으로 진행한다. `synthetic-branch-v1`·`offline` 계획은 작업 유형·브랜치명·합성 repo/remote/base/diff·OS 소유자·24시간 유효기한에 결합한다. 필수 TTL 1~60분의 승인을 모의 시도와 원자 소비하며 작업당 시도는 한 번이다. 취소·변경은 미소비 승인을 취소하고 진행 중 결과는 `UNKNOWN`으로 차단한다. 시작·조회는 자동 실행하지 않으며 중단 상태의 명시적 복구는 recover를 사용한다. 제한 worker는 네트워크·child·호스트 토큰을 받지 않고 Git·Codex 포트도 연결하지 않는다. [4-C-1 결과](stage-4c1-result.md)에 검증 범위와 실제 연결의 미실행 상태를 기록한다.
 
 기존 `ExecutionPort`의 항상 거부 동작을 유지하며 합성 실행과 고정 Slack 단건 시험을 각각 별도 명령·승인으로 연다. 기존 `approve`·`cancel`과 합성 계획·승인·실행·복구는 전역 lease를 유지한다. 합성 실행의 취소·무효화·조회는 실행 DB의 짧은 트랜잭션으로 전달한다. 실제 Slack 수신과 실행은 직렬화하며 수신 공백의 변경 감지는 보장하지 않는다. 단계 3의 작업 트리는 작업 분리 수단이며 Docker 격리 환경을 대신하지 않는다.
 

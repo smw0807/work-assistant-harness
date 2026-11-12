@@ -15,6 +15,7 @@ import { executionUsage, runExecutionCommand } from './execution.js';
 import { replyUsage, runReplyCommand } from './reply.js';
 import { slackPostUsage, runSlackPostCommand } from './slack-post.js';
 import { liveSlackUsage, runLiveSlackCommand } from './live-slack.js';
+import { branchUsage, runBranchCommand } from './branch.js';
 
 const scenarios = new Set([
   'inquiry', 'change', 'unclear', 'invalid-json', 'invalid-summary', 'hallucinated-file',
@@ -148,13 +149,14 @@ const run = async (): Promise<void> => {
   }
 };
 
-if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n`);
-else (process.argv[2]?.startsWith('slack-live-') ? runLiveSlackCommand(process.argv.slice(2))
+if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n`);
+else (process.argv[2]?.startsWith('branch-') ? runBranchCommand(process.argv.slice(2))
+  : process.argv[2]?.startsWith('slack-live-') ? runLiveSlackCommand(process.argv.slice(2))
   : process.argv[2] === 'slack-post-check' ? runSlackPostCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('reply-') ? runReplyCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('execution-') ? runExecutionCommand(process.argv.slice(2))
   : process.argv[2] === 'sandbox-check' ? runSandboxCheckCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('slack-') ? runSlackCommand(process.argv.slice(2)) : run()).catch((error: unknown) => {
-  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n`);
+  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n`);
   process.exitCode = 1;
 });

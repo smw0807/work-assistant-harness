@@ -16,6 +16,8 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
 
 기본 실행은 합성 자료만 사용합니다. Slack 수신은 명시적으로 켜는 별도 경로이며 모델·제품 저장소와 연결하지 않습니다. 기존 조사와 단계 3-A는 `APPROVED`에서 멈추며 기본 `ExecutionPort`는 항상 거부하고 `run` 명령은 제공하지 않습니다. 단계 3-C는 별도 `execution-*` 명령에서 새 합성 작업·실행 승인을 만들고 고정 patch와 등록 검사만 실행합니다. 단계 4-A의 `reply-*` 명령은 고정 합성 요청과 가짜 전송 어댑터를 사용합니다. 단계 4-B-1의 `slack-post-check`는 가짜 HTTP 응답으로 요청·응답 계약만 진단하며 승인이나 실제 전송을 만들지 않습니다. 단계 4-B-2의 `slack-live-*`는 기본 비활성인 별도 live 계획·승인·고정 단건 시험 경로입니다. 실제 게시는 구체 계획에 대한 별도 승인이 필요하며 자동 업무 답장과 Git 원격 작업은 구현하지 않았습니다.
 
+단계 4-C-1의 `branch-*`는 별도 DB에서 작업 유형별 브랜치 계획·승인·모의 결과·취소·복구를 제공합니다. 전체 회귀 397개와 lint·typecheck·build가 통과했습니다. 실제 브랜치 생성과 Codex 실행은 연결하지 않습니다. 사용법은 아래 4-C-1 절, 검증 결과는 [4-C-1 결과](docs/stage-4c1-result.md)를 따릅니다.
+
 ## 설치와 실행
 
 검증 환경은 macOS, Node.js **26.12.1**, pnpm **12.18.0**입니다. `.node-version`, `packageManager`, 직접 의존성 버전과 `pnpm-lock.yaml`을 고정했습니다. 다른 OS는 아직 검증하지 않았습니다.
@@ -248,6 +250,28 @@ pnpm harness slack-live-prune --data-dir /absolute/path/to/private-live-data
 새 정책 `slack-live-test-v1`과 `live-replies.sqlite`를 사용합니다. 4-A 모의 승인·4-B-1 진단 보고서·코드 변경 승인을 가져오지 않습니다. send는 승인 소비와 `SENDING` 시도를 원자 저장한 뒤 고정 API를 호출하며, 요청 10초·응답 32KiB·redirect 거부·자동 재시도 0을 적용합니다. 정확한 receipt는 `SENT`, 명백한 미전송만 `NOT_SENT`/`FAILED`, 불확실한 응답이나 중단 복구는 `UNKNOWN`입니다. 확실한 미전송만 새 승인으로 수동 재시도하며 `SENT`·`UNKNOWN`은 같은 workspace/channel/root의 새 plan까지 막습니다.
 
 Slack 원문·고정 전송 본문·token은 DB에 저장하지 않습니다. source의 raw revision·문맥 hash·관측 시각·identity와 계획/승인/시도 metadata만 저장하고, 유효 계획의 검토 본문은 코드 상수로 재구성해 plan·inspect stdout에서만 표시합니다. 사용자가 stdout을 파일로 redirect하면 해당 파일의 보관·삭제는 사용자 정책을 따릅니다. terminal 감사 metadata는 30일 후 명령 실행 시 정리하며 `SENT`·`UNKNOWN` 대상 marker는 DB 수명 동안 남깁니다. 게시 메시지는 Slack workspace의 보관 정책을 따릅니다. Node 네트워크 권한과 고정 URL 검증은 호스트별 OS 격리가 아닙니다. 상세 조건은 [4-B-2 계획](docs/implementation-plan.md#단계-4-b-2-고정-시험-문구의-slack-단건-전송)과 [보안 문서](docs/security-and-approval.md#단계-4-b-2의-고정-시험-문구-단건-전송)를 따릅니다.
+
+## 단계 4-C-1 오프라인 브랜치 계획·승인
+
+하네스가 Codex에 맡길 **대상 저장소 작업**의 브랜치 규칙을 합성 자료로 검증합니다. 작업 유형은 `feature`, `fix`, `chore`, `refactor` 중 명시하며 `<type>/synthetic-<task-id>`를 계획합니다. 실제 브랜치 생성·코드 수정·Codex 호출·commit·push·PR/MR은 수행하지 않습니다. 현재 하네스 저장소의 개발 브랜치 규칙을 바꾸는 기능도 아닙니다.
+
+```sh
+pnpm harness branch-plan --type fix --data-dir /private/tmp/harness-branch-data
+pnpm harness branch-inspect --task <uuid> --data-dir /private/tmp/harness-branch-data
+pnpm harness branch-approve --task <uuid> --plan-hash <sha256> --expires-in-minutes 30 --data-dir /private/tmp/harness-branch-data
+pnpm harness branch-simulate --task <uuid> --plan-hash <sha256> --data-dir /private/tmp/harness-branch-data
+pnpm harness branch-cancel --task <uuid> --data-dir /private/tmp/harness-branch-data
+pnpm harness branch-invalidate --task <uuid> --event base-changed --revision 2 --event-id synthetic:base-change --data-dir /private/tmp/harness-branch-data
+pnpm harness branch-recover --task <uuid> --data-dir /private/tmp/harness-branch-data
+```
+
+`<uuid>`와 `<sha256>`는 plan 출력의 `task.taskId`와 `task.plan.planHash`로 바꿉니다. 위 명령은 각 기능의 사용 예시이며 완료된 작업을 취소해 되돌리는 순서가 아닙니다. `branch-plan`의 선택 옵션 `--fixture success|collision|source-changed|unknown` 기본값은 `success`입니다. 다른 fixture로 충돌·기준 변경·불확실 결과를 재현합니다. `branch-invalidate`의 `--event`는 `edited|deleted|base-changed|diff-changed|branch-conflict`, revision은 2~1000000000이며 event ID는 필수입니다. `branch-cancel`은 선택 `--event-id`를 받습니다.
+
+계획의 source 커밋·diff hash와 `gitlab.example.invalid` 원격은 고정 합성 식별자료입니다. 실제 경로·브랜치명·원격·본문·명령·모델 응답을 입력으로 받지 않습니다. 별도 `branches.sqlite`에 계획·승인·모의 시도·제어 이력을 저장하고 기존 DB의 승인을 재사용하지 않습니다. 계획은 24시간 유효하고 승인 TTL은 기본값 없는 정수 1~60분이며 계획 만료를 넘지 않습니다. `branch-inspect`의 `--approval-offset <0..1000000000>`은 기본 0으로 최신 승인 한 건과 `approvalPage.nextOffset`을 반환합니다.
+
+승인 소비와 시도 `SIMULATING`을 원자 저장한 뒤 모의 adapter를 한 번 호출합니다. 성공은 `SIMULATED`, 충돌은 시도 `NOT_CREATED`·작업 `FAILED`, 불확실은 `UNKNOWN`입니다. 기준 변경 fixture는 계획부터 `BLOCKED`입니다. `branch-simulate`는 성공 시 종료 코드 0, 그 외 결과는 1입니다. 승인 전에는 모의 실행도 거부하며 실패 뒤에도 같은 작업을 재승인·재실행하지 않습니다. 새 프로세스의 조회는 중단된 `SIMULATING`을 보존하고 중단 상태의 명시적 복구는 `branch-recover`로 `UNKNOWN`을 확정합니다. 취소·무효화도 진행 중 시도를 `UNKNOWN`으로 차단합니다.
+
+모든 명령은 전역 lease를 사용하므로 같은 데이터 디렉터리의 Slack 수신과 동시에 실행하지 않습니다. 제한 worker는 네트워크·하위 프로세스·추가 worker·상속 토큰 없이 비공개 데이터 디렉터리만 씁니다. metadata는 DB 수명 동안 보관하고 자동 정리하지 않습니다. 실제 Git/Codex 작업은 출력에서 `not_run`이며, 이 모의 승인은 후속 실제 실행 권한이 아닙니다. 상세 계약과 검증은 [4-C-1 계획](docs/implementation-plan.md#단계-4-c-1-오프라인-브랜치-계획승인모의-검증)과 [결과](docs/stage-4c1-result.md)를 따릅니다.
 
 ## 모의 입력과 오류 재현
 

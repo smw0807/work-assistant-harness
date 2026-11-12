@@ -6,6 +6,8 @@
 
 단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 Docker 격리 진단은 [stage-3b-result.md](stage-3b-result.md), 단계 3-C의 독립 합성 실행은 [stage-3c-result.md](stage-3c-result.md), 단계 3-D의 합성 취소·중단 복구·잔여 관찰은 [stage-3d-result.md](stage-3d-result.md), 단계 4-A의 합성 답장 계획·별도 승인·모의 전송은 [stage-4a-result.md](stage-4a-result.md), 단계 4-B-1의 오프라인 Slack HTTP 계약 진단은 [stage-4b1-result.md](stage-4b1-result.md), 단계 4-B-2의 고정 시험 문구 단건 전송은 [stage-4b2-result.md](stage-4b2-result.md)를 따른다. 진단 보고서는 실행·전송 권한이 아니며 기존 조사 Task나 실제 Slack·회사 저장소의 실행을 열지 않는다. 조사·답장·HTTP 계약 진단 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
 
+단계 4-C-1의 오프라인 브랜치 계약과 별도 모의 승인은 [stage-4c1-result.md](stage-4c1-result.md)를 따른다. 모의 통과는 실제 Codex·Git 작업 권한이나 격리 검증을 대신하지 않는다.
+
 전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 범위는 합성 데이터 기반의 로컬 조사이며 실제 회사 계정과 코드를 연결하지 않는다.
 
 ## 1. 신뢰 경계
@@ -88,7 +90,7 @@ MVP의 승인 경로는 로컬 CLI뿐이다. 현재 OS 사용자와 승인 저�
 
 별도 브랜치와 worktree는 원래 작업 디렉터리와 변경을 분리하는 수단이다. **worktree는 보안 sandbox가 아니다.** Git 메타데이터를 공유하며 같은 OS 권한으로 다른 파일이나 네트워크에 접근할 수 있다.
 
-후속 Codex 실행 연결에서는 하네스가 대상 저장소의 작업 유형·브랜치 이름·기준 커밋을 계획과 승인에 묶는다. 유효한 승인과 격리 환경을 확인한 뒤 `feature/`, `fix/`, `chore/`, `refactor/` 등 작업 성격에 맞는 브랜치를 만들고 그 안에서만 수정한다. 기준 브랜치와 기존 사용자 작업을 보존하며, 브랜치 충돌을 덮어쓰기나 reset으로 해결하지 않는다. PR/MR 생성은 지시하거나 실행하지 않으며 commit·push 승인은 코드 수정 승인에서 분리한다. 이 규칙은 대상 저장소에 대한 후속 설계로, 현재 하네스 저장소의 개발 규칙이나 기존 합성 실행에 구현된 브랜치 정책을 뜻하지 않는다. 상세 범위는 [4-C 계획](implementation-plan.md#후속-단계의-별도-범위)을 따른다.
+후속 Codex 실행 연결에서는 하네스가 대상 저장소의 작업 유형·브랜치 이름·기준 커밋을 계획과 승인에 묶는다. 유효한 승인과 격리 환경을 확인한 뒤 `feature/`, `fix/`, `chore/`, `refactor/` 등 작업 성격에 맞는 브랜치를 만들고 그 안에서만 수정한다. 기준 브랜치와 기존 사용자 작업을 보존하며, 브랜치 충돌을 덮어쓰기나 reset으로 해결하지 않는다. PR/MR 생성은 지시하거나 실행하지 않으며 commit·push 승인은 코드 수정 승인에서 분리한다. 이 규칙은 대상 저장소의 실제 연결에 대한 후속 설계로 현재 하네스 저장소의 개발 규칙을 뜻하지 않는다. 4-C-1의 오프라인 모의 계약과 실제 브랜치 작업 권한은 구분한다. 상세 범위는 [4-C 계획](implementation-plan.md#후속-단계의-별도-범위)을 따른다.
 
 실행 기능을 열기 전에 다음을 검증한다.
 
@@ -233,6 +235,16 @@ channel·새 message timestamp·thread·bot·본문이 일치하는 성공 recei
 고정 전송 본문도 DB·승인 snapshot·시도·영속 보고서에 복제하지 않는다. 계획 유효기간 안에서 코드 상수로 재구성해 검토한다. terminal 감사 metadata는 마지막 상태 변경부터 30일 뒤 정리하고 `SENT`·`UNKNOWN`의 최소 대상 marker는 유지한다. 정리는 명령 실행 시 수행하므로 중지 중 만료 자료는 다음 실행까지 남을 수 있으며 논리 삭제는 백업·디스크의 물리적 완전 삭제를 보장하지 않는다. DB 폐기 뒤에는 과거 중복 차단을 보장할 수 없다.
 
 구현 검사와 실제 게시는 구분한다. 단위·통합·CLI의 합성 응답 검증을 통과해도 실제 전송 권한이 생기지 않는다. 실제 게시 전에는 대상·고정 본문·계획 해시·TTL을 구체적으로 검토하고 별도 소유자 승인을 받아야 한다. 개인 테스트 workspace에서 이 절차를 거친 실제 단건 시험은 로컬 `SENT` 시도 한 개·승인 소비 한 번과 Slack UI의 댓글 한 개·고정 본문·receipt 일치로 확인했다. 이 확인은 회사 운영·자료·AI·실제 업무 자동 답장의 승인이 아니다. 검증 상태는 [4-B-2 결과](stage-4b2-result.md)를 따른다.
+
+### 단계 4-C-1의 오프라인 브랜치 계약
+
+`synthetic-branch-v1`·`offline`·`simulate-branch` 계획과 `branches.sqlite`는 모의 검증 전용이다. 작업 유형별 브랜치명과 고정 합성 source의 repo/remote/base/diff를 hash에 결합하며 실제 저장소 경로·임의 브랜치명·원격·명령·모델 출력을 받지 않는다. 커밋·diff hash는 실제 Git 객체를 검증한 증거가 아니다. 기존 조사·실행·Slack 승인과 DB는 사용하지 않는다.
+
+OS UID 소유자·정확한 계획 hash·필수 정수 TTL 1~60분을 검증하며 계획은 최대 24시간 유효하다. 승인 소비·작업 `SIMULATING`·시도 생성은 한 트랜잭션이다. 작업당 모의 시도는 한 번이며 실패·중단 뒤에도 소비 승인을 복원하지 않는다. 확정 모의 성공 `SIMULATED`, 충돌 `NOT_CREATED`/`FAILED`, 불확실 `UNKNOWN`을 구분한다. 변경·취소가 진행 중 시도를 무효화하면 `UNKNOWN`으로 확정하고 늦은 결과를 거부한다. 시작·조회는 자동 실행하지 않고 명시적 복구는 중단된 `SIMULATING`을 `UNKNOWN`으로 전환한다.
+
+모든 명령은 전역 lease·비공개 DB/sidecar의 소유자·권한·symlink/hardlink 검사를 사용한다. worker는 최소 환경과 데이터 디렉터리 쓰기만 받고 네트워크·child·추가 worker·외부 native addon 권한과 상속 토큰을 차단한다. source·승인 snapshot·모의 receipt·제어 이력은 합성 metadata로 DB 수명 동안 남으며 자동 정리는 제공하지 않는다. 같은 OS 사용자와 하네스 코드는 기존처럼 신뢰한다.
+
+실제 Git·Codex·외부 모델·회사 저장소는 연결하지 않는다. commit·push·PR/MR 명령은 제공하지 않고 모의 승인을 실제 작업 권한으로 승격하지 않는다. 실제 연결에는 새로운 실행 정책·승인·격리·자료 처리 검증이 필요하며, [4-C-1 결과](stage-4c1-result.md)의 모의 통과를 그 검증으로 대신하지 않는다.
 
 ## 7. 회사 자료와 비밀정보
 

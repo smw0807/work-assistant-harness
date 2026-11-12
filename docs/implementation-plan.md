@@ -6,6 +6,8 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 현재 구현 상태: 단계 0·1의 모의 조사, 단계 2의 수신·오프라인 검증, 단계 3-A의 로컬 승인, 단계 3-B의 Docker 격리 진단과 단계 3-C의 독립 합성 실행에 이어 2026-11-10에 단계 3-D의 합성 요청 무효화·취소·crash 복구·잔여 상태 관찰을 구현했다. 2026-11-11의 후속 요청 범위는 단계 4-A의 합성 답장 계획·별도 승인·모의 전송, 단계 4-B-1의 오프라인 Slack HTTP 계약 진단과 단계 4-B-2의 고정 시험 문구 단건 전송이다. 구현·검증 상태는 [4-A 결과](stage-4a-result.md), [4-B-1 결과](stage-4b1-result.md)와 [4-B-2 결과](stage-4b2-result.md)에 기록한다. 실제 검증은 [단계 3-B](stage-3b-result.md), [단계 3-C](stage-3c-result.md), [단계 3-D 결과](stage-3d-result.md)에 기록한다. 기존 조사 Task와 `approval-only-v1`은 실행에 연결하지 않으며 실제 Slack 단건 시험은 별도 live 경로로 분리한다. AI·회사 저장소와 자동 답장은 연결하지 않는다. 기존 범위는 [단계 1](stage-1-result.md), [단계 2](stage-2-result.md), [단계 3-A 결과](stage-3a-result.md), 현재 명령은 [README](../README.md)를 따른다. 회사 도입과 구체 live 계획에 대한 실제 게시 승인은 별도 범위다. 아래 범용 실행 명령 예시는 구현 제안이다.
 
+2026-11-12에는 단계 4-C-1의 오프라인 브랜치 계획·별도 승인·모의 실행·제어·복구를 추가했다. 실제 Codex와 Git 작업은 연결하지 않으며 [4-C-1 결과](stage-4c1-result.md)에 검증 상태를 기록한다.
+
 ### 하네스가 맡을 역할
 
 하네스는 AI 모델 자체가 아니라 모델 주변의 실행 프로그램이다. 어떤 메시지를 받을지, 어떤 자료를 읽힐지, 어느 작업에서 멈출지, 누가 승인할지, 결과를 어디에 보관할지를 정한다. 모델은 해석과 추론을 맡고, 권한과 실행 여부는 일반 코드가 결정한다.
@@ -288,9 +290,36 @@ slack-live-prune / 각 명령 시작 → 만료·terminal 30일 감사 정리, �
 
 **완료 기준과 상태:** 수용 52~61의 구현·합성 검증을 완료했다. 최종 회귀 367개(기존 324개 + 신규 43개: store/service 18개·adapter 15개·CLI 10개), lint·typecheck·build와 diff 검사가 통과했다. 실패·건너뜀은 0개다. 상세 근거는 [4-B-2 결과](stage-4b2-result.md)에 기록한다. 수용 62도 개인 테스트 workspace에서 실제 계획 생성·별도 승인·단건 게시 후 통과했다. 로컬 작업과 시도 한 개의 `SENT`, 승인 소비 한 번, 원래 Slack 스레드의 댓글 한 개·고정 본문·receipt 일치를 확인했다. 실제 회사 보안 검토·업무 자료·AI·자동 업무 답장은 `not_run`이다.
 
+#### 단계 4-C-1 오프라인 브랜치 계획·승인·모의 검증
+
+2026-11-12의 구현 범위는 **하네스가 Codex에 맡길 대상 저장소 작업의 브랜치 계약을 합성 자료로 검증하는 것**이다. 실제 Codex·모델·회사 GitLab·제품 저장소를 연결하지 않는다. 실제 브랜치 생성·파일 수정·commit·push·PR/MR은 수행하지 않는다. 현재 하네스 저장소 자체의 개발 브랜치 규칙을 바꾸는 기능도 아니다.
+
+```text
+branch-plan --type <feature|fix|chore|refactor> → 고정 합성 source·작업 브랜치·계획 hash → AWAITING_APPROVAL
+branch-approve → OS 소유자·정확한 계획 hash·필수 TTL 검증 → APPROVED
+branch-simulate → 유효 승인 소비 + SIMULATING 시도 원자 저장 → 고정 모의 adapter
+  → SIMULATED / FAILED(NOT_CREATED) / UNKNOWN
+branch-cancel / branch-invalidate → 승인 취소·요청 revision 무효화
+branch-inspect → 영속 상태 조회, 중단된 SIMULATING 자동 재개 없음
+branch-recover → 중단된 SIMULATING을 UNKNOWN으로 확정
+```
+
+- `synthetic-branch-v1`·`mode: offline`·`operation: simulate-branch`와 별도 `branches.sqlite`를 사용한다. 기존 조사·실행·답장·live DB와 승인을 재사용하지 않는다. 작업 유형은 필수 입력이고 브랜치는 `<type>/synthetic-<task-id>`로 생성한 **계획 문자열**이다.
+- 계획 해시에 OS UID 소유자·정책·작업 유형·fixture·브랜치명·고정 합성 repo/remote·기준 브랜치와 커밋·요청 revision·허용 파일·diff hash·생성/만료를 결합한다. source의 `gitlab.example.invalid` 원격과 커밋·diff hash는 고정 합성 식별자료이며 실제 조회·실행 증거가 아니다. 실제 경로·원격·본문·명령·모델 JSON을 입력으로 받지 않는다.
+- fixture는 `success`, `collision`, `source-changed`, `unknown`이다. 기준 변경은 초기 `BLOCKED`로 승인 전 차단하고, 충돌은 모의 시도 `NOT_CREATED`와 작업 `FAILED`, 불확실 결과는 `UNKNOWN`으로 구분한다. 성공은 `SIMULATED`이며 실제 브랜치가 생성되었다고 표시하지 않는다.
+- 계획은 24시간 유효하다. 승인은 정확한 planHash와 기본값 없는 필수 정수 TTL 1~60분에 결합하고 계획 만료를 넘지 않는다. OS UID 미지원·다른 소유자·만료·변조·활성 중복 승인은 거부한다. 승인 만료는 취소 이력을 남기고 `AWAITING_APPROVAL`, 계획 만료는 `BLOCKED`로 조정한다.
+- 승인 소비·`SIMULATING` 시도 생성·작업 전환은 한 SQLite 트랜잭션이다. 작업당 시도는 최대 한 번이고 저장 실패 시 모의 adapter를 호출하지 않는다. 실패·중단 뒤에도 소비 승인을 복원하거나 같은 작업에 재승인·재시도하지 않는다. 입력과 계획을 다시 검토한 별도 합성 작업만 만들 수 있다.
+- 합성 제어는 `edited`, `deleted`, `base-changed`, `diff-changed`, `branch-conflict`와 소유자 취소다. 같은 event ID/payload는 멱등, 다른 payload 재사용은 거부, 오래된 revision은 무시한다. 대기 작업 무효화와 미소비 승인 취소를 함께 저장한다. 진행 중 제어는 시도를 `UNKNOWN`으로 확정하며 늦은 성공으로 덮어쓰지 않는다. 완료된 결과는 보존한다.
+- 시작·조회는 `SIMULATING`을 그대로 보존하며 자동으로 실행하지 않는다. 명시적 `branch-recover`로 중단 상태를 `UNKNOWN`으로 확정하고 반복 복구는 멱등이다. 합성 metadata와 승인 snapshot·제어 이력·모의 receipt는 DB 수명 동안 보관한다. 이번 단계에는 자동 정리·실제 자료 보관 정책을 추가하지 않는다.
+- 모든 명령은 전역 lease와 비공개 DB/sidecar의 경로·소유자·권한·symlink/hardlink 검사를 사용한다. NestJS application context의 제한 worker는 하네스 읽기와 비공개 데이터 디렉터리 쓰기만 허용하고 네트워크·child process·추가 worker·호스트 토큰을 차단한다. 같은 OS 사용자와 신뢰하는 하네스 코드라는 기존 경계는 유지한다.
+
+**완료 기준:** 아래 수용 63~70과 기존 회귀를 검증한다. 실제 실행 연결과 Git 효과는 `not_run`으로 구분한다. 검사 결과와 한계는 [4-C-1 결과](stage-4c1-result.md)에 기록한다.
+
+**검증 상태:** 최종 회귀 397개(기존 367개 + 신규 30개), lint·typecheck·build가 통과했다. 실제 child 강제 종료·새 프로세스 복구, 원자 소비 경합·rollback과 제한 worker 검증을 포함한다. 실제 Git/Codex 작업은 `not_run`이며 모의 성공을 실제 연결 검증으로 해석하지 않는다.
+
 #### 후속 단계의 별도 범위
 
-- 4-C 후보: 하네스가 Codex에 대상 저장소 수정을 지시할 때 작업 유형에 맞는 브랜치를 생성하도록 설계한다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
+- 4-C 후속 후보: 4-C-1의 오프라인 계약 이후, 승인·격리 조건을 갖춘 대상 저장소의 실제 브랜치 작업 연결을 별도 계획으로 설계한다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 
 4-C·4-D는 진행 순서 제안이며 4-B-2의 구현·단건 게시 승인에 포함되지 않는다.
@@ -307,7 +336,7 @@ slack-live-prune / 각 명령 시작 → 만료·terminal 30일 감사 정리, �
 - 계획에 작업 유형·브랜치 이름·기준 브랜치와 커밋·허용 diff 범위를 명시한다. 유효한 수정 승인과 검증된 격리 환경을 확인한 뒤, 기준 커밋에서 `<type>/<short-description>` 형태의 작업 브랜치를 생성하고 해당 브랜치에서만 수정한다. 기준 브랜치를 직접 수정하지 않는다.
 - 기존 사용자 변경과 같은 이름의 브랜치를 덮어쓰거나 초기화하지 않는다. 재시작 시 같은 작업의 브랜치인지 확인하며, 다른 작업과 충돌하면 계획을 조정한다. 승인에 묶인 브랜치·기준 커밋·변경 범위가 달라지면 재승인한다.
 - Codex에는 허용된 수정·검사와 로컬 브랜치·diff·결과 보고까지만 지시한다. PR/MR 생성 경로를 제공하지 않으며, commit·push는 코드 수정 승인에서 분리한다. push에는 실제 원격·브랜치·커밋·diff를 검토한 별도 승인이 필요하다.
-- 이 규칙은 후속 설계이며 Codex 실행 연결·브랜치 정책·Git 원격 작업은 아직 구현되지 않았다. 구현 시 작업 유형별 브랜치 선택, 승인 전 무변경, 기준 브랜치 보존, 이름 충돌·재시작, 승인 후 계획 변경, PR/MR 호출 없음과 미승인 push 차단을 검증한다. 기존 합성 실행의 검증 결과를 이 규칙의 검증으로 재사용하지 않는다.
+- 4-C-1은 이 규칙의 오프라인 계획·승인·모의 결과만 검증한다. 실제 Codex 실행 연결·브랜치 생성·Git 원격 작업은 아직 구현되지 않았다. 실제 연결 전에는 작업 유형별 브랜치 선택, 승인 전 무변경, 기준 브랜치 보존, 이름 충돌·재시작, 승인 후 계획 변경, PR/MR 호출 없음과 미승인 push 차단을 검증한다. 기존 합성 검증 결과를 실제 연결의 검증으로 재사용하지 않는다.
 
 ## 3 구조와 데이터 모델
 
@@ -566,6 +595,14 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 60 | CLI·TTY·worker·파일 경계 (4-B-2) | 실제 명령/옵션·기본 거부·숨김 입력·정적 오류·private DB·경로/symlink 검증. 네트워크/token은 plan/approve/send만 받고 읽기·제어 명령에는 없음. 하위 프로세스와 불필요한 호스트 환경 차단. |
 | 61 | 전역 lease·기존 기능 회귀 (4-B-2) | 실수신 lease 중 live 변경 명령 거부·저장 상태 불변. 기존 조사/실행/mock/diagnostic DB와 권한 분리, 대상 제품 저장소 전후 불변. 외부 호출 없는 합성 수용과 실제 게시를 구분. |
 | 62 | 승인된 단건 실제 게시 (4-B-2) | 구체 대상·고정 본문·계획 해시·TTL의 별도 소유자 승인 뒤 실제 receipt와 스레드 단건 확인. 승인 전·환경 미확정·미실행은 not_run. 회사 운영·자동 답장·게시 후 삭제는 별도 범위. |
+| 63 | 작업 유형과 합성 계획 (4-C-1) | feature/fix/chore/refactor별 브랜치 계획, 고정 source·diff·정책 hash 검증. 임의 경로·원격·명령·추가 필드·기존 승인 policy/mode·잘못된 JSON 구조 거부. |
+| 64 | 별도 승인과 TTL (4-C-1) | OS UID·정확한 계획 hash·필수 정수 TTL 1~60분과 24h 계획 만료 확인. 소유자·활성 중복·만료·변조 거부와 만료 이력·페이지 조회. |
+| 65 | 원자 소비·1회 모의 실행 (4-C-1) | 승인 소비+SIMULATING+시도 원자 저장. 동시 claim 최대 한 번, 저장 실패 adapter 0회, 기존 승인 DB 불변. |
+| 66 | 결과와 재시도 금지 (4-C-1) | 성공 SIMULATED·충돌 NOT_CREATED/FAILED·기준 변경 BLOCKED·불확실 UNKNOWN 구분. 원시 오류 비노출과 작업당 시도 한 번, 실제 Git 성공으로 표시하지 않음. |
+| 67 | 요청 변경·취소·경합 (4-C-1) | 편집/삭제/base/diff/branch 변경은 승인 무효화. event 멱등·다른 payload 거부·역순 revision 무시. 진행 중 제어는 UNKNOWN 보존, 늦은 성공으로 덮어쓰기 없음. |
+| 68 | 중단·새 프로세스 복구 (4-C-1) | 실제 child 강제 종료 후 SIMULATING/소비 승인 보존, 시작·조회 자동 실행 없음. 명시적 recover로 UNKNOWN 확정, 반복 복구 멱등과 재승인·재실행 차단. |
+| 69 | CLI·worker·파일 경계 (4-C-1) | 실제 명령/필수 옵션·전역 lease·비공개 DB/sidecar·symlink/hardlink·출력 제한, worker의 네트워크/child/호스트 토큰 차단 검증. |
+| 70 | 외부 효과 없음과 회귀 (4-C-1) | 별도 합성 대상의 전후 파일/Git 상태 동일. 실제 저장소·Codex·Git 원격 호출 없음, commit/push/PR/MR 명령 없음, 기존 조사·실행·Slack 경계 유지. |
 
 ### 최종 검증 묶음
 
