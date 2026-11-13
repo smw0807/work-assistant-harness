@@ -28,6 +28,8 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
 
 단계 4-C-6의 `readonly-transport-*`는 검토한 최종 요청을 별도 승인으로 가짜 전송기에 한 번 전달합니다. 신규 59개를 포함한 전체 642개 테스트와 lint·typecheck·build가 통과했습니다. 실제 모델·인증정보 접근·외부 전송은 제외했으며 [4-C-6 결과](docs/stage-4c6-result.md)에 수용 근거를 기록했습니다.
 
+단계4-C-7은726개 회귀를 통과했습니다. 4-C-8의 response 진단은 전체985개·집중88개·lint/typecheck/build 검증 뒤 별도 승인1회를 실행했으나 RESPONSE_FIELDS로 실패했습니다. 이번에는 SSE created 내부 response의 필수 키 누락0·미등록 추가 필드5개가 확인됐으며 이름·의미는 미확인입니다. 이전 v8의 origin은 여전히 미확인으로 유지합니다. 누적 upstream14회 실패·전송 전 준비 실패1회·소비 승인15개·자동 재시도0회를 보존합니다. 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤습니다. v8 계약·profile은 보존하며 새 v9 계획 준비를 마쳤으며 추가 승인을 기다립니다. 새 계획의 승인·attempt·전송은0회입니다. [4-C-8 결과](docs/stage-4c8-result.md)에 근거를 기록합니다.
+
 ## 설치와 실행
 
 검증 환경은 macOS, Node.js **26.12.1**, pnpm **12.18.0**입니다. `.node-version`, `packageManager`, 직접 의존성 버전과 `pnpm-lock.yaml`을 고정했습니다. 다른 OS는 아직 검증하지 않았습니다.
@@ -67,6 +69,7 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 - `branch-execution.sqlite`, `branch-executions/`: 유형별 브랜치에서 고정 patch·Docker 검사를 수행하는 새 합성 실행 profile의 계획·승인·Run·제어·Git/파일/view 증거와 보고서. 기존 실행·브랜치 DB와 승인을 공유하지 않습니다.
 - `codex-proposals.sqlite`, `codex-calls/`: 고정 합성 입력·Codex 설정 해시·호출 승인·단일 시도·검증한 제안과 호출별 격리 디렉터리. 인증값은 저장하지 않습니다.
 - `codex-execution.sqlite`, `codex-executions/`: 한 번 소비한 제안에서 만든 별도 실행 계획·새 실행 승인·분리 합성 원본·작업 브랜치·Docker 검사와 관찰 보고서.
+- `readonly-live.sqlite`, `readonly-live-runs/`: 합성 다중 파일 live 조사의 별도 계획·승인·단일 시도·검증한 로컬 보고서와 격리 프로세스 종료 증거. 인증값은 저장하지 않습니다.
 - `replies.sqlite`: 독립 합성 답장 Task·본문 없는 계획/승인 snapshot·전송 시도·제어 이력·보관 정책·최소 중복 marker. 답장 본문은 별도 만료 payload에만 보관하며 영속 보고서에 복제하지 않습니다.
 - `live-replies.sqlite`: 고정 단건 Slack 시험의 별도 계획·승인·시도와 대상 중복 hash marker. 원문·전송 본문·token은 저장하지 않습니다.
 
@@ -444,6 +447,58 @@ pnpm harness readonly-model-preflight-prune
 전달/응답 최대 55초와 정리 최대 5초, 전달 최대 1회·재시도 0회를 적용합니다. 취소 후 늦은 결과를 저장하지 않고 종료 증거가 불확실하면 `BLOCKED`로 남깁니다. 부모 강제 종료 뒤 `recover`는 재호출 없이 `INTERRUPTED`/`BLOCKED`로 정리합니다.
 
 상태는 별도 `readonly-model-preflights.sqlite`에 보관합니다. 계획/내용은 생성 후 24시간, 승인 TTL은 명시적 1~60분, 본문 없는 감사는 최초 terminal부터 30일이며 최소 소비 marker는 DB 수명 동안 유지합니다. 원본/Git/실패 작업물은 자동 삭제하지 않습니다. 보고서는 `liveReady=false`, 의미 정확성 미검증과 실제 모델·인증 접근·외부 전송·공급자 호환성·live 격리 `not_run`을 표시합니다. [4-C-7 결과](docs/stage-4c7-result.md)에 수용 135~150의 근거를 기록합니다.
+
+## 단계 4-C-8 합성 다중 파일의 실제 모델 읽기 전용 조사
+
+`readonly-live-*`는 등록된 합성 `flow` fixture에서 승인한 근거만 고정 모델에 전달합니다. 기존 4-C-5/6/7 명령과 승인은 유지합니다. 최신 response 진단 실제1회는 `event=created`, `reason=envelope`, `missing=[]`, 예상 밖 속성5개·overflow 없음으로 실패했습니다. 모두 미등록 field 분류이며 array1·음수가 아닌 정수2·null1·object1입니다. 구체 이름·의미는 미확인이고 이전 v8의 origin으로 소급 적용하지 않습니다. 유효 보고서·responseHash는 null이며 누적 upstream14회 실패·전송 전 준비 실패1회·소비 승인15개·자동 재시도0회를 보존합니다.
+
+`config/readonly-live.example.json`은 기본 비활성인 설정 예제입니다. 저장소 밖 현재 OS 사용자 소유의 비공개 `0600` 설정 파일에 native Codex 경로·SHA-256을 고정합니다. v1~v8의 기존 설정/profile 계약은 보존합니다. v2 이후 요청 헤더32개·8KiB, 응답 헤더64개·16KiB, 모델 `gpt-6.1-sol`, 인증 `chatgpt`, 호출60초·최종 JSON16KiB는 고정입니다. 비활성 설정으로 계획은 검토할 수 있지만 승인·실행은 거부합니다. 버전·`enabled`를 포함한 설정 변경은 새 계획과 승인을 요구합니다. 기존 로그인은 승인된 run adapter에서만 읽고 계획·승인·조회·취소·복구·정리는 인증에 접근하지 않습니다.
+
+v3 profile은 decoder `readonly-live-response-v2`와 `discard-set-cookie-v1` 정책을 고정합니다. 응답 `Set-Cookie`는 중복을 허용하되 모든 항목을 헤더 수·바이트 한도와 문자 검사에 포함한 뒤 즉시 버립니다. 쿠키를 저장·전달·재사용하지 않으며 다른 중복 헤더는 거부합니다. 이 보완이 앞선 실제 실패의 원인이었다는 증거는 없습니다.
+
+v4는 v3 metadata/SSE 계약을 유지하며 decoder `readonly-live-response-v3`와 `http-token-discard-set-cookie-v1`을 결합합니다. HTTP token 헤더 이름, ASCII·HTAB 값, MIME 공백·따옴표 UTF-8과 identity 대소문자 정규화를 보완하고 거부 조건별 정적 오류를 구분합니다. 비ASCII·압축·Location·Retry-After 거부와 쿠키 폐기는 유지합니다. 로컬 검증을 완료했으나 실제 실패 원인이 해결됐다고 단정하지 않습니다.
+
+4-C-4 성공 경로와 비교한 결과 `fetch`의 자동 압축 해제와 새 원시 HTTPS 수신·헤더 검증의 차이를 확인했습니다. 기존 기록으로는 실제 거부 조건을 복원할 수 없습니다. 향후 `call-report.json`의 `http.headerDiagnostics`에는 MIME/encoding 고정 분류, 문법 위반·중복·쿠키 개수와 Location/Retry-After 존재 여부만 남깁니다. 원시 헤더 이름·값·쿠키는 저장하지 않으며 이 관찰 보완은 응답 허용 조건이나 계획 hash를 바꾸지 않습니다.
+
+v5는 `Content-Type` 헤더가 없는 경우에만 제한된 본문 접두어로 JSON 또는 SSE를 선택합니다. 선택 뒤에는 기존 완료 응답·도구 차단·조사 schema·근거·크기 검증을 그대로 적용하며 파서 실패 시 다른 형식으로 재시도하지 않습니다. 명시된 잘못된 MIME·압축·HTML·미완성 응답은 계속 거부합니다. decoder `readonly-live-response-v4`와 `responseFormatPolicy=content-type-or-bounded-body-v1`을 새 승인 해시에 결합하고, v1~v4 계약은 변경하지 않습니다.
+
+기존 고정 진단과 새 `response`는 원문 없이 경로·거부 경계·제한된 필드 분류와 계수만 기록합니다. 이번 실제 호출에는 전체985개·집중88개·lint/typecheck/build를 통과한 코드를 사용했습니다(전체 실패/skip0, 약70.7초). 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤습니다. 기존 v1~v8 계약·profile·hash는 보존합니다. 새 v9 계획 준비를 마쳤으며 추가 승인을 기다립니다. 새 계획의 승인·attempt·전송은0회입니다. 상세 이력은 [4-C-8 결과](docs/stage-4c8-result.md)를 따릅니다.
+
+새 `response` 진단은 direct-response/created/in-progress/completed 경로와9종 거부 경계를 고정 enum으로 구분합니다. 키 검사 실패 때만 누락·예상 밖 필드의 고정 분류·8종 값 형태·횟수·overflow를 기록하며 원문 키·값·ID는 저장하지 않습니다. 필수5개·기존 선택28개와 관찰용8개 이름은 구분하고, 관찰 사전에 이름을 추가해도 응답을 허용하지 않습니다.
+
+추가한 `sseEnvelope`는 필수 키 누락의 고정 분류와 예상 밖 root 속성의 고정 필드·값 형태·횟수만 기록합니다. 최대128개 root 속성·32개 조합까지 집계하고 초과는 overflow로 표시합니다. 미등록 이름은 other로 분류하며 원문 키·값·ID는 보관하지 않습니다. 기존 v3~v7 응답 허용 조건·오류 code와 profile/config/body/envelope hash는 그대로입니다.
+
+v8는 첫 `response.created`의 root에 추가 필드가 정확히1개이고 boolean이며 이름이 ASCII 식별자1~64자인 경우에만 그 필드를 검증용 사본에서 제외합니다. 알려진 SSE·제어·prototype 키는 제외할 수 없습니다. 기존 필수3키 검증과 원본 전체 민감정보 검사·sequence·내부 response·도구·완결성·크기 제한은 유지하고 추가 필드는 동작에 사용하지 않습니다. 이는 [공식 API의 이벤트 속성 추가 호환 정책](https://developers.openai.com/api/reference/overview#backwards-compatibility)을 참고한 제한적 정책이며 ChatGPT endpoint의 확정 schema 보장은 아닙니다. 실제 필드명·의미·ASCII 형태는 여전히 미확인입니다. 구형 v1~v7 계약은 그대로 두고 새 v8 profile·계획·승인을 요구합니다.
+
+v9는 response의 알려진 필드를 기존대로 검사하고, 추가 JSON 필드만 최대8개·root 이름 ASCII 식별자64자·canonical UTF-8 합계16KiB·256노드·깊이8로 제한해 검증용 사본에서 제외합니다. 유한한 JSON 값만 받으며 제어/prototype root 키는 거부합니다. 제외할 원본 자료에도 숫자 별칭 없는 민감정보 검사를 적용하고 추가 자료는 보고서·상태·동작에 사용하지 않습니다. 새 `bounded-inert-json-v1` 정책과 한도를 profile에 결합하므로 새 계획·승인이 필요합니다. 구현과 전체1005개·집중121개 검증을 마쳤으며 새 계획 준비를 마쳤으며 추가 승인을 기다립니다.
+
+v6는 공식 `tool_usage`의 정확한 경로·객체 형태를 검사한 숫자 집계만 민감정보 검사용 별칭으로 투영합니다. `tools=[]` 경계를 위한 하네스의 추가 정책으로 모든 수치를0으로 제한하고, 0이 아닌 집계는 정적 `TOOL_USAGE_ACTIVITY` 오류로 차단합니다. 실제 도구 호출·이벤트·출력은 계속 거부하며 v1~v5는 변경하지 않습니다. 공식 문서에서 집계0이나 선택 필드 생략은 도구 미실행의 증명이 아니므로 그렇게 해석하지 않습니다.
+
+v7는 [공식 생성 이벤트 예시](https://developers.openai.com/api/reference/resources/responses/streaming-events)의 시작 sequence1을 지원하도록 첫 값을0 또는1로 받고 이후 연속성 검사는 유지하는 보완입니다. 원문 없는 정적 SSE 진단도 구현했습니다. 이번 v6 실패가 sequence 때문이었다고 확정한 것은 아니며, 구형 계약과 도구·출력·완료·근거·크기 검증은 유지합니다.
+
+`readonly-live-run`은 승인 소비 전에 고정 바이너리의 존재·안전성·SHA-256을 확인합니다. 준비 검사 실패는 승인과 attempt를 소비하지 않으며, 준비 뒤 시간·취소·계획을 다시 검사합니다. 실행 직전의 바이너리 재검증도 유지합니다. native 합성 회귀에서 같은 0.154.0 바이너리를 별도 경로에 보관했다면 `HARNESS_NATIVE_CODEX_PROBE=1 HARNESS_NATIVE_CODEX_PATH=/absolute/path/to/codex pnpm test`로 지정할 수 있습니다. 이 환경변수는 테스트에만 적용되고 고정 SHA-256·버전 검사를 바꾸지 않습니다. 실제 CLI 실행 경로는 검토한 비공개 config에 명시해야 합니다.
+
+```sh
+pnpm harness readonly-live-plan --fixture flow --selection all --transfer controller --request flow-question --config /absolute/path/to/private-readonly-live.json --data-dir /private/tmp/harness-readonly-live-data
+pnpm harness readonly-live-inspect --task <uuid> --data-dir /private/tmp/harness-readonly-live-data
+# payload.inputText·requestBody·requestEnvelope와 설정, 다섯 hash·planHash를 검토한 뒤 승인
+pnpm harness readonly-live-approve --task <uuid> --plan-hash <sha256> --expires-in-minutes 10 --config /absolute/path/to/private-readonly-live.json --data-dir /private/tmp/harness-readonly-live-data
+pnpm harness readonly-live-run --task <uuid> --plan-hash <sha256> --config /absolute/path/to/private-readonly-live.json --data-dir /private/tmp/harness-readonly-live-data
+pnpm harness readonly-live-inspect --task <uuid> --data-dir /private/tmp/harness-readonly-live-data
+
+pnpm harness readonly-live-cancel --task <uuid> --data-dir /private/tmp/harness-readonly-live-data
+pnpm harness readonly-live-invalidate --task <uuid> --data-dir /private/tmp/harness-readonly-live-data
+pnpm harness readonly-live-recover --task <uuid> --data-dir /private/tmp/harness-readonly-live-data
+pnpm harness readonly-live-prune --data-dir /private/tmp/harness-readonly-live-data
+```
+
+plan/approve/run은 `--config`가 필수입니다. plan의 `--selection all|controller|service`는 읽기 범위, `--transfer all|controller|service`는 그중 전송 근거를 선택하며 기본값은 `all`입니다. `--request flow-question|change-request`의 기본값은 `flow-question`입니다. profile은 설정 버전에 결합되며 임의 URL·모델·헤더·인증·저장소·본문·profile 옵션은 없습니다. v1~v7 실제 실패 이력과 로컬 검증 통과를 구분합니다. 변경 요청도 읽기 전용 보고서만 만들며 수정 파일·대상 검사 목록은 빈 배열입니다.
+
+계획·내용은 생성부터 24시간, 승인 TTL은 명시적 1~60분입니다. 승인 소비와 단일 전달 예약 이후 원본·기간·설정·generation을 다시 확인하고 최대 한 번 전송합니다. 인증은 부모 broker 메모리에만 두며 Codex에는 빈 HOME/CODEX_HOME과 단건 capability만 제공합니다. 승인된 최종 본문을 고정 endpoint에 전달하고 retry·redirect·다른 모델 fallback을 하지 않습니다. 실패·취소·중단은 승인 소비를 복원하지 않으며, HTTP 취소를 원격 미접수나 서버 측 추론 종료 증거로 간주하지 않습니다.
+
+응답은 완성된 조사 JSON과 전송한 근거 인용을 검증한 뒤 로컬에 보관합니다. schema 통과는 내용의 의미 정확성을 보증하지 않습니다. 실제 연결 증거와 합성 port 검증을 분리하고 수행하지 않은 검사는 `not_run`으로 남깁니다. 내용은 24시간, 본문 없는 감사는 최초 terminal부터 30일, 최소 소비 marker는 DB 수명 동안 보존합니다. 자식 종료 후 새로 만든 모델 임시 디렉터리와 빈 HOME/CODEX_HOME만 identity를 확인해 제거합니다. 합성 원본/Git·DB·감사 및 실패 작업물은 보존하며, 프로세스 종료나 임시 디렉터리 제거가 불확실하면 `BLOCKED`로 남깁니다.
+
+inspect·cancel·invalidate는 전역 lease 중에도 동작하며 나머지는 lease를 요구합니다. inspect는 `--approval-offset <0..1000000000>`을 지원합니다. run은 `REPORTED`일 때만 종료 코드 0입니다. recover는 인증·모델·네트워크 없이 종료·원본·명세 증거를 확인하며 불확실하면 `BLOCKED`로 남깁니다. 회사 자료·실제 저장소·Slack·대상 코드 실행·브랜치/patch·commit/push·PR/MR과 실행 계획 export는 제공하지 않습니다. 기존 대상 작업 브랜치 규칙은 하네스 자체의 개발 규칙으로 확대하지 않습니다.
 
 ## 모의 입력과 오류 재현
 

@@ -4,6 +4,12 @@ const sensitivePatterns: RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+/-]{8,}={0,2}/gi,
   /\b[A-Za-z0-9_]*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key|password|secret|token)[A-Za-z0-9_]*["']?\s*[:=]\s*(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s,;]+)/gi,
 ];
+export type SensitivePatternKind = 'private-key-block' | 'provider-key-prefix' | 'bearer-token' | 'credential-assignment';
+const sensitivePatternKinds: readonly SensitivePatternKind[] = ['private-key-block', 'provider-key-prefix', 'bearer-token', 'credential-assignment'];
+
+/** Independent copies of the same fixed patterns; callers cannot change redaction or share lastIndex state. */
+export const getSensitivePatternDefinitions = (): { kind: SensitivePatternKind; pattern: RegExp }[] =>
+  sensitivePatterns.map((pattern, index) => ({ kind: sensitivePatternKinds[index]!, pattern: new RegExp(pattern.source, pattern.flags) }));
 
 /** Apply the same conservative patterns to model inputs and local output. */
 export const redactSensitiveText = (text: string): string => {

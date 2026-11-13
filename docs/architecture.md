@@ -246,6 +246,47 @@ plan·approve·send의 제한 worker만 token과 네트워크를 받는다. 고�
 
 승인 소비·전달 예약·generation·종료 증거와 원본 검증으로 취소·중단·재시작을 처리한다. 내용과 본문 없는 감사/marker는 각각 24시간·최초 terminal 이후 30일·DB 수명으로 구분한다. 오프라인 결과는 실제 모델 연결·의미 정확성·공급자 호환성 실증을 뜻하지 않는다. 상세 근거는 [4-C-6 결과](stage-4c6-result.md)를 따른다.
 
+### 단계 4-C-8의 합성 다중 파일 live 조사
+
+`synthetic-readonly-live-v1`은 고정 합성 문맥의 실제 읽기 전용 조사를 위한 새 정책이다. `ReadonlyLiveService`와 `SqliteReadonlyLiveStore`는 `readonly-live.sqlite`에 계획·승인·단일 attempt·전달 예약·검증한 보고서를 보관한다. 기존 4-C-4/5/6/7 결과나 승인은 변환하지 않는다. 4-C-7의 fake 전용 의존 그래프도 유지한다.
+
+```text
+등록 합성 원본 → 범위 제한 reader → 선택 근거·정확한 전송 본문 검토
+  → 새 live 승인·원자 소비·전달 예약 → RestrictedReadonlyLiveCodex
+  → 부모의 기존 로그인 + 고정 broker → 격리 native Codex
+  → 고정 공급자 응답 검증 → 전송 근거·조사 schema 검증 → 로컬 보고서
+```
+
+설정과 profile은 `readonly-live-codex-v1`/`codex-chatgpt-sse-v1` 또는 `readonly-live-codex-v2`/`codex-chatgpt-sse-v2`의 고정 짝으로 모델·endpoint·인증 방식·binary·한도를 결합한다. v1 원형을 유지해 기존 실패 기록과 승인을 조회할 수 있고, v2만 응답 헤더를 별도 64개·16KiB로 제한한다. 요청 헤더 32개·8KiB와 본문 직렬화는 유지한다. `configSnapshot`과 문맥/입력/본문/profile/명세 hash를 승인에 묶어 버전 간 승인을 재사용하지 않는다. plan/approve/run은 안전하게 읽은 명시적 설정을 요구하고 나머지 명령은 저장된 snapshot으로 동작한다. 인증은 승인된 run의 adapter 안에서만 지연 접근하며 로컬 제어·복구가 인증이나 네트워크를 열지 않는다.
+
+응답 metadata 계약 보완은 별도 `readonly-live-codex-v3`/`codex-chatgpt-sse-v3`와 decoder `readonly-live-response-v2`에 적용했고 로컬 검증을 완료했다. v1·v2 원형은 유지하고, v3는 v2의 헤더 한도·동일 요청 본문을 사용한다. nullable metadata와 추가 숫자·문자열 필드의 정확한 형태를 제한하며 원시 응답 대신 단계별 정적 오류로 거부 경계를 구분한다. profile에 결합한 `discard-set-cookie-v1`은 중복 Set-Cookie를 포함해 헤더 수·바이트·문자를 검사한 뒤 해당 값만 즉시 버리고 다른 중복 헤더는 거부한다. 쿠키 저장·전달·재사용은 없고 이를 앞선 실제 실패의 원인으로 단정하지 않는다. 별도 승인한 v3 실제 1회는 HTTP 헤더 검사에서 실패했다.
+
+v4 헤더 보완은 새 설정/profile과 decoder `readonly-live-response-v3`, `http-token-discard-set-cookie-v1`에 적용했고 로컬 검증을 완료했다. v3 metadata/SSE와 본문·모델·요청 헤더·한도를 유지하고, HTTP token 이름·ASCII/HTAB 값·MIME 공백/따옴표 UTF-8·identity 대소문자를 정규화한다. 비ASCII·압축·Location·Retry-After 거부와 쿠키 폐기는 유지하며 헤더 거부 조건별 정적 오류를 분리한다. 구형 세 버전의 조회·제어·승인 분리를 검증했다. 후속 고정 경로 v4는 Content-Type 부재로 실패했고 아래 v5에서 대응한다.
+
+고정 바이너리의 v4 진단에서 Content-Type 헤더 부재가 확인됐다. v5는 해당 헤더가 없는 경우에만 제한된 접두어 판별로 기존 JSON/SSE decoder를 선택한다. 본문 전체의 hash·UTF8·응답/항목·완료·schema·근거 검증을 유지하고 다른 파서로 fallback하지 않는다. v5 decoder/profile을 새 승인에 결합하며 구형 네 버전은 유지한다. 별도 승인한 v5 실제 1회는 헤더 검사 뒤 JSON 처리 단계에서 실패했으며 세부 원인은 아직 미확인이다.
+
+4-C-4 비교 후 broker 관찰에 `headerDiagnostics`를 추가했다. 원시 HTTPS 헤더를 즉시 고정 MIME/encoding 분류·문법/중복/쿠키 개수·정책 헤더 존재 여부로 바꾸고, 정확한 키·타입을 검증한 사본만 call report에 기록한다. 실제 송신 함수의 callback·Web Response 변환·decoder를 연결한 검사는 native request 경계만 대체해 외부 네트워크 없이 실행한다. `fetch`와 원시 HTTPS의 압축 처리 차이를 검증하지만, 기록되지 않은 과거 응답이 압축됐다고 추론하지 않는다.
+
+후속 JSON 진단은 원시 응답을 남기지 않고 origin `response`/`sse`와 reason `syntax`/`depth`/`duplicate-key`/`unicode`/`sensitive-content`/`canonicalization`만 분리하도록 구현했다. 이는 관찰 경계의 변경으로 응답 허용 조건·기존 오류 code·profile/config/body hash와 기존 계획의 유효성을 유지한다. 기존 실제 v5 실패를 특정 사유로 소급 분류하지 않는다.
+
+민감정보 거부 뒤에는 `json`, `sensitive` 네 enum, `sensitiveAttribution` 열 enum을 원문 없이 기록한다. 기존 귀속 진단의 `multiple`을 구분하기 위해 `sensitiveMatches={entries, observedMatches, overflow}` 집계를 추가했다. 각 entry는 `pattern`·`region`·`reason`·`matchExtent`·`field`·`valueType` 여섯 고정 enum과 `count`만 가진다. 실제 canonical 판정 문자열의 정규식 일치 시작 속성과 전체 범위를 분류하며, 같은 조합은 경로와 관계없이 합산한다. 최대128회 일치·32개 조합에서 계수를 제한하고 초과는 overflow로 남긴다. 원시 키·값·경로·일치 문자열·offset은 저장하지 않는다. 추가된 공식 metadata 이름도 진단용 분류이며 수용 조건·오류 code·profile/config/body hash를 바꾸지 않는다. 분류 실패에도 기존 민감정보 거부를 유지한다. 집계 진단의 최종 전체 924개·lint·typecheck·build가 native 포함 통과했다(실패/skip 0, 약 68.1초).
+
+Codex 자식에는 승인 입력과 빈 HOME/CODEX_HOME, 단건 broker capability만 제공한다. 대상 원본·DB·사용자 설정·로그인 파일을 읽거나 대상 코드를 실행하는 권한은 없다. 부모가 승인된 정확한 본문만 전송하고 자식의 임의 body·도구·목적지는 중계하지 않는다. OS 격리와 guardian 종료 증거, generation·한 번의 소비·재전송 금지를 유지한다. 자식 종료 뒤 guardian 또는 부모는 새로 만든 모델 임시 디렉터리의 inode/dev를 확인해 빈 HOME/CODEX_HOME과 함께 제거한 후 종료 증거를 기록한다. 원본/Git·DB·감사·실패 작업물은 보존한다. 명시 recover는 전달 예약 뒤 취소된 작업에도 프로세스 종료·임시 디렉터리 부재를 요구하며 불확실하면 `BLOCKED`로 남긴다. 회사 자료·실제 저장소·Slack·수정·검사 실행·Git 원격과 실행 export는 이 경로에 연결하지 않는다.
+
+v9는 `responseExtensionPolicy=bounded-inert-json-v1`과 공유된 불변 한도 `fields=8`, `keyCharacters=64`, `bytes=16384`, `nodes=256`, `depth=8`을 새 profile에 결합한다. decoder `readonly-live-response-v8`은 기존 v8 정책을 상속한다. 알려진 response 필드는 그대로 기존 검증에 전달하고, 추가 필드 묶음만 별도로 스냅샷·canonical화해 제한을 검사한 뒤 검증용 사본에서 제외한다. 추가 묶음 자체를 깊이0·노드1로 세고 키를 포함한 전체 UTF-8 바이트를 제한한다. root 이름은 ASCII 식별자이며 제어/prototype 키를 거부하고, 중첩 값은 유한한 JSON·own data property만 허용한다. 숫자 별칭을 적용하지 않은 추가 원본의 민감정보 검사로 정규화 충돌에 의한 누락을 막는다. 추가 자료를 상태·보고서·동작에 쓰지 않으며 기존 필드·도구·sequence·완료 검증을 유지한다. 구현과 전체1005개·집중121개 검증을 마쳤으며 새 계획 준비를 마쳤으며 추가 승인을 기다린다.
+
+v1~v8와 후속 진단의 실제 실패 이력은 결과 문서에 보존한다. 전체985개 검증 코드의 response 진단 실제1회는 SSE created 내부 response의 엄격한 키 검사에서 실패했다. 필수 키 누락은 없고 미등록 추가 필드5개(array1·nonnegative-integer2·null1·object1)·overflow 없음을 확인했다. 이름·의미는 미확인이며 이전 v8의 origin으로 소급 적용하지 않는다. 누적 upstream14회 실패·별도 전송 전 실패1회·소비 승인15개·자동 재시도0회이며 유효 보고서는 없다. 격리·인증 접근 passed와 cleanupConfirmed=true를 확인했고 독립 사후 감사에서 원본/Git33개·부모7개 identity·HEAD/base 보존과 관련 프로세스·sandbox 종료를 확인했다. 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤다. 기존 v1~v8 계약·profile·hash는 보존한다. 새 v9 계획 준비를 마쳤으며 추가 승인을 기다린다. 새 계획의 승인·attempt·전송은0회다. [4-C-8 결과](stage-4c8-result.md)에 이력을 기록한다.
+
+v6는 공식 `tool_usage`의 정확한 응답 경로·필수/선택 객체 형태와 정수 집계를 확인한 뒤 해당 경로만 민감정보 검사용 숫자 별칭으로 투영한다. 하네스는 `tools=[]` 경계를 유지하기 위해 모든 집계를0으로 제한하며 nonzero는 정적 `TOOL_USAGE_ACTIVITY`로 거부한다. 이는 공식 schema보다 좁은 정책이고 집계0·선택 필드 생략 자체가 도구 미실행을 증명하지는 않는다. 실제 도구 call/event/output 차단, 요청·격리·한도는 유지하고 v1~v5 계약·해시는 바꾸지 않는다.
+
+v7는 공식 생성 이벤트 예시의 sequence1을 지원하기 위해 첫 sequence를0 또는1로 허용하고 이후에는1씩 연속되는지 검사하는 설계다. 원문 없이 고정된 SSE 실패 분류를 기록하며 구형 v1~v6 계약과 도구·출력·완료·근거·크기 제한은 보존한다. 이 호환성 차이가 v6 실제 실패 원인이었다는 증거는 아직 없다. SSE 진단은 event/reason/sequence/position 네 고정 enum만 기록하고 원시 ID·수치는 남기지 않는다. 전체946개·집중89개·lint/typecheck/build 검증 뒤 별도 승인1회를 실행했으나 created envelope 검사에서 실패했다.
+
+후속 `sseEnvelope={missing, unexpected, observedUnexpected, overflow}`는 root eventObject의 엄격한 키 검사가 실패한 경우에만 붙는다. 누락 키는 등록된 필수 키 분류, 예상 밖 속성은 고정 field·8종 valueType·count로 집계한다. 정렬한 root 속성 최대128개·32개 조합까지 기록하며 미등록 이름은 other, 초과는 overflow로 남긴다. 로컬 decoder에서 만든 진단만 broker가 복사하며 원시 키·값·ID를 저장하지 않는다. accessor·symbol·잘못된 형태를 거부하고 깊은 복사·동결을 적용한다. v3~v7의 기존 수용 조건·오류 code와 profile/config/body/envelope hash는 유지한다.
+
+후속 `response={event, reason, envelope}`는 직접 JSON 또는 created/in-progress/completed response 검증의 경로와 거부 경계를 구분한다. event4종·reason9종의 고정 enum을 쓰며 reason=envelope일 때에만 missing/unexpected/observedUnexpected/overflow를 붙인다. 필수5·기존 선택28·관찰용8개 이름을 분리하고 root128개·32조합·8종 값 형태와 count만 기록한다. 원시 키·값·ID를 보관하지 않고 관찰용 이름은 수용 필드로 바꾸지 않는다. broker는 로컬 decoder의 깊은 복사·동결된 진단만 전달한다. v8 수용 조건·오류 code·profile/config/body/envelope hash를 유지한다.
+
+v8의 `created-boolean-extension-v1`은 첫 response.created root의 추가 필드가 정확히1개·boolean·ASCII 식별자1~64자이며 등록된 SSE/제어/prototype 예약 키가 아닐 때에만 검증용 사본에서 제외한다. 필수 type·sequence_number·response를 다시 엄격하게 검사하고 해당 추가 필드를 동작에 사용하지 않는다. 원본 전체 민감정보 검사·hash·내부 response·다른 이벤트·직접 JSON·도구·sequence·완료 검증은 유지한다. 실제 필드명·의미·ASCII 형태는 미확인이며 공식 API의 event data 속성 추가 정책을 참고한 좁은 호환 범위다. ChatGPT endpoint schema 보장으로 설명하지 않고 새 v8 profile로 분리해 v1~v7 hash를 보존한다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.
@@ -357,6 +398,8 @@ AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
 | 4-C-4 | 실제 Codex 합성 제안·새 실행 승인 | 단건 호출 승인·외부 CLI 격리·부모 broker·JSON 검증·일회 export·별도 실행 승인. 실제 결과와 한계는 전용 결과 문서 참조 |
 | 4-C-5 | 합성 다중 파일 읽기 전용 조사 | 읽기/전송/수정 권한 분리·불변 문맥·단건 모의 호출·근거 보고·취소/복구. 실제 모델 호출 제외 |
 | 4-C-6 | 합성 문맥의 오프라인 전송 검증 | 별도 offline/fake 계약·최종 요청 hash·단건 broker·JSON/NDJSON 응답·취소/복구. 실제 모델·인증 접근·외부 전송 제외 |
+| 4-C-7 | 다중 파일 모델 연결의 오프라인 준비 | 후보 HTTP/JSON/SSE 계약·명세 hash·in-memory fake·제한 worker. live 승격 불가, 실제 공급자 호환성 미검증 |
+| 4-C-8 | 합성 다중 파일의 실제 모델 읽기 전용 조사 | 985개 검증 코드의 response 실제 진단 실패: created 내부 response 추가 필드5개·이름/의미 미확인. 누적 upstream14회·소비 승인15개. v9 별도 호환 정책 구현·전체1005개 검증 완료·새 계획 준비 완료·추가 승인 대기 |
 | 4-C 후속 | 대상 저장소의 실제 Codex 작업 브랜치·commit 준비·push | 승인·격리·브랜치 보존과 행위별 승인 별도 검증. PR/MR 생성 제외. 미구현 후속 설계 |
 | 4-D | Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-B-2 승인 범위 밖 |
 

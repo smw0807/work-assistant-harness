@@ -156,7 +156,8 @@ export const prepareReadonlyRepository = async (dataDir: string, id: string, fix
     return result;
   } catch (error) { if (error instanceof HarnessError) throw error; throw new HarnessError('READONLY_PREPARE_FAILED'); }
 };
-export const assertReadonlyRepository = async (repository: ReadonlyRepository): Promise<void> => {
+/** The final transmission guard must finish its local identity check without yielding. */
+export const assertReadonlyRepositoryNow = (repository: ReadonlyRepository): void => {
   try {
     if (!readonlyExactKeys(repository, ['id', 'fixtureId', 'repoId', 'sourceRoot', 'baseCommit', 'sourceManifestHash', 'identityHash', 'manifest', 'parents', 'readAllowedFiles'])
       || !isReadonlyId(repository.id) || repository.fixtureId !== 'flow' || repository.repoId !== 'synthetic-flow-v1'
@@ -180,6 +181,10 @@ export const assertReadonlyRepository = async (repository: ReadonlyRepository): 
     if (canonicalReadonlyJson(parentIdentities(repository.sourceRoot)) !== canonicalReadonlyJson(repository.parents)
       || canonicalReadonlyJson(observeEntries(repository.sourceRoot, false)) !== canonicalReadonlyJson(current)) throw unsafe();
   } catch { throw unsafe(); }
+};
+
+export const assertReadonlyRepository = async (repository: ReadonlyRepository): Promise<void> => {
+  assertReadonlyRepositoryNow(repository);
 };
 
 export const collectReadonlyPayload = async (repository: ReadonlyRepository, selection: ReadonlySelection,

@@ -343,6 +343,50 @@ JSON/SSE는 등록한 제한된 후보 형태만 받아들이며 UTF-8·중복 �
 
 이는 실제 공급자 호환성·인증 안전성·live OS 격리·모델 추론 품질의 실증이 아니다. 보고서는 항상 `liveReady=false`와 제외 항목 `not_run`을 기록한다. 실제 연결은 별도 정책·구체 입력 검토·새 승인·격리 검증이 필요한 후속 범위다. [4-C-7 결과](stage-4c7-result.md)에 검사별 근거를 남긴다.
 
+### 단계 4-C-8의 별도 live 조사 승인
+
+`synthetic-readonly-live-v1`은 등록 합성 fixture의 선택 근거만 실제 모델에 보내는 새 경로다. `readonly-live.sqlite`에 별도 계획·승인·단일 소비를 기록하고 이전 mock/offline/patch 승인을 재사용하지 않는다. 기존 오프라인 명령에는 live 옵션이나 인증 경로를 추가하지 않는다. 읽기·전송 범위와 빈 수정·검사 범위, 원본 identity·revision·다섯 hash·configSnapshot을 새 승인에 고정한다.
+
+설정은 기본 비활성이며 plan/approve/run에서 명시한 비공개 일반 파일만 안전하게 읽는다. 모델 `gpt-6.1-sol`, 기존 ChatGPT 로그인, 고정 endpoint만 허용한다. 설정 `readonly-live-codex-v1`/profile `codex-chatgpt-sse-v1` 원형은 보존하고, 응답 한도 보완은 새 `readonly-live-codex-v2`/`codex-chatgpt-sse-v2` 짝에만 적용한다. 요청 헤더는 32개·8KiB, v2 응답 헤더는 64개·16KiB로 제한하며 진단에는 count/bytes·HTTP status만 남기고 원시 헤더 값을 저장하지 않는다. 설정·profile 변경은 새 계획과 승인을 요구한다. 승인 TTL은 필수 1~60분이고 생성 후 24시간을 넘지 않는다. 승인·예약 commit과 실제 dispatch의 현재 시각·generation 검증 전에는 인증·외부 전송을 하지 않는다.
+
+v3 응답 계약 보완은 새 설정/profile과 decoder `readonly-live-response-v2`에만 적용하며 v1·v2 계획·승인 hash를 유지한다. profile의 `responseHeaderPolicy=discard-set-cookie-v1`은 중복 Set-Cookie도 헤더 수·바이트 한도와 문자 검사를 거친 뒤 즉시 버린다. 쿠키 저장·모델 전달·다음 요청 재사용은 없으며 다른 중복 헤더는 모두 거부한다. 공식 응답 형식과의 로컬 불일치 재현을 실제 실패 원인 확인으로 확대하지 않는다. 추가 metadata는 정확한 타입·한도로 검증하고 원시 값 없는 단계별 정적 오류만 기록한다. v3 로컬 검증 뒤 별도 승인한 실제 1회도 헤더 검사에서 실패했으며 소비 승인은 복원하지 않는다.
+
+v4 헤더 보완은 새 설정/profile에 decoder `readonly-live-response-v3`와 `http-token-discard-set-cookie-v1`을 결합한다. HTTP token 이름·ASCII와 HTAB·MIME의 선택적 공백/따옴표 UTF-8·identity 대소문자만 정규화하고 비ASCII·압축·Location·Retry-After 거부는 유지한다. 원시 헤더 값 대신 거부 조건별 정적 오류를 기록한다. v1·v2·v3 계획·hash를 유지하고 본문·모델·요청 헤더·한도는 바꾸지 않는다. v4 로컬 검증 뒤 고정 경로의 실제 응답에서는 Content-Type 부재가 확인됐다. 이 누락 대응은 아래 v5에만 추가한다.
+
+4-C-4 비교 후 진단 보완에서는 기존 status/count/bytes에 선택적 `headerDiagnostics`를 추가한다. MIME·encoding은 고정 enum으로만 분류하고 미등록 값은 `other`로 처리한다. 이름/값 문법 위반·HTAB·중복·쿠키는 개수로, Location/Retry-After는 존재 여부로만 남긴다. 원시 이름·값·쿠키·알 수 없는 MIME/encoding 문자열은 저장하지 않는다. broker가 정확한 키·타입·enum을 검증하고 복사하므로 합성 transport도 임의 자료를 보고서에 추가할 수 없다. 이는 응답 허용 조건·profile·본문·승인을 바꾸지 않는 관찰 보완이며, 과거 기록에 없던 원인을 소급해서 증명하지 않는다.
+
+고정 바이너리 경로가 사라진 v4 시도는 승인 소비 뒤 준비 단계에서 실패했고 인증·upstream은 0회였다. 해당 소비 기록은 보존한다. 후속 `verifyReady`는 run의 claim 전에 파일 존재·형식·해시만 읽기 전용으로 확인하며 인증·프로세스·네트워크에 접근하지 않는다. 실패하면 새 승인 소비와 attempt 생성이 없고, 성공 뒤에도 최신 시간·취소·계획을 재검사한다. 실제 transmit의 기존 검증은 유지하므로 검사 이후 파일 변경까지 승인 미소비를 보장하지는 않는다. 바이너리 경로나 설정을 자동 대체하거나 사용한 승인을 복원하지 않는다.
+
+고정 바이너리로 실행한 v4 진단 1회에서 HTTP 200 응답의 Content-Type 부재를 확인했다(`DECODE_CONTENT_TYPE_MISSING`). v5는 헤더가 없을 때만 기존 256KiB 응답 예산 안에서 접두어를 증분 판별하고, 원문 전체를 strict JSON/SSE 검증으로 전달한다. 명시적 MIME·encoding·도구·완결성·근거 제한과 모든 크기/시간 한도는 유지하며 실패 시 다른 파서로 재시도하지 않는다. 새 decoder/responseFormatPolicy를 v5 profile에 결합하고 구형 승인·hash를 보존한다. 별도 승인한 실제 v5 1회는 헤더 검사를 통과한 뒤 JSON 처리 실패로 종료됐으며 세부 원인은 미확인이다.
+
+후속 JSON 진단은 원시 응답 없이 origin `response`/`sse`와 reason `syntax`/`depth`/`duplicate-key`/`unicode`/`sensitive-content`/`canonicalization`만 기록하도록 구현했다. 임의 문자열·원시 값·본문 조각을 기록하지 않으며 응답 허용 조건·기존 오류 code·profile/config/body hash와 기존 계획의 유효성을 유지한다. 이 관찰 보완으로 기존 실제 실패의 세부 원인을 소급 단정하지 않는다. 실제 v5에 사용한 886개 검증 이후 진단 보완까지 최종 전체 895개·lint·typecheck·build를 통과했다(실패/skip 0).
+
+후속 민감정보 진단의 `sensitive`는 `pattern`·`area`·`usageField`·`usageShape` 네 고정 enum만 허용하고 기존 `json` 두 키는 유지한다. 기존 판정 문자열 `canonical(redactionView(parsed))`의 실제 정규식 일치 범위를 정적 영역에 귀속한다. known usage는 정확한 공식 응답/SSE 경로·허용 형태·redaction 투영까지 확인하며 임의 위치의 같은 키를 신뢰하지 않는다. 복수·불확실 결과는 `multiple`/`other`로 남기고 원문 필드명·값·일치 문자열·offset을 저장하지 않는다. own data property·정확한 키·enum 조합을 검증한 복사본만 기록한다. 분류기 실패·예외에도 원래 민감정보 거부가 유지되며 수용 조건·공개 오류 code·profile/config/body hash는 바뀌지 않는다. 907개·lint·typecheck·build 검증을 통과한 이 코드로 실제 진단 1회를 수행했다.
+
+기존 `sensitiveAttribution` 열 고정 enum에 후속 `sensitiveMatches` 집계를 추가했다. 각 entry는 `pattern`·`region`·`reason`·`matchExtent`·`field`·`valueType` 여섯 고정 enum과 `count`만 가진다. 실제 canonical 문자열의 정규식 일치를 분류하고 서로 다른 경로라도 같은 조합이면 합산한다. 최대128회 일치·32개 조합으로 제한하며 더 관찰할 값이 있으면 `overflow`를 기록해 완전한 진단으로 표시하지 않는다. 원문 키·값·경로·일치 문자열·offset은 보관하지 않는다. 정확한 키·own data property·고정 enum·count 합계/한도·중복 조합을 검사한 복사본만 전달한다. 공식 metadata 이름을 진단 사전에 추가한 것은 그 필드의 응답 수용을 허용한 것이 아니다. 분류기 실패에도 원래 거부가 유지되며 수용 조건·공개 오류 code·profile/config/body hash는 그대로다. 집계 진단의 최종 전체 924개·lint·typecheck·build가 native 포함 통과했다(실패/skip 0, 약 68.1초).
+
+인증 loader는 run adapter 내부에서만 호출한다. 다른 명령은 로그인 파일의 존재나 값을 조회하지 않으며 refresh·복제·변경과 환경 토큰 탐색을 하지 않는다. 인증은 부모 메모리에서 고정 목적지의 헤더에만 사용하고 입력·보고서·DB·로그·Codex 자식 환경에 넣지 않는다. 자식은 빈 HOME/CODEX_HOME과 단건 capability를 사용하며 사용자 설정·skills·MCP·원본/DB를 읽는 권한을 갖지 않는다. native binary·OS profile·허용 broker 연결·추가 실행 차단·guardian 정리를 확인해야 한다.
+
+부모는 승인한 본문 바이트만 전달하며 작업당 최대 한 번, retry·redirect·fallback은 0회다. HTTP 취소·로컬 프로세스 종료는 원격 미접수나 서버 추론 중지를 보장하지 않는다. 불확실한 호출 뒤 승인을 복원하거나 재전송하지 않는다. 취소/무효화 generation과 명시 recover의 원본·명세·프로세스 증거 검사를 적용한다. 전달 예약 뒤 취소된 작업도 종료·모델 임시 디렉터리 부재를 다시 확인하며 정리가 불확실하면 `BLOCKED`로 남긴다.
+
+완성 응답·조사 schema·전송 근거/줄·비밀 패턴·크기를 검사하고 raw/부분/거부 응답을 보고서나 DB에 보관하지 않는다. guardian은 stderr 16KiB와 stdout/stderr 합계 128KiB를 강제한다. 자식 종료 뒤 새로 만든 모델 임시 디렉터리의 inode/dev를 확인하고 빈 HOME/CODEX_HOME을 함께 제거한 다음 종료 증거를 남긴다. 루트 symlink나 다른 inode는 제거하지 않고 하위 symlink는 대상을 따라가지 않는다. 강제 중단·정리 불확실 상태에서는 잔류 내용 제거를 보장하지 않으며 `BLOCKED`로 보존한다.
+
+v9의 추가 response JSON 수용은 별도 profile·새 승인을 요구하는 제한적 호환 정책이다. 추가 필드는 최대8개이고 root 이름은 ASCII 식별자1~64자로 제한하며 제어/prototype 키를 거부한다. 추가 묶음의 키를 포함한 canonical UTF-8 전체16KiB·256노드·깊이8 한도를 공유된 불변 상수로 강제한다(묶음 자체는 깊이0·노드1). 유한한 JSON 값만 허용하고 accessor·symbol·비표준 객체·순환 참조는 거부한다. 제외할 추가 원본도 숫자 별칭 없이 별도로 민감정보 검사하므로 알려진 metadata의 투영 규칙을 unknown 자료에 적용하지 않는다. 알려진 필드의 기존 검증과 원본 전체 민감정보·도구·완료·크기 제한을 유지하며 추가 자료는 보고서·상태·명령에 쓰지 않는다. 정적 거부 사유5개만 기존 response 진단에 추가하고 원문 키·값은 보관하지 않는다. 구현과 전체1005개·집중121개 검증을 마쳤으며 새 계획 준비를 마쳤으며 추가 승인을 기다린다. 기존 v1~v8 계약·hash는 보존하고 실제 추가 필드명·의미는 미확인으로 남긴다.
+
+결과에는 실제/합성 검증 증거를 구분하고 schema 통과를 의미 정확성 보증으로 표시하지 않는다. 내용24시간·최초 terminal 감사30일·DB 수명의 소비 marker를 유지하며 원본/Git·DB·감사·실패 작업물은 임시 디렉터리 정리 대상이 아니다. 전체985개 검증 코드의 response 실제 진단은 SSE created 내부 response의 추가 필드5개로 거부됐다. 필수 누락은 없고 이름·의미는 미확인이며 이 결과를 이전 v8의 origin으로 소급 적용하지 않는다. 격리·인증 접근 passed와 cleanupConfirmed=true를 확인했고 독립 사후 감사에서 원본/Git33개·부모7개 identity·HEAD/base 보존과 관련 프로세스·sandbox 종료를 확인했다. 누적 upstream14회 실패·별도 전송 전 실패1회·소비 승인15개·자동 재시도0회이고 유효 보고서·responseHash는 없다. HTTP200은 완성 응답·추론 성공의 증거가 아니다. 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤다. 기존 v1~v8 계약·profile·hash는 보존한다. 새 v9 계획 준비를 마쳤으며 추가 승인을 기다린다. 새 계획의 승인·attempt·전송은0회다. [4-C-8 결과](stage-4c8-result.md)에 이력을 보존하며 회사 자료·실제 저장소·Slack·대상 실행·commit/push·PR/MR은 포함하지 않는다.
+
+v6는 공식 `tool_usage` 경로에 한해 필수·선택 키와 정수만으로 된 전체 형태를 검증하고 민감정보 검사 대상의 숫자 별칭을 만든다. 임의 경로·문자열·추가 키·null은 이 예외에 포함하지 않는다. 모든 수치를0으로 제한하고 nonzero는 정적 `TOOL_USAGE_ACTIVITY`로 차단하는 것은 `tools=[]`를 위한 하네스의 추가 제한이다. 공식 문서의 집계0·선택 필드 생략은 도구 미실행을 증명하지 않으므로 실제 tool call/event/output 거부를 별도 유지한다. v1~v5 계약·hash는 보존하며 변경된 수용 정책은 새 profile·계획·승인을 요구한다.
+
+후속 v7는 첫 SSE sequence0 또는1을 지원하되 이후 연속성·중복/역순/누락 차단을 유지한다. 정적 SSE 진단에 원시 이벤트·값·본문을 넣지 않으며 기존 도구·출력·완결성·근거·크기·시간 제한과 구형 v1~v6 계약은 보존한다. 실제 v6 오류만으로 sequence를 원인으로 단정하지 않는다. 이 변경의 최종 검증과 새 계획을 마친 뒤에도 실제 추가1회는 별도 승인을 요구한다.
+
+`sse` 진단은 event/reason/sequence/position 네 고정 enum만 기록한다. v3 이상 로컬 decoder의 SSE_EVENT 오류에서만 생성하고 공개 오류 code와 v1·v2의 null 동작은 유지한다. 원시 ID·sequence 실제 수치·본문은 보관하지 않는다. broker가 로컬 decoder의 동결된 진단만 선택하고 getter를 실행하지 않는 own data property 검사와 고정 키·enum 검증을 거친 복사본을 남긴다.
+
+후속 `sseEnvelope`는 root eventObject 키 검사 실패에만 추가하며 missing·unexpected의 고정 분류와 제한된 계수만 보관한다. 미등록 필드 이름은 other로 바꾸고 실제 키·값·ID를 남기지 않는다. root 최대128개·고유 조합32개, 계수 합계·overflow·고정 키·own data property를 검증한다. accessor·symbol·부정확한 형태는 진단에서 거부하고 getter를 실행하지 않으며 깊은 복사·동결을 거친다. broker는 로컬 decoder의 진단만 선택한다. 이 관찰 추가는 v3~v7의 응답 수용·오류 code·profile/config/body/envelope hash를 바꾸지 않는다.
+
+새 `response` 진단은 RESPONSE_FIELDS 오류의 event4종·reason9종과 키 검사 실패 시의 제한된 envelope 관찰만 보관한다. 필수5·선택28·관찰용8개 고정 이름은 수용 권한과 구분한다. root128개·32조합·8종 값 형태·count/overflow만 전달하고 원문 키·값·ID·응답 조각은 기록하지 않는다. 정확한 own data property·enum·계수 검사, getter 미실행, 깊은 복사·동결을 적용하며 broker는 로컬 decoder에서 만든 진단만 선택한다. v8 허용 조건·공개 오류 code·승인에 결합한 profile/config/body/envelope hash는 그대로다.
+
+v8 호환 예외는 첫 response.created root의 추가 필드 정확히1개에만 적용한다. boolean·ASCII 식별자1~64자·알려진 SSE/제어/prototype 예약 키 제외를 모두 만족해야 하고, 검증용 사본에서 제외한 뒤 필수3키와 내부 response를 엄격하게 검사한다. 필드 값은 동작에 쓰지 않으며 원본 전체 민감정보·중복 키·바이트/hash·원본 identity·도구·sequence·완료 검사는 그대로다. 다른 이벤트·중첩 response·직접 JSON에는 예외를 적용하지 않는다. 실제 필드의 이름·의미·ASCII 형태를 확인한 것은 아니며 일반 API 호환 정책이 ChatGPT endpoint schema를 보장한다고 주장하지 않는다. 새 v8 profile·계획·승인으로 분리하고 기존 v1~v7 계약을 보존한다.
+
 ## 7. 회사 자료와 비밀정보
 
 회사 계정·저장소 연결 전에 AI 제공자, 모델, 실행 위치, 전송 가능 자료, 보관 기간과 감사 요구를 회사 정책에 따라 확인한다. 회사 승인이 없으면 합성 데이터로 계속 개발한다.

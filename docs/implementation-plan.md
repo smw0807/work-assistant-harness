@@ -18,6 +18,8 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 
 4-C-7은 다중 파일 조사용 실제 모델 연결을 준비하는 오프라인 경로로 구현했다. 연결 후보 profile·인증정보 없는 HTTP 요청 명세·JSON/SSE 변환 계층을 메모리 가짜 전송기로 검증했다. 실제 모델 호출·인증정보 접근·외부 전송은 제외하며 수용 135~150과 전체 726개 회귀의 최종 결과는 [4-C-7 결과](stage-4c7-result.md)를 따른다. 실제 연결과 의미 정확성 검증은 완료 범위에 포함하지 않는다.
 
+4-C-8은 합성 다중 파일을 실제 모델로 읽기 전용 조사하는 별도 live 경로를 추가한다. 기존 오프라인 승인을 재사용하지 않으며 구체 입력 승인 전 실제 호출은 수행하지 않는다. 구현·로컬 검사·실제 인증/전송/격리의 결과를 [4-C-8 결과](stage-4c8-result.md)에 각각 기록한다.
+
 ### 하네스가 맡을 역할
 
 하네스는 AI 모델 자체가 아니라 모델 주변의 실행 프로그램이다. 어떤 메시지를 받을지, 어떤 자료를 읽힐지, 어느 작업에서 멈출지, 누가 승인할지, 결과를 어디에 보관할지를 정한다. 모델은 해석과 추론을 맡고, 권한과 실행 여부는 일반 코드가 결정한다.
@@ -629,9 +631,47 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 
 **완료 기준:** 신규 수용 135~150, 기존 642개와 신규 단위/통합/수용 회귀, lint·typecheck·build가 통과해야 한다. 기존 native/loopback 회귀는 합성 로컬 검증으로 따로 기록하며 실제 인증·외부 모델을 호출하는 검사는 실행하지 않는다. 검토한 명세와 fake 입력 일치, 전달 최대 1회·재시도 0회, 대상 파일/Git 변경·대상 코드 실행·실제 모델 호출·인증정보 접근·외부 전송 0이 필요하다. 현재 642개 통과 기록으로 이 단계의 검증을 대신하지 않으며, 모든 오프라인 검사를 통과해도 `liveReady=false`를 유지한다.
 
+#### 단계 4-C-8 합성 다중 파일의 실제 모델 읽기 전용 단건 조사
+
+**상태: 전체985개 검증 코드의 response 진단을 별도 승인해1회 실행했으나 SSE created 내부 response의 엄격한 키 검사에서 실패했다. 필수 누락0·미등록 추가 필드5개(array1·nonnegative-integer2·null1·object1)·overflow 없음을 확인했으며 이름·의미는 미확인이다.** 이전 v8의 origin 단정 불가 정정은 유지하고 이번 결과를 소급 적용하지 않는다. 누적 upstream14회 실패·전송 전 실행 파일 부재 실패1회·소비 승인15개·자동 재시도0회를 보존하며 유효 보고서는 없다. 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤다. 기존 v1~v8 계약·profile·hash는 보존한다. 새 v9 계획 준비를 마쳤으며 추가 승인을 기다린다. 새 계획의 승인·attempt·전송은0회다. [4-C-8 결과](stage-4c8-result.md)에 이력과 근거를 기록한다.
+
+```text
+등록 합성 flow fixture → 허용 파일/줄 수집 → 전달 근거 선택
+  → 고정 live profile + 정확한 요청 본문·명세·hash 검토
+  → 새 소유자 승인 → 원본/설정/기간 재검증 + 단일 소비·전달 예약
+  → 부모 인증 broker + 격리 Codex → 고정 endpoint에 최대 한 번 전송
+  → 완성 응답·조사 schema·인용 검증 → 로컬 읽기 전용 보고서
+취소·중단·불확실한 전달 → 소비 보존·명시 복구, 재호출·실행 export 없음
+```
+
+- **자료와 권한:** 기존 reader로 새 합성 `flow` 원본을 준비한다. `--selection`과 `--transfer`는 `all|controller|service`, 요청은 `flow-question|change-request`만 허용한다. 회사 자료·실제 저장소·Slack 본문·임의 root/본문/경로는 받지 않는다. 계획·승인·보고서에서 `writeAllowedFiles=[]`, `testCommandIds=[]`, `executionAllowed=false`를 유지한다. 원본과 Git을 보존하고 대상 코드·설치·테스트·쉘·브랜치·patch·commit/push·PR/MR은 실행하지 않는다.
+- **고정 연결 계약:** `gpt-6.1-sol`, 기존 ChatGPT 로그인, 고정 Codex upstream만 지원한다. 기존 `readonly-live-codex-v1`/`codex-chatgpt-sse-v1` 설정·profile·한도·hash는 유지해 실패 작업과 승인을 조회할 수 있다. 보완 설정 `readonly-live-codex-v2`는 `codex-chatgpt-sse-v2`와만 짝을 이루며 응답 헤더 한도 64개·16KiB를 별도로 적용한다. 두 버전 모두 native Codex 경로·SHA-256·고정 한도를 결합하고 요청 헤더 한도 32개·8KiB와 본문 직렬화는 유지한다. JSON/SSE 선택이나 임의 URL·모델·헤더·profile·인증 옵션은 제공하지 않는다. 4-C-7의 후보 검증을 완화하거나 성공 결과로 대체하지 않는다.
+- **v3 보완:** 공식 응답 metadata의 null·추가 필드 형식 차이를 로컬에서 재현했다. 새 `readonly-live-codex-v3`/`codex-chatgpt-sse-v3`와 decoder `readonly-live-response-v2`에만 엄격한 보완·원시 값 없는 단계별 오류를 적용하고 v1·v2 profile/hash는 바꾸지 않는다. profile의 `responseHeaderPolicy=discard-set-cookie-v1`은 중복 Set-Cookie도 헤더 수·바이트·문자 검사 뒤 즉시 버리고 저장·전달·재사용하지 않는다. 다른 중복 헤더는 거부한다. 요청 본문과 기존 범위·한도는 유지하며 실제 실패 원인으로 단정하지 않는다. v3 회귀 뒤 별도 승인한 실제 1회도 헤더 검사에서 실패했고 정확한 거부 조건을 로컬에서 조사한다.
+- **v4 보완:** 새 `readonly-live-codex-v4`/`codex-chatgpt-sse-v4`, decoder `readonly-live-response-v3`, `responseHeaderPolicy=http-token-discard-set-cookie-v1`에서만 HTTP token 이름·ASCII/HTAB·MIME OWS/따옴표 UTF-8·identity 대소문자를 정규화한다. v3 metadata/SSE를 상속하고 본문·모델·요청 헤더·한도는 유지한다. 비ASCII·압축·Location·Retry-After와 다른 중복 헤더 거부, Set-Cookie 검사 후 폐기는 유지하며 거부 조건별 정적 오류를 구분한다. 구형 세 버전의 조회·승인 분리를 포함한 회귀를 완료했다. 후속 고정 경로 v4 호출은 Content-Type 부재로 실패해 v5에서 대응한다.
+- **v5 원인 수정:** 고정 경로 v4 응답에서 확인한 Content-Type 부재에만 대응한다. 새 decoder `readonly-live-response-v4`·`responseFormatPolicy=content-type-or-bounded-body-v1`을 승인 profile에 결합하고, 없는 헤더 대신 제한된 본문 접두어로 기존 strict JSON/SSE parser를 선택한다. 명시적 MIME/encoding·완결성·도구/근거·크기/시간 제한은 그대로다. 구형 네 버전과 실제 저장 기록을 보존한다.
+- **후속 JSON 진단 구현 완료:** 원시 응답 없이 origin `response`/`sse`와 reason `syntax`/`depth`/`duplicate-key`/`unicode`/`sensitive-content`/`canonicalization`만 구분한다. 허용 조건·기존 오류 code·profile/config/body hash와 기존 계획의 유효성을 유지했다. 전체 895개·lint·typecheck·build 통과 뒤 별도 10분 승인으로 최대 1회·재시도 0회의 진단 호출을 수행했고 `sse`/`sensitive-content`로 실패했다. 후속 로컬 비교·합성 재현과 진단 보완은 아래 이력으로 이어지며, 정확한 원인 확인 없이 허용 범위를 넓히지 않는다.
+- **민감정보 패턴·영역 진단 구현 완료:** 기존 `json` 두 키를 유지하고 `sensitive`에 `pattern`·`area`·`usageField`·`usageShape` 고정 enum만 기록한다. canonical redaction 문자열의 실제 정규식 일치 범위를 정적 영역에 매핑하고, known usage는 정확한 공식 경로·형태·redaction 투영만 인정한다. 복수·불확실한 경우 `multiple`/`other`로 남기며 원문 필드·값·일치 문자열·offset은 저장하지 않는다. 분류기 예외도 기존 거부를 유지한다. 수용 조건·공개 오류 code·profile/config/body hash를 보존하며 전체 907개·lint·typecheck·build를 통과했다(실패/skip 0, 약 67.7초). 이 코드로 별도 승인한 실제 1회는 `credential-assignment`/`other`로 실패했다.
+- **민감정보 귀속 진단 구현 완료:** 기존 진단에 `sensitiveAttribution` 열 고정 enum을 추가했다. 실제 일치 시작 속성과 전체 범위를 분리하며 서로 다른 경로의 일치는 같은 분류라도 `multiple`로 기록한다. 전체915개·focused92개·lint·typecheck·build를 통과한 코드로 실제1회를 실행했으나 복수 귀속 상태로 실패했다. 정상 created의 `usage:null`도 기존 `invalid-shape`에 포함될 수 있어 실제 usage가 잘못됐다고 판단하지 않는다.
+- **민감정보 일치 집계 구현·실제 진단 완료:** 기존 진단을 유지하고 `sensitiveMatches`에 여섯 고정 enum 조합별 `count`, `observedMatches`, `overflow`를 추가했다. 서로 다른 경로의 같은 조합은 합산하고 최대128회 일치·32개 조합으로 제한한다. 원문 키·값·경로·일치 문자열·offset은 저장하지 않는다. 수용 조건·오류 code·profile/config/body hash를 유지한 전체924개·lint·typecheck·build 통과 코드로 별도 승인1회를 실행했으며 `tool_usage` 영역의 일치4회를 확인했다.
+- **v6 제한 보완 구현·실제 검증:** 공식 `tool_usage`의 정확한 응답 경로·필수/선택 객체 형태·안전한 정수 집계를 확인한 뒤 민감정보 검사용 숫자 별칭으로 투영한다. `tools=[]` 경계를 위한 하네스 정책으로 모든 수치를0으로 제한하며 nonzero는 정적 `TOOL_USAGE_ACTIVITY`로 거부한다. 선택 cache/output 상세 생략은 허용하되 null·추가 키·문자열은 허용하지 않는다. 집계0·생략은 도구 미실행 증거가 아니며 실제 tool call/event/output 차단을 유지한다. v1~v5 계약·hash를 보존한 새 profile의 전체935개·집중81개·lint/typecheck/build 검증을 마쳤다. 별도 승인한 실제1회는 SSE_EVENT로 실패했으며 승인 소비·단건 전송을 유지한다.
+- **v7 SSE 호환성·진단 구현·로컬 검증 완료:** 공식 생성 이벤트 예시의 sequence1을 지원하도록 첫 값0 또는1을 허용하되 이후1씩 연속되는지 검사한다. 원문 없는 정적 SSE 실패 분류를 추가하고 구형 v1~v6 계약·도구 차단·출력/완료/근거·크기/시간 검증을 보존한다. v6의 정확한 실패 조건은 미확인으로 남긴다. 전체946개·집중89개·lint/typecheck/build 검증 뒤 별도 승인1회를 실행했으나 created/envelope/zero/first로 실패했다. 누락/추가된 세부 키는 미확인이다.
+- **envelope 정적 진단 구현·로컬 검증 완료:** root eventObject 키 검사 실패 때만 `sseEnvelope`를 추가한다. missing은 등록된 필수 키 분류, unexpected는 고정 field·8종 valueType·count이며 총계·overflow를 함께 기록한다. root128개·32조합 한도, 미등록 이름 other, accessor/symbol/잘못된 형태 거부와 깊은 복사·동결을 적용한다. 실제 키·값·ID를 보관하지 않고 v3~v7 수용 조건·오류 code·profile/config/body/envelope hash를 유지한다. 전체960개·집중80개·lint/typecheck/build 및 새 계획 준비 검증을 완료했다. 같은 v7 계약으로 별도 승인1회를 실행했으나 사전미등록 boolean 추가 필드1개로 실패했다. 필드명·의미는 미확인이다.
+- **v8 제한 호환 정책 구현·로컬 검증 완료:** 첫 response.created root의 추가 필드 정확히1개가 boolean·ASCII 식별자1~64자이며 SSE/제어/prototype 예약 키가 아닐 때만 검증용 사본에서 제외한다. 필수3키·원본 전체 민감정보·내부 response·다른 이벤트/직접 JSON·도구·sequence·완결성·hash/바이트 검증은 유지하고 필드 값을 동작에 쓰지 않는다. 실제 필드명·의미·ASCII 형태는 미확인이며 공식 일반 API 호환 정책을 참고한 명시적 제한으로 구분한다. v1~v7 계약·hash를 보존하는 새 v8 profile의 전체971개·집중99개·lint/typecheck/build와 새 계획 준비 검사를 완료했다. 별도 승인1회를 실행했으나 RESPONSE_FIELDS로 실패했으며 직접 JSON/SSE origin은 미확인이다. 추가 실행은 없다.
+- **response 정적 진단 구현·로컬 검증 완료:** direct-response/created/in-progress/completed 네 경로와9종 거부 경계를 고정 enum으로 기록한다. envelope 실패만 missing/unexpected/count/overflow를 추가하며 필수5·선택28·관찰용8개 이름을 분리하고 root128개·32조합·8종 값 형태를 제한한다. 원문·키·값·ID를 보관하지 않고 getter 미실행·깊은 복사·동결·로컬 decoder 선택을 유지한다. v8 수용 조건·오류 code·hash는 바꾸지 않는다. 전체985개·집중88개·lint/typecheck/build와 독립 검토를 마쳤으며 같은 v8 계획을 별도 승인해1회 실행했으나 created 내부 response의 추가 필드5개로 실패했다. 이름·의미는 미확인이다.
+- **v9 제한 호환 정책 구현·로컬 검증 완료:** 새 decoder `readonly-live-response-v8`과 `responseExtensionPolicy=bounded-inert-json-v1`, 공유된 불변 한도 `{fields:8,keyCharacters:64,bytes:16384,nodes:256,depth:8}`을 새 profile에 결합한다. 추가 response 필드의 root 이름은 ASCII 식별자로 제한하고 제어/prototype 키를 거부한다. 추가 묶음을 깊이0·노드1로 세며 키 포함 canonical UTF-8 크기와 유한한 JSON·own data property를 검사한다. 숫자 별칭 없는 추가 원본의 민감정보 검사 뒤 검증용 사본에서만 제외한다. 알려진 필드·도구·sequence·완료 검증은 유지하고 추가 자료는 보고서·상태·동작에 사용하지 않는다. 기존9종 response 거부 분류에 extension-key/limit/value/sensitive/control을 더하고 v1~v8 계약·hash를 보존한다. 전체1005개·집중121개 검사를 통과했다. 새 계획 준비를 마쳤으며 추가 승인을 기다린다. 새 승인·attempt·전송은0회다.
+- **검토와 승인:** 최종 입력·전송 본문·인증값 없는 명세, 읽기/전달/빈 수정 범위, 모델·endpoint·인증 방식·격리 정책과 한도를 표시한다. `contextHash`·`inputHash`·`requestBodyHash`·`connectionProfileHash`·`requestEnvelopeHash`와 설정·원본·소유자·revision을 새 계획에 고정한다. 계획/내용 24시간과 명시적 승인 TTL 1~60분을 적용하고 실제 dispatch 직전에 재검증한다. 4-C-4/5/6/7 승인·결과·DB를 live로 승격하지 않는다.
+- **인증과 격리:** plan/inspect/approve/cancel/invalidate/recover/prune는 인증을 읽지 않는다. run의 승인·dispatch 이후 adapter 안에서만 기존 로그인 정보를 읽고 부모 메모리에서 사용한다. refresh·로그인 파일 변경/복제·환경 토큰 탐색은 하지 않는다. Codex에는 빈 HOME/CODEX_HOME과 단건 broker capability만 주며 기존 설정·skills·MCP·인증 파일을 넘기지 않는다. 고정된 실행 파일과 승인 입력, broker 목적지에 한정한 외부 OS 격리·guardian 종료를 실제 호출 전에 확인한다.
+- **단건 전송과 실패:** 승인 소비·attempt·전달 예약을 commit하기 전 인증/모델 전송을 하지 않는다. 실제 전달은 작업당 최대 1회이며 오류·timeout·취소·불확실한 응답·재시작 뒤 retry/redirect/fallback·승인 복원을 하지 않는다. 부모가 승인한 정확한 본문만 전송한다. 외부 요청의 취소를 서버 측 추론 중지나 미전송의 증거로 간주하지 않는다.
+- **결과와 보관:** 완성된 응답에서 조사 JSON 한 건만 추출하고 전달 근거 ID·포함된 줄, 비밀 패턴, 크기와 추가 실행 필드를 검사한다. raw/부분/거부 응답은 보관하지 않는다. payload 24시간, 최초 terminal 감사 30일, DB 수명의 소비 marker와 private 경로·링크 방어를 유지한다. 근거가 부족하면 불확실성을 표시하며 제한된 사례의 내용 검토를 일반적 의미 정확성 보증으로 확대하지 않는다.
+- **제어와 복구:** cancel/invalidate generation으로 늦은 결과를 차단한다. guardian/worker 종료·원본/Git·명세 hash·모델 임시 디렉터리 부재가 확인된 중단만 명시 recover로 정리하며 불확실한 상태는 `BLOCKED`로 남긴다. 전달 예약 뒤 취소된 작업도 같은 복구 증거를 요구한다. 자식 종료 뒤 새로 만든 모델 임시 디렉터리와 빈 HOME/CODEX_HOME만 inode/dev를 확인해 제거하고, 합성 원본/Git·DB·감사·실패 작업물은 보존한다. 복구는 인증·네트워크·모델 호출이나 원본/실패 작업물 자동 정리를 하지 않는다.
+
+구현 명령은 `readonly-live-{plan,inspect,approve,run,cancel,invalidate,recover,prune}`다. plan/approve/run은 `--config`가 필수이며 inspect·cancel·invalidate는 짧은 DB 트랜잭션으로 전역 lease를 우회한다. 나머지는 lease를 요구한다. 설정 예제는 기본 비활성이고 구체 실제 호출은 검토 가능한 계획·본문이 준비된 뒤 별도로 승인받는다.
+
+**현재 완료 판정:** 첫 v5·JSON 진단·패턴/영역 진단·귀속 진단·일치 집계 진단·v6·v7·envelope 진단·v8·response 진단 실제 호출에는 각각886개·895개·907개·915개·924개·935개·946개·960개·971개·985개 전체 회귀와 lint·typecheck·build를 통과한 코드를 사용했다. 직전 실제 호출 코드의985개는 실패/skip0, 약70.7초이며 집중88개도 통과했다. 이후 v9의 최신1005개(기존726개·신규279개)·집중121개·lint/typecheck/build가 모두 통과했다(실패/skip0, 전체 약68.5초). 실제 upstream14회 모두 failed이고 전송 전 실패까지 소비 승인15개다. 유효 조사 보고서가 없어 수용162는 미완료다. 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤다. 기존 v1~v8 계약·profile·hash는 보존한다. 새 v9 계획 준비를 마쳤으며 추가 승인을 기다린다. 새 계획의 승인·attempt·전송은0회다. 이전 소비 승인은 재사용하지 않는다. 로컬 검증과 공급자 실제 성공·회사 도입 검증을 구분한다.
+
 #### 후속 단계의 별도 범위
 
-- 4-C 후속 후보: 4-C-6의 오프라인 전송 계약 구현과 4-C-7의 오프라인 연결 준비 구현에 이어 실제 모델 단건 실증, 등록한 실제 대상 저장소의 읽기 전용 조사, Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
+- 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 
 4-C-5/4-C-6/4-C-7의 오프라인 완료 기록과 이 절의 후속 후보는 각각 구현·검증·운영 범위를 구분한다. 계획 추가가 실제 모델·인증 접근·회사 자료 처리나 외부 게시를 승인하지 않으며 후속 후보도 별도 계획 대상이다.
@@ -1004,6 +1044,19 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 148 | 격리·인증정보 비접근 (4-C-7) | 합성 canary로 제한 worker의 비허용 읽기/쓰기·네트워크·child/worker 차단 실증. 신규 경로의 credential/config 탐색·실제 transport 호출0과 환경 비상속 확인. 실제 인증 경로 존재 확인/값 읽기·TCP/UDP/listener/DNS/외부 연결0(사전 구성 stdio/로컬 IPC 제외), live OS 격리 실증은 not_run. |
 | 149 | 보관·보고서·live 승격 차단 (4-C-7) | private 권한/링크 보호, 내용24h·최초 terminal 감사30일·DB 수명 marker 유지. raw/부분/거부 응답 비보관, 조회/복구로 기한 연장·원본 자동 정리 없음. offline/fake/synthetic·semanticAccuracyVerified=false·liveReady=false·제외 항목 not_run, live 설정/승인 export 없음. |
 | 150 | CLI·회귀·오프라인 종단 완료 (4-C-7) | 문의/변경 요청·부분 근거·JSON/SSE·실패/취소/복구를 검증. 기존642개+신규 회귀·lint/typecheck/build의 실제 결과와 구현 CLI 기록. 원본/Git 무변경·대상 실행/실제 모델/인증 접근/외부 전송0, fake 최대1회·retry0, 미구현·미실행을 passed로 표시하지 않음. |
+
+| 151 | 새 live 계약과 기존 단계 보존 (4-C-8) | 새 정책/DB/승인 namespace, 고정 profile/model/endpoint/auth/config 결합. 4-C-4/5/6/7 계약·승인·해시·DB 혼용·live 승격 거부, 기존 명령 보존. |
+| 152 | 합성 읽기·전송·수정 범위 (4-C-8) | 등록 flow·선택 파일/줄·전송 근거만 허용. 미선택 본문·호스트 경로·Git·비밀 배제, 악성 자료의 범위 확대 거부, 빈 수정/검사 범위 유지. |
+| 153 | 검토 본문과 실제 전송 일치 (4-C-8) | 입력·최종 본문·인증 없는 명세와 다섯 hash·설정/격리 정책 표시. 승인 후 재직렬화/교체/override 거부, 실제 adapter 포착 바이트와 승인 내용 일치. |
+| 154 | 승인·TTL·소비·동시성 (4-C-8) | OS 소유자·필수 TTL1~60분·계획24h·dispatch 현재 시각·원본/revision/config 확인. 원자 claim/예약 전 인증·전송0, 동시 호출 최대1회, rollback/중단 뒤 소비 복원 없음. |
+| 155 | 인증의 지연 접근과 비노출 (4-C-8) | 승인된 run adapter에서만 기존 로그인 사용, 다른 명령 인증 조회0. refresh/복제/변경·환경 토큰 탐색0, 자식/본문/로그/DB에 실제 인증값0, 인증 실패 정적 오류. |
+| 156 | 실제 연결 격리와 종료 (4-C-8) | 고정 native binary·빈 HOME·OS profile·단건 broker·guardian. 합성 canary로 비허용 읽기/쓰기/추가 실행/네트워크를 차단하고 부모 중단 후 종료·소유 모델 임시 디렉터리 제거 확인. 다른 inode·루트 symlink 거부 및 하위 symlink 대상 보존. 실제 실행한 검사만 passed. |
+| 157 | 공급자 응답과 조사 검증 (4-C-8) | 고정 SSE live 계약의 완료·허용 metadata/이벤트·한도·assistant text 한 건을 검증. 도구·refusal·오류·추가 출력·허구 인용·비밀·실행 필드 거부, raw/부분/거부 응답 비보관. |
+| 158 | 단건 전달·취소·timeout (4-C-8) | 최대1회·retry/redirect/fallback0, generation·늦은 결과 차단·종료 확인. 원격 접수/중지 불확실성을 로컬 정리 성공과 구분, 실패 뒤 같은 작업 재호출0. |
+| 159 | 중단과 재시작 복구 (4-C-8) | 실제 로컬 프로세스 중단 뒤 소비 유지, 원본/Git·profile/body/envelope hash·프로세스 종료·모델 임시 디렉터리 부재 확인. 전달 예약 뒤 CANCELLED도 재검증하며 불확실 BLOCKED 구분, recover 인증·모델·전송0. |
+| 160 | private 보관과 보고 사실성 (4-C-8) | DB/sidecar·설정 링크/권한 보호, 내용24h·최초 terminal 감사30d·소비 marker. 모의/실제 응답 근거 분리, 대상 무변경·실행false, 의미 정확성 미검증·제외 항목 표시. |
+| 161 | CLI·기존 회귀 (4-C-8) | 8개 명령·필수 config/TTL·strict 옵션·lease·조회/취소·구형 승인 거부. 기존726개+신규 검사, lint/typecheck/build 실제 결과 기록. |
+| 162 | 구체 승인된 실제 단건 조사 (4-C-8) | 최종 입력·profile·범위 승인 후 실제 호출 최대1회, 전송hash·근거 인용·불확실성·원본/Git 보존과 로컬 보고 확인. 미승인/미실행이면 not_run. 회사 자료·실제 저장소·Slack·대상 실행·Git 원격0. |
 
 ### 최종 검증 묶음
 
