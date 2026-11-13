@@ -28,7 +28,7 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
 
 단계 4-C-6의 `readonly-transport-*`는 검토한 최종 요청을 별도 승인으로 가짜 전송기에 한 번 전달합니다. 신규 59개를 포함한 전체 642개 테스트와 lint·typecheck·build가 통과했습니다. 실제 모델·인증정보 접근·외부 전송은 제외했으며 [4-C-6 결과](docs/stage-4c6-result.md)에 수용 근거를 기록했습니다.
 
-단계4-C-7은726개 회귀를 통과했습니다. 4-C-8의 response 진단은 전체985개·집중88개·lint/typecheck/build 검증 뒤 별도 승인1회를 실행했으나 RESPONSE_FIELDS로 실패했습니다. 이번에는 SSE created 내부 response의 필수 키 누락0·미등록 추가 필드5개가 확인됐으며 이름·의미는 미확인입니다. 이전 v8의 origin은 여전히 미확인으로 유지합니다. 누적 upstream14회 실패·전송 전 준비 실패1회·소비 승인15개·자동 재시도0회를 보존합니다. 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤습니다. v8 계약·profile은 보존하며 새 v9 계획 준비를 마쳤으며 추가 승인을 기다립니다. 새 계획의 승인·attempt·전송은0회입니다. [4-C-8 결과](docs/stage-4c8-result.md)에 근거를 기록합니다.
+단계4-C-7은726개 회귀를 통과했습니다. 4-C-8의 최신 v9 계획은 native 포함1005개·lint/typecheck/build 검증 뒤 TTL10분으로 별도 승인해 실제1회 호출했으나 `RESPONSE_METADATA`로 실패했습니다. 세부 필드·origin은 미확인이고 유효 보고서는 없습니다. 이번 승인·attempt·소비·upstream은 각1회, 자동 재시도0회이며 원본/Git 보존·프로세스 종료·sandbox 부재를 독립 감사로 확인했습니다. 누적 upstream15회 실패·전송 전 실패1회·소비 승인16개입니다. 기존 계약과 과거 실패 이력은 [4-C-8 결과](docs/stage-4c8-result.md)에 보존합니다.
 
 ## 설치와 실행
 
@@ -450,7 +450,9 @@ pnpm harness readonly-model-preflight-prune
 
 ## 단계 4-C-8 합성 다중 파일의 실제 모델 읽기 전용 조사
 
-`readonly-live-*`는 등록된 합성 `flow` fixture에서 승인한 근거만 고정 모델에 전달합니다. 기존 4-C-5/6/7 명령과 승인은 유지합니다. 최신 response 진단 실제1회는 `event=created`, `reason=envelope`, `missing=[]`, 예상 밖 속성5개·overflow 없음으로 실패했습니다. 모두 미등록 field 분류이며 array1·음수가 아닌 정수2·null1·object1입니다. 구체 이름·의미는 미확인이고 이전 v8의 origin으로 소급 적용하지 않습니다. 유효 보고서·responseHash는 null이며 누적 upstream14회 실패·전송 전 준비 실패1회·소비 승인15개·자동 재시도0회를 보존합니다.
+2026-11-13에 재생성한 v9 계획을 TTL10분으로 별도 승인해 실제1회 호출했고, 응답 metadata 검증에서 실패했습니다. 승인·attempt·소비·실제 전송은 각1회, 자동 재시도0회입니다. 원본/Git과 코드 hash 보존, controller·guardian·child·프로세스 그룹 종료 및 sandbox 부재를 확인했습니다. 현재 상태는 `FAILED`이며 [최신 실행·감사 기록](docs/stage-4c8-result.md#v9-승인된-실제-단건-호출과-사후-감사)을 따릅니다. 유효 보고서가 없어 수용162는 미완료입니다.
+
+`readonly-live-*`는 등록된 합성 `flow` fixture에서 승인한 근거만 고정 모델에 전달합니다. 기존 4-C-5/6/7 명령과 승인은 유지합니다. 이전 response 진단 실제1회는 `event=created`, `reason=envelope`, `missing=[]`, 예상 밖 속성5개·overflow 없음으로 실패했습니다. 모두 미등록 field 분류이며 array1·음수가 아닌 정수2·null1·object1입니다. 구체 이름·의미는 미확인이고 이전 v8의 origin으로 소급 적용하지 않습니다. 당시 유효 보고서·responseHash는 null이었으며 upstream14회 실패·전송 전 준비 실패1회·소비 승인15개·자동 재시도0회의 이력으로 보존합니다.
 
 `config/readonly-live.example.json`은 기본 비활성인 설정 예제입니다. 저장소 밖 현재 OS 사용자 소유의 비공개 `0600` 설정 파일에 native Codex 경로·SHA-256을 고정합니다. v1~v8의 기존 설정/profile 계약은 보존합니다. v2 이후 요청 헤더32개·8KiB, 응답 헤더64개·16KiB, 모델 `gpt-6.1-sol`, 인증 `chatgpt`, 호출60초·최종 JSON16KiB는 고정입니다. 비활성 설정으로 계획은 검토할 수 있지만 승인·실행은 거부합니다. 버전·`enabled`를 포함한 설정 변경은 새 계획과 승인을 요구합니다. 기존 로그인은 승인된 run adapter에서만 읽고 계획·승인·조회·취소·복구·정리는 인증에 접근하지 않습니다.
 
@@ -462,7 +464,7 @@ v4는 v3 metadata/SSE 계약을 유지하며 decoder `readonly-live-response-v3`
 
 v5는 `Content-Type` 헤더가 없는 경우에만 제한된 본문 접두어로 JSON 또는 SSE를 선택합니다. 선택 뒤에는 기존 완료 응답·도구 차단·조사 schema·근거·크기 검증을 그대로 적용하며 파서 실패 시 다른 형식으로 재시도하지 않습니다. 명시된 잘못된 MIME·압축·HTML·미완성 응답은 계속 거부합니다. decoder `readonly-live-response-v4`와 `responseFormatPolicy=content-type-or-bounded-body-v1`을 새 승인 해시에 결합하고, v1~v4 계약은 변경하지 않습니다.
 
-기존 고정 진단과 새 `response`는 원문 없이 경로·거부 경계·제한된 필드 분류와 계수만 기록합니다. 이번 실제 호출에는 전체985개·집중88개·lint/typecheck/build를 통과한 코드를 사용했습니다(전체 실패/skip0, 약70.7초). 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤습니다. 기존 v1~v8 계약·profile·hash는 보존합니다. 새 v9 계획 준비를 마쳤으며 추가 승인을 기다립니다. 새 계획의 승인·attempt·전송은0회입니다. 상세 이력은 [4-C-8 결과](docs/stage-4c8-result.md)를 따릅니다.
+기존 고정 진단과 새 `response`는 원문 없이 경로·거부 경계·제한된 필드 분류와 계수만 기록합니다. 이전 response 진단 호출에는 전체985개·집중88개·lint/typecheck/build를 통과한 코드를 사용했습니다(전체 실패/skip0, 약70.7초). 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤습니다. 기존 v1~v8 계약·profile·hash는 보존합니다. 이후 재생성한 v9 계획을 별도 승인해1회 실행했으나 RESPONSE_METADATA로 실패했습니다. 승인·attempt·전송 각1회·자동 재시도0회입니다. 상세 이력은 [4-C-8 결과](docs/stage-4c8-result.md)를 따릅니다.
 
 새 `response` 진단은 direct-response/created/in-progress/completed 경로와9종 거부 경계를 고정 enum으로 구분합니다. 키 검사 실패 때만 누락·예상 밖 필드의 고정 분류·8종 값 형태·횟수·overflow를 기록하며 원문 키·값·ID는 저장하지 않습니다. 필수5개·기존 선택28개와 관찰용8개 이름은 구분하고, 관찰 사전에 이름을 추가해도 응답을 허용하지 않습니다.
 
@@ -470,7 +472,7 @@ v5는 `Content-Type` 헤더가 없는 경우에만 제한된 본문 접두어로
 
 v8는 첫 `response.created`의 root에 추가 필드가 정확히1개이고 boolean이며 이름이 ASCII 식별자1~64자인 경우에만 그 필드를 검증용 사본에서 제외합니다. 알려진 SSE·제어·prototype 키는 제외할 수 없습니다. 기존 필수3키 검증과 원본 전체 민감정보 검사·sequence·내부 response·도구·완결성·크기 제한은 유지하고 추가 필드는 동작에 사용하지 않습니다. 이는 [공식 API의 이벤트 속성 추가 호환 정책](https://developers.openai.com/api/reference/overview#backwards-compatibility)을 참고한 제한적 정책이며 ChatGPT endpoint의 확정 schema 보장은 아닙니다. 실제 필드명·의미·ASCII 형태는 여전히 미확인입니다. 구형 v1~v7 계약은 그대로 두고 새 v8 profile·계획·승인을 요구합니다.
 
-v9는 response의 알려진 필드를 기존대로 검사하고, 추가 JSON 필드만 최대8개·root 이름 ASCII 식별자64자·canonical UTF-8 합계16KiB·256노드·깊이8로 제한해 검증용 사본에서 제외합니다. 유한한 JSON 값만 받으며 제어/prototype root 키는 거부합니다. 제외할 원본 자료에도 숫자 별칭 없는 민감정보 검사를 적용하고 추가 자료는 보고서·상태·동작에 사용하지 않습니다. 새 `bounded-inert-json-v1` 정책과 한도를 profile에 결합하므로 새 계획·승인이 필요합니다. 구현과 전체1005개·집중121개 검증을 마쳤으며 새 계획 준비를 마쳤으며 추가 승인을 기다립니다.
+v9는 response의 알려진 필드를 기존대로 검사하고, 추가 JSON 필드만 최대8개·root 이름 ASCII 식별자64자·canonical UTF-8 합계16KiB·256노드·깊이8로 제한해 검증용 사본에서 제외합니다. 유한한 JSON 값만 받으며 제어/prototype root 키는 거부합니다. 제외할 원본 자료에도 숫자 별칭 없는 민감정보 검사를 적용하고 추가 자료는 보고서·상태·동작에 사용하지 않습니다. 새 `bounded-inert-json-v1` 정책과 한도를 profile에 결합하므로 새 계획·승인이 필요합니다. 구현과 전체1005개·집중121개 검증을 마쳤으며 재생성한 계획의 별도 승인 후 실제1회는 RESPONSE_METADATA로 실패했습니다.
 
 v6는 공식 `tool_usage`의 정확한 경로·객체 형태를 검사한 숫자 집계만 민감정보 검사용 별칭으로 투영합니다. `tools=[]` 경계를 위한 하네스의 추가 정책으로 모든 수치를0으로 제한하고, 0이 아닌 집계는 정적 `TOOL_USAGE_ACTIVITY` 오류로 차단합니다. 실제 도구 호출·이벤트·출력은 계속 거부하며 v1~v5는 변경하지 않습니다. 공식 문서에서 집계0이나 선택 필드 생략은 도구 미실행의 증명이 아니므로 그렇게 해석하지 않습니다.
 

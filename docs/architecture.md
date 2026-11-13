@@ -248,6 +248,8 @@ plan·approve·send의 제한 worker만 token과 네트워크를 받는다. 고�
 
 ### 단계 4-C-8의 합성 다중 파일 live 조사
 
+최신 v9 단건 실제 검증은 TTL10분의 새 승인 후1회 호출했고 `RESPONSE_METADATA`로 실패했다. 승인·소비·attempt·upstream 각1회와 자동 재시도0회, 원본/Git·코드 보존·프로세스 종료·sandbox 부재를 확인했다. 세부 실패 필드·origin·v9 호환 성공은 미확인이고 유효 보고서는 없다. 아래 과거 준비 상태와 구형 진단 이력보다 [최신 실행 결과](stage-4c8-result.md#v9-승인된-실제-단건-호출과-사후-감사)를 우선한다.
+
 `synthetic-readonly-live-v1`은 고정 합성 문맥의 실제 읽기 전용 조사를 위한 새 정책이다. `ReadonlyLiveService`와 `SqliteReadonlyLiveStore`는 `readonly-live.sqlite`에 계획·승인·단일 attempt·전달 예약·검증한 보고서를 보관한다. 기존 4-C-4/5/6/7 결과나 승인은 변환하지 않는다. 4-C-7의 fake 전용 의존 그래프도 유지한다.
 
 ```text
@@ -273,9 +275,9 @@ v4 헤더 보완은 새 설정/profile과 decoder `readonly-live-response-v3`, `
 
 Codex 자식에는 승인 입력과 빈 HOME/CODEX_HOME, 단건 broker capability만 제공한다. 대상 원본·DB·사용자 설정·로그인 파일을 읽거나 대상 코드를 실행하는 권한은 없다. 부모가 승인된 정확한 본문만 전송하고 자식의 임의 body·도구·목적지는 중계하지 않는다. OS 격리와 guardian 종료 증거, generation·한 번의 소비·재전송 금지를 유지한다. 자식 종료 뒤 guardian 또는 부모는 새로 만든 모델 임시 디렉터리의 inode/dev를 확인해 빈 HOME/CODEX_HOME과 함께 제거한 후 종료 증거를 기록한다. 원본/Git·DB·감사·실패 작업물은 보존한다. 명시 recover는 전달 예약 뒤 취소된 작업에도 프로세스 종료·임시 디렉터리 부재를 요구하며 불확실하면 `BLOCKED`로 남긴다. 회사 자료·실제 저장소·Slack·수정·검사 실행·Git 원격과 실행 export는 이 경로에 연결하지 않는다.
 
-v9는 `responseExtensionPolicy=bounded-inert-json-v1`과 공유된 불변 한도 `fields=8`, `keyCharacters=64`, `bytes=16384`, `nodes=256`, `depth=8`을 새 profile에 결합한다. decoder `readonly-live-response-v8`은 기존 v8 정책을 상속한다. 알려진 response 필드는 그대로 기존 검증에 전달하고, 추가 필드 묶음만 별도로 스냅샷·canonical화해 제한을 검사한 뒤 검증용 사본에서 제외한다. 추가 묶음 자체를 깊이0·노드1로 세고 키를 포함한 전체 UTF-8 바이트를 제한한다. root 이름은 ASCII 식별자이며 제어/prototype 키를 거부하고, 중첩 값은 유한한 JSON·own data property만 허용한다. 숫자 별칭을 적용하지 않은 추가 원본의 민감정보 검사로 정규화 충돌에 의한 누락을 막는다. 추가 자료를 상태·보고서·동작에 쓰지 않으며 기존 필드·도구·sequence·완료 검증을 유지한다. 구현과 전체1005개·집중121개 검증을 마쳤으며 새 계획 준비를 마쳤으며 추가 승인을 기다린다.
+v9는 `responseExtensionPolicy=bounded-inert-json-v1`과 공유된 불변 한도 `fields=8`, `keyCharacters=64`, `bytes=16384`, `nodes=256`, `depth=8`을 새 profile에 결합한다. decoder `readonly-live-response-v8`은 기존 v8 정책을 상속한다. 알려진 response 필드는 그대로 기존 검증에 전달하고, 추가 필드 묶음만 별도로 스냅샷·canonical화해 제한을 검사한 뒤 검증용 사본에서 제외한다. 추가 묶음 자체를 깊이0·노드1로 세고 키를 포함한 전체 UTF-8 바이트를 제한한다. root 이름은 ASCII 식별자이며 제어/prototype 키를 거부하고, 중첩 값은 유한한 JSON·own data property만 허용한다. 숫자 별칭을 적용하지 않은 추가 원본의 민감정보 검사로 정규화 충돌에 의한 누락을 막는다. 추가 자료를 상태·보고서·동작에 쓰지 않으며 기존 필드·도구·sequence·완료 검증을 유지한다. 구현과 전체1005개·집중121개 검증을 마쳤으며 재생성한 v9 계획의 별도 승인 후 실제1회는 RESPONSE_METADATA로 실패했다.
 
-v1~v8와 후속 진단의 실제 실패 이력은 결과 문서에 보존한다. 전체985개 검증 코드의 response 진단 실제1회는 SSE created 내부 response의 엄격한 키 검사에서 실패했다. 필수 키 누락은 없고 미등록 추가 필드5개(array1·nonnegative-integer2·null1·object1)·overflow 없음을 확인했다. 이름·의미는 미확인이며 이전 v8의 origin으로 소급 적용하지 않는다. 누적 upstream14회 실패·별도 전송 전 실패1회·소비 승인15개·자동 재시도0회이며 유효 보고서는 없다. 격리·인증 접근 passed와 cleanupConfirmed=true를 확인했고 독립 사후 감사에서 원본/Git33개·부모7개 identity·HEAD/base 보존과 관련 프로세스·sandbox 종료를 확인했다. 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤다. 기존 v1~v8 계약·profile·hash는 보존한다. 새 v9 계획 준비를 마쳤으며 추가 승인을 기다린다. 새 계획의 승인·attempt·전송은0회다. [4-C-8 결과](stage-4c8-result.md)에 이력을 기록한다.
+v1~v8와 후속 진단의 실제 실패 이력은 결과 문서에 보존한다. 전체985개 검증 코드의 response 진단 실제1회는 SSE created 내부 response의 엄격한 키 검사에서 실패했다. 필수 키 누락은 없고 미등록 추가 필드5개(array1·nonnegative-integer2·null1·object1)·overflow 없음을 확인했다. 이름·의미는 미확인이며 이전 v8의 origin으로 소급 적용하지 않는다. 그 시점까지 upstream14회 실패·별도 전송 전 실패1회·소비 승인15개·자동 재시도0회였으며 유효 보고서는 없었다. 격리·인증 접근 passed와 cleanupConfirmed=true를 확인했고 독립 사후 감사에서 원본/Git33개·부모7개 identity·HEAD/base 보존과 관련 프로세스·sandbox 종료를 확인했다. 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤다. 기존 v1~v8 계약·profile·hash는 보존한다. 이후 재생성한 v9 계획을 TTL10분으로 별도 승인해1회 호출했으나 RESPONSE_METADATA로 실패했다. 승인·attempt·전송 각1회·자동 재시도0회이며 원본/Git·프로세스 종료 감사는 passed다. [4-C-8 결과](stage-4c8-result.md)에 이력을 기록한다.
 
 v6는 공식 `tool_usage`의 정확한 응답 경로·필수/선택 객체 형태와 정수 집계를 확인한 뒤 해당 경로만 민감정보 검사용 숫자 별칭으로 투영한다. 하네스는 `tools=[]` 경계를 유지하기 위해 모든 집계를0으로 제한하며 nonzero는 정적 `TOOL_USAGE_ACTIVITY`로 거부한다. 이는 공식 schema보다 좁은 정책이고 집계0·선택 필드 생략 자체가 도구 미실행을 증명하지는 않는다. 실제 도구 call/event/output 차단, 요청·격리·한도는 유지하고 v1~v5 계약·해시는 바꾸지 않는다.
 
@@ -399,7 +401,7 @@ AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
 | 4-C-5 | 합성 다중 파일 읽기 전용 조사 | 읽기/전송/수정 권한 분리·불변 문맥·단건 모의 호출·근거 보고·취소/복구. 실제 모델 호출 제외 |
 | 4-C-6 | 합성 문맥의 오프라인 전송 검증 | 별도 offline/fake 계약·최종 요청 hash·단건 broker·JSON/NDJSON 응답·취소/복구. 실제 모델·인증 접근·외부 전송 제외 |
 | 4-C-7 | 다중 파일 모델 연결의 오프라인 준비 | 후보 HTTP/JSON/SSE 계약·명세 hash·in-memory fake·제한 worker. live 승격 불가, 실제 공급자 호환성 미검증 |
-| 4-C-8 | 합성 다중 파일의 실제 모델 읽기 전용 조사 | 985개 검증 코드의 response 실제 진단 실패: created 내부 response 추가 필드5개·이름/의미 미확인. 누적 upstream14회·소비 승인15개. v9 별도 호환 정책 구현·전체1005개 검증 완료·새 계획 준비 완료·추가 승인 대기 |
+| 4-C-8 | 합성 다중 파일의 실제 모델 읽기 전용 조사 | native 포함1005개 로컬 검증 뒤 v9를 TTL10분 승인해1회 호출했으나 RESPONSE_METADATA로 실패. 원본/Git·프로세스 종료 감사 passed, 유효 보고서 없음. 누적 upstream15회 실패·소비 승인16개·자동 재시도0 |
 | 4-C 후속 | 대상 저장소의 실제 Codex 작업 브랜치·commit 준비·push | 승인·격리·브랜치 보존과 행위별 승인 별도 검증. PR/MR 생성 제외. 미구현 후속 설계 |
 | 4-D | Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-B-2 승인 범위 밖 |
 
