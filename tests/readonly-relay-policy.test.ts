@@ -50,7 +50,7 @@ test('relay request bytes retain the reviewed synthetic input while profile, ser
 
 test('relay config rejects old versions, endpoint/model overrides and unexpected properties', () => {
   assert.deepEqual(parseReadonlyRelayConfig(config), config);
-  for (const mutation of [{ policyVersion: 'readonly-live-codex-v9' }, { policyVersion: 'readonly-relay-codex-v2' },
+  for (const mutation of [{ policyVersion: 'readonly-live-codex-v9' }, { policyVersion: 'readonly-relay-codex-v3' },
     { model: 'other' }, { authMode: 'api-key' }, { codexPath: '/synthetic/../codex' }, { timeoutMs: 60001 },
     { url: 'https://other.invalid' }, { maxResponseBytes: 16385 }]) {
     assert.throws(() => parseReadonlyRelayConfig({ ...config, ...mutation }), { code: 'READONLY_RELAY_INVALID_CONFIG' });

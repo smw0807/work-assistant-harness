@@ -512,11 +512,13 @@ inspect·cancel·invalidate는 전역 lease 중에도 동작하며 나머지는 
 
 후속 방향은 ChatGPT 로그인을 유지하고 공급자 응답 해석을 고정 Codex에 맡기는 relay다. 첫 구현은 실제 인증·모델 호출 없이 등록 합성 SSE를 native Codex에 전달하는 로컬 probe이며, 기존 v1~v9 명령과 승인은 유지한다. 공개 API 키 전환이나 `access_programs` 개별 허용 추가는 진행하지 않는다.
 
-relay의 원시 metadata·도구 집계 검증과 최종 보고서 검증은 보증 범위가 달라진다. [전환 계획](docs/implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)과 [로컬 결과](docs/stage-4c9-result.md)에 그 차이를 기록한다. 첫 probe는 `liveReady=false`인 합성 실험으로 유지한다. 별도 relay 계약·adapter·승인 저장소를 구현한 뒤 정확한 계획을 TTL10분으로 승인해 실제1회 호출했으나 HTTP200 응답 본문의256KiB 상한 초과로 실패했다. 유효 보고서는 없으며 원본/Git·프로세스 종료 사후 감사를 수행했다. 자동 재시도는0이고 소비 승인을 재사용하지 않는다. [실제 단건 결과](docs/stage-4c9-result.md#승인된-relay-실제-단건-호출과-사후-감사)를 참조한다.
+relay의 원시 metadata·도구 집계 검증과 최종 보고서 검증은 보증 범위가 달라진다. [전환 계획](docs/implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)과 [결과](docs/stage-4c9-result.md)에 그 차이를 기록한다. 첫 probe는 `liveReady=false`인 합성 실험으로 유지하고 relay-v1의256KiB 초과 실패도 보존한다. 이후 별도4MiB v2 계획을 로컬1125개 회귀·독립 감사 후 TTL10분으로 승인해 실제1회 호출했고 HTTP200·362,095byte·EOF·유효 조사 보고서로 `REPORTED`를 확인했다. 원본/Git·코드/자료 보존·로컬 프로세스 종료를 사후 감사했다. 자동 재시도는0이고 소비 승인을 재사용하지 않는다. [예산 보완 실제 결과](docs/stage-4c9-result.md#응답-예산-보완의-승인된-실제-단건-호출)를 참조한다.
 
 ## 단계 4-C-9 별도 relay 계약과 승인
 
 `synthetic-readonly-relay-v1`·`codex-chatgpt-relay-v1`은 기존 ChatGPT 로그인과 고정 native Codex를 사용하는 새 계약입니다. `readonly-live-*`의 v1~v9 정책·DB·승인·hash는 유지하며 새 `readonly-relay.sqlite`와 `readonly-relay-runs/`를 사용합니다. 설정 예시 [readonly-relay.example.json](config/readonly-relay.example.json)은 기본 비활성입니다. 복사한 private 설정의 native 경로·SHA-256을 실제 검증한 값으로 지정해야 합니다. enabled 변경도 계획 hash가 달라지므로 새 계획이 필요합니다.
+
+전체 응답 예산을 보완한 `readonly-relay-codex-v2`·`codex-chatgpt-relay-v2`는4MiB와 `readonly-relay-reception-v1` 진단 정책을 별도 profile/hash에 고정합니다. [readonly-relay-budget.example.json](config/readonly-relay-budget.example.json)도 기본 비활성이고 명령은 아래와 같습니다. v1의256KiB·config/profile/본문/계획 hash와 v9 경로를 보존하며 v1/v2 계획·payload·설정·승인을 서로 바꿔 쓰지 못합니다. 같은 선택의 요청 본문은 유지하지만 새 profile·config·planHash에 대한 별도 승인이 필요합니다.
 
 ```sh
 pnpm harness readonly-relay-plan --fixture flow --config /private/path/relay.json --selection all --transfer all --request flow-question --data-dir /private/path/relay-data
@@ -534,7 +536,11 @@ plan/approve/run은 `--config`가 필수입니다. fixture는 `flow`, selection/
 
 부모는 승인 본문 바이트만 최대1회 전송하며 인증 조회 직전과 네트워크 전송 직전에 승인 기간·generation·원본을 재검증합니다. 로그인 파일은 승인된 run의 부모만 읽고 refresh·복제·변경하지 않습니다. 자식은 빈 HOME과 단건 capability만 받습니다. retry/redirect/fallback은0이고 실패·중단 뒤 소비를 복원하지 않습니다.
 
-응답은256KiB EOF까지 부모 메모리로 수신한 뒤 UTF8·SSE frame64KiB/2048개·일반 JSON 문법/중복 키/깊이16·인증값 반사를 검사합니다. 통과 전 자식 전달은0입니다. 원문·Unicode escape·순서 있는 JSON 문자열 조각과 최종 CLI JSON의 실제 token/account 반사를 검사하되, 임의 인코딩·암호화·변형 전반의 탐지는 보증하지 않습니다. upstream 헤더·쿠키·오류 본문은 자식에 중계하거나 저장하지 않습니다.
+응답은 v1에서256KiB, v2에서4MiB의 전체 상한을 적용해 EOF까지 부모 메모리로 수신한 뒤 UTF8·SSE frame64KiB/2048개·일반 JSON 문법/중복 키/깊이16·인증값 반사를 검사합니다. 전체 wire 예산과 최종 조사 JSON16KiB는 독립된 한도입니다. 수신은 상한 크기의 단일 초기화 버퍼를 쓰고 실제 길이만 hash·검증·전달합니다. 이 버퍼 한도가 프로세스 전체 메모리 상한은 아닙니다. 통과 전 자식 전달은0입니다. 원문·Unicode escape·순서 있는 JSON 문자열 조각과 최종 CLI JSON의 실제 token/account 반사를 검사하되, 임의 인코딩·암호화·변형 전반의 탐지는 보증하지 않습니다. upstream 헤더·쿠키·오류 본문은 자식에 중계하거나 저장하지 않습니다.
+
+v2의 `call-report.json.reception`에는 수신/보관/계수 관찰 바이트·chunk·frame 계수와 EOF·고정 종료/한도 enum만 남깁니다. `inspectedBytes`는 제한된 wire prefix의 계수 관찰량이며 JSON·반사 검증 완료량이 아닙니다. 상한 초과를 일으킨 chunk 전체가 `receivedBytes`에 잡혀도 모두 버퍼에 저장하지 않습니다. 원시 본문·필드명·값·ID·오류 문자열은 이 진단에 넣지 않으며 observer 실패는 원래 판정을 바꾸지 않습니다.
+
+1/2/4MiB 오프라인 행렬에서 등록 정상 corpus 네 개와 자원·작은 chunk·취소 관찰 기준을 통과한 최소 후보4MiB를 선택했습니다. 이는 합성 부하의 로컬 검증이며 실제 실패 응답의 전체 크기·최종 답변 크기는 미확인입니다. 실제 공급자 호환성이나 다음 호출 성공을 보장하지 않으며, 새 계획의 승인·호출·사후 감사 결과는 [4-C-9 결과](docs/stage-4c9-result.md)에 별도로 기록합니다. 실행 중 자동 상한 증가·재시도·fallback은 없습니다.
 
 Codex가 응답 의미를 해석하고 하네스는 단일 완료 turn·최종 조사 JSON16KiB·전달 근거/줄·비밀/실행 필드를 검증합니다. 보고서의 `responseHash`는 원시 바이트, `finalTextHash`는 최종 text를 식별합니다. `contractVerified.cliOutput`과 `unverifiedResponseChecks`를 분리하며 private metadata·공급자 sequence/tool_usage·원시 전체 민감정보 검사·부모 text 비교를 통과했다고 표시하지 않습니다. `tools=[]`·OS 격리·CLI 도구 결과 거부는 유지하지만 공급자 도구 활동0을 보증하지 않습니다. operation55초와 공유 정리 대기5초를 적용하고 종료 불확실은 `BLOCKED`로 남깁니다. 하네스 DB·일반 로그에 원시/부분/거부 응답을 저장하지 않습니다. native 임시 영역은 종료 확인 후 제거하며 정리 불확실 시 잔류 내용의 제거를 보증하지 않습니다. 내용24h·terminal 감사30d·DB 수명 소비 marker를 유지합니다.
 

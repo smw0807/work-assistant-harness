@@ -299,7 +299,13 @@ ChatGPT 로그인을 유지하고 응답 해석을 고정 Codex에 맡기는 방
 
 후속 요청으로 `synthetic-readonly-relay-v1`·`codex-chatgpt-relay-v1`과 전용 DB·8개 명령·기본 비활성 adapter를 구현했다. 부모는 정확한 승인 본문·목적지·인증·단건 전송을 강제하며 인증 접근과 실제 전송의 두 경계에서 승인·generation·원본을 재검증한다. 전체256KiB EOF와 일반 SSE/JSON·인증 반사 검사를 마친 뒤에만 원시 바이트를 격리 Codex에 전달한다. private metadata의 필드별 허용 목록을 추가하지 않는다.
 
-Codex가 해석한 최종 text는 단일 turn·조사 schema·근거/줄·민감정보 검증을 거친다. 원문 hash와 최종 text hash를 구분하고 `contractVerified.cliOutput`·`unverifiedResponseChecks`에 검증 책임을 명시한다. 부모의 비공개 metadata/sequence/tool_usage 검사와 부모/CLI text 비교는 수행하지 않는다. 새 계획을 TTL10분으로 별도 승인한 실제1회는 HTTP200 응답 본문256KiB 상한 초과로 실패했고 유효 보고서는 없다. 원본/Git·로컬 프로세스 종료를 사후 감사했으며 자동 재시도/승인 복원은0이다. 로컬 가짜/native 검증을 공급자 호환성 완료로 바꾸지 않는다. [구현 순서와 책임 변경](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환), [실제 결과와 검토 이력](stage-4c9-result.md)을 구분한다.
+응답 예산 보완은 별도 `readonly-relay-codex-v2`·`codex-chatgpt-relay-v2`에 전체4MiB와 `readonly-relay-reception-v1`을 결합한다. v9와 relay-v1의 config/profile/본문/계획 hash·256KiB 판정은 유지한다. 같은 선택의 wire 본문은 같아도 profile·config·계획 hash가 달라지므로 승인과 payload를 버전 사이에 재사용하지 않는다. 요청256KiB·frame64KiB/2048개·JSON 깊이16·최종 조사 JSON16KiB·CLI128KiB/stderr16KiB·operation55초+공유 정리5초·반사64상태는 그대로다.
+
+collector는 상한 크기의 단일 초기화 버퍼에 복사하고 실제 수신 길이만 hash·검증·전달한다. 작은/빈 즉시 chunk에서도 주기적으로 event loop에 양보하며 read/yield의 취소 대기는 한 개만 유지한다. v2 call-report의 숫자 진단은 받은/보관한/계수 관찰한 wire 바이트·chunk·frame·EOF·종료 enum으로 제한하고, `inspectedBytes`를 의미 검증 완료량으로 쓰지 않는다. EOF·일반 JSON·인증 반사 검사가 끝나기 전 자식 전달0과 원문 비보관을 유지한다. 버퍼 예산은 프로세스 전체 메모리 강제 상한이 아니다.
+
+등록 합성 corpus 네 개를1/2/4MiB로 비교하고 로컬 elapsed/CPU·RSS/heap/external·취소 관찰 기준을 통과한 최소 후보4MiB를 선택했다. 원래 v1 decoder와 새 기본256KiB/observer 경로의 수용·오류 code·raw hash 차등검증도 일치했다. 이는 로컬 검증 근거이며 이전 실제 응답의 전체 크기나 공급자 호환성·다음 호출 성공을 확정하지 않는다. v2의 실제 승인·호출·사후 감사는 결과 문서의 별도 기록을 따른다.
+
+Codex가 해석한 최종 text는 단일 turn·조사 schema·근거/줄·민감정보 검증을 거친다. 원문 hash와 최종 text hash를 구분하고 `contractVerified.cliOutput`·`unverifiedResponseChecks`에 검증 책임을 명시한다. 부모의 비공개 metadata/sequence/tool_usage 검사와 부모/CLI text 비교는 수행하지 않는다. relay-v1의256KiB 실제 실패를 보존하고, 이후 새4MiB v2 계획을 로컬1125개 회귀·독립 감사 뒤 TTL10분으로 별도 승인한 실제1회에서 HTTP200·362,095byte EOF와 유효 보고서·`REPORTED`를 확인했다. 원본/Git·코드/검토 자료·로컬 프로세스 종료를 사후 감사했으며 자동 재시도/승인 복원은0이다. 구체 단건의 성공과 일반 공급자 호환성·의미 정확성·회사 도입 검증을 구분한다. [구현 순서와 책임 변경](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환), [실제 결과와 검토 이력](stage-4c9-result.md)을 구분한다.
 
 ## 3. 구성 요소와 책임
 
@@ -414,7 +420,7 @@ AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
 | 4-C-6 | 합성 문맥의 오프라인 전송 검증 | 별도 offline/fake 계약·최종 요청 hash·단건 broker·JSON/NDJSON 응답·취소/복구. 실제 모델·인증 접근·외부 전송 제외 |
 | 4-C-7 | 다중 파일 모델 연결의 오프라인 준비 | 후보 HTTP/JSON/SSE 계약·명세 hash·in-memory fake·제한 worker. live 승격 불가, 실제 공급자 호환성 미검증 |
 | 4-C-8 | 합성 다중 파일의 실제 모델 읽기 전용 조사 | metadata 진단 실제1회는 created/access-programs/value로 실패. 원본/Git·프로세스 종료 감사 passed, 수용162 미완료. 기존 계약·native1020개·차등7416건 근거 유지. 누적 실제 upstream16회 실패·소비 승인17개·자동 재시도0 |
-| 4-C-9 | ChatGPT 로그인 유지 relay의 새 계약·adapter·승인 | TTL10분 별도 승인 후 실제1회가 HTTP200·응답 본문256KiB 초과로 실패. 원본/Git·로컬 종료 감사, retry0·유효 보고서 없음·수용178 미완료 |
+| 4-C-9 | ChatGPT 로그인 유지 relay의 새 계약·adapter·승인 | v1 실패 보존 후 새4MiB v2 계획을 TTL10분 별도 승인해 실제1회·362,095byte EOF·유효 보고서·REPORTED. 원본/Git·코드/자료·로컬 종료 감사, retry0·v2 단건 수용178 통과 |
 | 4-C 후속 | 대상 저장소의 실제 Codex 작업 브랜치·commit 준비·push | 승인·격리·브랜치 보존과 행위별 승인 별도 검증. PR/MR 생성 제외. 미구현 후속 설계 |
 | 4-D | Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-B-2 승인 범위 밖 |
 

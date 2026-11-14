@@ -159,6 +159,7 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
           isolation: isolation ? 'passed' : 'not_run', credentialAccess: credentialAccess ? 'passed' : 'not_run',
           transport: this.synthetic ? 'fake' : 'live', upstreamCalls: broker?.calls() ?? 0, cleanupConfirmed,
           http: broker?.httpObservation() ?? null, relay: broker?.result() ?? null, finalTextHash,
+          ...(dispatch.requestEnvelope.profileId === 'codex-chatgpt-relay-v2' ? { reception: broker?.receptionDiagnostic() ?? null } : {}),
           failureCode: cleanupConfirmed ? broker?.failure() ?? failureCode : 'READONLY_RELAY_LIFECYCLE_UNSAFE',
         }, null, 2), { flag: 'wx', mode: 0o600 });
       }

@@ -5,8 +5,9 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import { HarnessError } from '../domain/errors.js';
 import type { ReadonlyRelayConfig, ReadonlyRelayDispatch } from '../domain/readonly-relay.js';
-import { assertReadonlyRelayDispatch } from '../policy/readonly-relay-policy.js';
-import { assertReadonlyRelayCredentialText, collectReadonlyRelayResponse } from '../policy/readonly-relay-protocol.js';
+import { assertReadonlyRelayDispatch, getReadonlyRelayLimits } from '../policy/readonly-relay-policy.js';
+import { assertReadonlyRelayCredentialText, collectReadonlyRelayResponse, type ReadonlyRelayReceptionOptions } from '../policy/readonly-relay-protocol.js';
+import { copyReadonlyRelayReceptionDiagnostic, type ReadonlyRelayReceptionDiagnostic } from '../policy/readonly-relay-reception-diagnostics.js';
 import type { CodexCredential } from './codex-credentials.js';
 
 export type ReadonlyRelayCredential = Extract<CodexCredential, { kind: 'chatgpt' }>;
@@ -55,6 +56,7 @@ export interface ReadonlyRelayBroker {
   port: number; capability: string; calls(): number; failure(): string | null;
   result(): { responseHash: string; bodyBytes: number; relayCompleted: true; credentialReflection: 'passed' } | null;
   httpObservation(): ReadonlyRelayHttpObservation | null;
+  receptionDiagnostic(): ReadonlyRelayReceptionDiagnostic | null;
   verifyFinalText(text: string): void;
   close(): Promise<void>;
 }
@@ -73,6 +75,7 @@ export const startReadonlyRelayBroker = async (
   let reserved = false; let calls = 0; let failure: string | null = null;
   let finalTextGuard: ((text: string) => void) | null = null;
   let result: ReturnType<ReadonlyRelayBroker['result']> = null; let observation: ReadonlyRelayHttpObservation | null = null;
+  let reception: ReadonlyRelayReceptionDiagnostic | null = null;
   const active = new Set<Promise<void>>();
   const observeHeaders = (value: ReadonlyRelayHttpObservation): void => {
     if (!value || Object.keys(value).sort().join(',') !== 'headerBytes,headerCount,status' || observation !== null
@@ -119,7 +122,10 @@ export const startReadonlyRelayBroker = async (
       beforeTransmission(); calls++;
       const upstream = await transport(approved, credential, controller.signal, observeHeaders);
       // Full bounded EOF and reflection checks precede the first byte sent to the uncredentialed child.
-      const collected = await collectReadonlyRelayResponse(upstream, controller.signal, credential);
+      const receptionOptions: ReadonlyRelayReceptionOptions | undefined = approved.requestEnvelope.profileId === 'codex-chatgpt-relay-v2'
+        ? { responseBytes: getReadonlyRelayLimits(approved.requestEnvelope.profileId).responseBytes as NonNullable<ReadonlyRelayReceptionOptions['responseBytes']>,
+          observeDiagnostic: (value) => { reception = copyReadonlyRelayReceptionDiagnostic(value); } } : undefined;
+      const collected = await collectReadonlyRelayResponse(upstream, controller.signal, credential, receptionOptions);
       if (controller.signal.aborted) fail('CANCELLED');
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
       await new Promise<void>((resolve, reject) => {
@@ -153,6 +159,7 @@ export const startReadonlyRelayBroker = async (
   if (signal.aborted) { signal.removeEventListener('abort', abort); abort(); await new Promise<void>((resolve) => server.close(() => resolve())); fail('CANCELLED'); }
   return { port: (server.address() as AddressInfo).port, capability, calls: () => calls, failure: () => failure,
     result: () => result ? { ...result } : null, httpObservation: () => observation ? { ...observation } : null,
+    receptionDiagnostic: () => copyReadonlyRelayReceptionDiagnostic(reception),
     verifyFinalText: (text) => { if (!result || !finalTextGuard) fail('INVALID_RESPONSE'); finalTextGuard!(text); },
     close: async () => {
       signal.removeEventListener('abort', abort); abort();

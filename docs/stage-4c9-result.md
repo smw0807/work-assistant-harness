@@ -2,7 +2,7 @@
 
 2026-11-14 사용자가 ChatGPT 로그인 유지 방향을 선택했다. 비공개 응답 metadata의 개별 허용값을 계속 추가하는 대신, 고정 Codex가 응답을 해석하는 relay의 로컬 가능성을 확인한다. 구현 순서와 수용 기준은 [기준 계획](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)에 둔다.
 
-**최신 상태:** relay 계획 `472396eb-cf23-4e7a-9f57-c401cef52aa7`을 사용자 승인 TTL10분으로 실제1회 실행했다. HTTP200 응답 본문이 고정256KiB 상한을 넘어 `READONLY_RELAY_RESPONSE_LIMIT`로 거부됐고 Task는 `FAILED`이며 유효 보고서는 없다. 승인·사용·소비·attempt·dispatch·upstream 각1회·자동 재시도0이며 원본/Git·프로세스 종료 사후 감사를 수행했다. 아래 승인 대기 자료는 당시 준비 이력이다. 기존 v9 계약과1096개 로컬 검증 근거는 유지하며 누적 실제 upstream17회 실패·소비 승인18개다. 수용162·178은 미완료다.
+**최신 상태:** 전체 응답 예산4MiB의 별도 relay-v2 계획 `5fa7b107-3486-44b0-bed4-482bb77da5cd`을 사용자 승인 TTL10분으로 실제1회 실행해 `REPORTED`와 유효 조사 보고서를 얻었다. HTTP200·362,095byte·1162frame·EOF를 확인했고 승인·사용·소비·attempt·dispatch·upstream 각1회·자동 재시도0이다. 로컬1125개 회귀와 원본/Git·코드/검토 자료 보존·로컬 프로세스 종료를 확인했다. v9와 relay-v1 계약·hash·기존 실패 이력은 보존하며 아래 승인 대기 자료는 당시 준비 이력이다. 누적 upstream18회 중 성공1회·실패17회, 소비 승인19개다. 수용178은 새 v2의 구체 단건에서 통과했으며 기존 v9의 수용162는 미완료다.
 
 ## 첫 probe의 구현과 검증 이력
 
@@ -117,3 +117,60 @@ root 사후 감사는2026-11-14T12:01:23.805Z에 passed를 기록했다. 원본/
 새 실행 자료는 같은 review 디렉터리의 `pre-call-validation.json`, `pre-call-independent-audit.json`, `approval-result.json`, `run-invocation.json`, `run-invocation-result.json`, `run-result.json`, `post-run-audit.json`, `post-run-independent-audit.json`, `post-run-final-summary.json`과 `data/readonly-relay-runs/<task-id>/{call-report,lifecycle,child}.json`에 분리한다. `run-invocation.json`은 배타 생성으로 단건 CLI 실행을 표시하고 기존 승인 전 artifact는 덮어쓰지 않았다. `actual-call-artifact-hashes.json`으로 새 실행 자료를 고정하며 원시 응답·실제 인증값을 추가하지 않았다.
 
 수용178의 실제 실행/단건·보존·로컬 종료 확인은 수행했지만 유효 보고서가 없어 최종 조사 성공은 failed/미완료다. 수용162도 미완료로 유지한다. 기존4-C-8의upstream16회·소비17개에 이번 relay1회·소비1개를 더해 누적 실제 upstream17회가 모두 실패했고 소비 승인은18개다(전송 전 실패1개 포함). 이번 승인·작업을 재사용하거나 자동 재시도하지 않는다. 다음 최소 작업은 응답 수집 경계의 오프라인 검토이며 추가 실제 호출은 수행하지 않았다.
+
+## 응답 예산 보완의 로컬 구현과 검토 자료
+
+256KiB 실패 뒤 별도 요청으로 `readonly-relay-codex-v2`·`codex-chatgpt-relay-v2`를 추가했다. v2 전체 응답 예산은4MiB이며 최종 조사 JSON16KiB·frame64KiB/2048개·깊이16·CLI128KiB/stderr16KiB·operation55초+공유 정리5초·EOF/인증 반사 검사 전 자식 전달0은 유지한다. v9와 relay-v1의 설정/profile/본문/계획 hash·기본256KiB 판정은 보존한다. 같은 합성 선택의 wire 본문은8897byte로 같다.
+
+변경 파일은 `src/domain/readonly-relay.ts`, `src/policy/readonly-relay-{policy,protocol,reception-diagnostics,capacity-fixtures}.ts`, `src/adapters/readonly-relay-{broker,codex,capacity-probe}.ts`, 비활성 예시 `config/readonly-relay-budget.example.json`과 예산·수신 진단·capacity·native 통합 테스트다. 기존 잘못된 버전 거부 fixture는 새 유효 v2 대신 v3를 거부하도록 갱신했다. package/lock·기존 v9·승인 저장소·CLI 명령은 바꾸지 않았다.
+
+수신 chunk 배열 대신 상한 크기의 단일 초기화 버퍼와 실제 길이 view를 사용한다.128chunk마다 event loop에 양보하고 현재 read/yield 하나에만 취소 waiter를 붙인다. 초기 단일byte 시험에서 공유 미해결 Promise의 handler 누적으로 RSS 증가148.75MiB가 선택 기준96MiB를 넘었다. 실패 측정과 수정 전 소스를 보존하고 waiter를 수정한 뒤 동일 시험의 RSS 증가24.88MiB·elapsed121.43ms를 확인했다. 이는 로컬 관찰이며 OS 메모리 상한 보장이 아니다.
+
+최종 합성 행렬은 정상 corpus4개×1/2/4MiB의12행과 보완8행이다. 정상 body는18,931/588,150/1,654,598/2,874,461byte이며 가장 큰 case는1100delta·1191frame·최종3406byte다. 모든 corpus를 수용하고 정한 자원 기준을 통과한 최소 후보는4MiB다. 정상 case 최대elapsed69.74ms·CPU107.45ms·RSS 증가61.0MiB, 취소 관찰1.11ms 이하였다. 이 합성 반복 metadata는 실제 응답 분포나 이전 실패 응답의 크기를 추정하는 자료가 아니다.
+
+v2의 수신 진단은 숫자8개와 `eof`·`termination`·`failedLimit`의 고정11키다. received/buffered/inspected 바이트를 구분하고 inspected는 wire prefix 관찰량으로 한정한다. 원문·필드명·값·ID·offset·임의 오류 문자열을 저장하지 않는다. observer 예외·transport가 재생한 과거 오류가 현재 진단 출처나 기존 판정을 바꾸지 않는지 검사했다. v1 call-report에는 새 필드를 넣지 않았다.
+
+| 검증 | 결과 |
+| --- | --- |
+| lint / typecheck / build | passed |
+| 고정 native 포함 전체 회귀 |1125 passed /0 failed /0 skipped |
+| 원형 v1 차등 비교 |56 vectors·collector310비교·CLI4비교, 불일치0 |
+| 용량 행렬 |20행 기대 결과·자원 기준 passed, 최소4MiB |
+| 큰 합성 SSE native 통합 |v2 유효 보고서·EOF/두 hash/정리 passed, v1 동일 응답 상한 거부·기존 보고서 형식 보존 |
+| 준비 시점 실제 인증/모델/전송 |not_run /0회 |
+
+검토 디렉터리는 [stage4c9-relay-budget-jt1xn91r](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c9-relay-budget-jt1xn91r)다. 디렉터리0700·자료/설정/DB0600, 합성 source0555·파일0444를 유지한다. 계획 `5fa7b107-3486-44b0-bed4-482bb77da5cd`은2026-11-14T13:16:00.827Z에 생성됐고24시간 유효하다. 계획 hash는 `1408fd46d2933bfb8f0598e31b9cc3e3ee48314b086f6b16b5fd8825a0a2a101`이다. source/Git33개·부모11개·검증 소스279개·코드/빌드813개와 검토 자료41개를 고정했다. 기준270개 중264개가 불변이고 허용한 기존 relay 소스/테스트6개만 바뀌었다.
+
+정식 독립 승인 전 감사23항목이 passed였고 DB의 task1·승인/사용/소비/attempt/dispatch0과 `AWAITING_APPROVAL`을 확인했다. 잠정 감사의 첫 checker는 DB payload wrapper를 직접 비교해 잘못된 실패를 기록했으며 수정된 감사로 정정하고 두 파일을 모두 보존했다. `pre-call-artifact-hashes.json`은 원래38개 manifest와 정정 감사·단건 실행 wrapper까지41개를 고정한다. 초기 실패 측정·감사 checker 오류와 수정 후 통과 자료를 덮어쓰지 않았다.
+
+## 응답 예산 보완의 승인된 실제 단건 호출
+
+사용자가 새 응답 상한 개선 계획에 TTL10분·실제1회·자동 재시도0을 별도 승인했다. 위 고정 코드·자료·원본을 다시 확인한 뒤 정확한 새 planHash로 승인1개를 만들고 단건 invocation marker를 배타 생성했다. 실행 중 예산·모델·설정·계약을 바꾸지 않았다.
+
+| 항목 | 실제 결과 |
+| --- | --- |
+| Task / CLI 종료 코드 | `REPORTED` /0 |
+| 승인 ID | `bc0670fc-661d-42f1-9180-dcfc116a4d05` |
+| 승인 생성~만료 UTC |2026-11-14T13:25:40.496Z~13:35:40.496Z, 정확600초 |
+| 승인 생성~만료 KST |2026-11-14 22:25:40~22:35:40 |
+| 사용 / dispatch UTC |13:25:52.387Z /13:25:52.396Z, TTL 이내 |
+| 완료 UTC / KST |13:26:17.617Z /22:26:17 |
+| attempt | `0d485997-51d2-470f-9c63-13f03c47b643` |
+| 승인/사용/소비/attempt/dispatch/upstream |각1회, 자동 재시도0 |
+| HTTP |200, 헤더35개/3126byte |
+| received / buffered / inspected |각362,095byte |
+| chunk / 최대 chunk |229개 /16,378byte |
+| frame / 최대 frame / 잔여 frame |1162개 /9313byte /0byte |
+| EOF / 종료 / 한도 실패 |true /eof /none |
+| raw response hash | `605e4725f90f8bbaa612fe3608bd292eb9a12d45b53974f60195e17f6f841ab9` |
+| final text hash | `83b23801370feb2ec3eef130853d20c30bae63592ec8da7ef814fa53717b09f7` |
+| 격리 / 부모 인증 접근 / 정리 |각passed |
+| 원시 응답 보관 / 강제 종료 |없음 /없음 |
+
+이번 관측 응답362,095byte는256KiB를 넘었고 새4MiB 전체 예산 이내였다. 일반 SSE/JSON·인증 반사·고정 CLI 해석·최종 schema/인용 검증을 통과해 `classification=question`·근거 사실5개의 조사 보고서를 얻었다. 보고서는 controller의 `createRequest(id)` 반환과 service의 신규201·중복409 흐름을 설명한다. 의미 정확성은 `not_run`이며 회사 자료·실제 대상 저장소·Slack·대상 코드 실행·Git 변경/외부 게시를 검증한 것은 아니다. 공급자 metadata/sequence/tool_usage 미검사와 원문 전체 민감정보/부모 text 비교 미수행도 그대로다. 한 번의 성공을 향후 모든 응답의 예산·호환성 보장으로 확대하지 않는다.
+
+root 사후 감사에서 source/Git33개·부모11개·검증 소스279개·코드/빌드813개·검토41개와 하네스 HEAD/index/main3개 hash 보존을 확인했다. controller56956·guardian56961·child56963·native PGID-56963·launcher56899·PGID-56899·wrapper56395가 모두ESRCH이며 lifecycle/child는closed, sandbox와 빈 HOME은 없다. 로컬 프로세스 종료는 원격 추론 종료 확인과 구분한다. 실행 후 제품 소스 변경과 회귀 재실행은 not_run이며 고정 통과 코드 hash를 보존하고 결과 문서만 갱신한다.
+
+독립 사후 감사20항목도 passed다. DB 원자 소비·기간 내 사용/전송/완료·저장 보고서 schema/근거/비밀/실행 필드와 reportHash 재계산·두 응답 hash의 보고서/attempt/call 간 일치·수신 숫자·고정 파일/원본/Git·프로세스/그룹 부재와 임시 영역 제거를 재확인했다. 폐기한 원시 wire와 원래 CLI 최종 text의 hash를 사후 직접 재계산한 것은 아니며, 생성 시 검증과 기록 간 일치를 확인한 것이다. 감사 중 추가 인증·모델·외부 네트워크·승인·run·DB 변경은0이다.
+
+실행 자료는 같은 review의 `approval-result.json`, `run-invocation.json`, `run-launcher.json`, `run-invocation-result.json`, `run-result.json`, `post-run-audit.json`, `post-run-independent-audit.json`, `post-run-final-summary.json`과 실행 디렉터리의 `call-report.json`, `lifecycle.json`, `child.json`에 남기고 `actual-call-artifact-hashes.json`으로 고정한다. 소비 승인은 복원하지 않는다. 누적 실제upstream18회 중 성공1회·실패17회, 소비 승인19개이며 전송 전 실패1개를 포함한다. 수용178·186은 이 새 v2 단건에서 통과했고 기존 v9의 수용162는 미완료로 보존한다. 다음 최소 작업은 검토한 구현·실행 결과의 커밋이며 추가 호출은 수행하지 않는다.

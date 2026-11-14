@@ -401,13 +401,19 @@ opaque relay 후보에서는 부모가 비공개 metadata·SSE 의미 순서·�
 
 후속 요청으로 이 책임 변경을 고정한 새 profile·정책·DB/승인 namespace·보고서 계약을 구현했다. 기본 비활성 `readonly-relay-codex-v1`은 새 계획과만 결합하며 v9 승인이나 DB를 가져오지 않는다. 부모가 인증을 보유하고 정확한 승인 본문·고정 목적지·최대1회·retry/redirect/fallback0·TTL/generation·프로세스 종료를 강제하는 경계는 유지한다. 인증 조회 직전의 guard와 네트워크 직전의 단건 guard를 분리해 긴 preflight·인증 읽기 이후의 만료·취소도 차단한다.
 
-원시 응답은256KiB EOF까지 메모리로 수집한 뒤에만 자식에 전달한다. 원문과 일반 JSON의 decoded 키/문자열, wire 순서의 문자열 조각 조합·최종 CLI JSON에 실제 token/account가 반사되면 정적으로 거부한다. 조각 상태는64개·JSON 깊이는16으로 제한하고 초과를 거부한다. 이는 고정된 반사 형태의 방어이며 base64·암호화·임의 변형 전체의 비노출 보증은 아니다. upstream 오류·원시 헤더·쿠키를 중계·보관하지 않고 인증 객체는 부모의 동결 사본으로 한정한다.
+응답 예산 보완은 새 `readonly-relay-codex-v2`·`codex-chatgpt-relay-v2`의 profile/hash에 전체4MiB와 `readonly-relay-reception-v1`을 고정한다. v9와 relay-v1의 config/profile/본문/계획 hash·256KiB 판정을 보존하고, 버전이 다른 config/payload/계획/승인 조합을 거부한다. 같은 선택의 본문이 같아도 기존 승인을 승격하거나 소비를 복원하지 않는다. 새 config 예시도 기본 비활성이며 별도 정확한 계획·TTL 승인을 요구한다. 실행 중 상한 증가·재시도·fallback은0이다.
+
+원시 응답은 v1의256KiB 또는 v2의4MiB 전체 상한 아래 EOF까지 메모리로 수집한 뒤에만 자식에 전달한다. 최종 조사 JSON16KiB·SSE frame64KiB/2048개·CLI128KiB/stderr16KiB 한도는 별개로 유지한다. 상한 크기의 단일 초기화 버퍼를 사용하고 실제 길이만 hash·검증·전달하며, 초과 chunk 전체를 저장하거나 부분 전달하지 않는다. 이는 전체 프로세스 메모리의 OS 강제 상한을 뜻하지 않는다. 원문과 일반 JSON의 decoded 키/문자열, wire 순서의 문자열 조각 조합·최종 CLI JSON에 실제 token/account가 반사되면 정적으로 거부한다. 조각 상태는64개·JSON 깊이는16으로 제한하고 초과를 거부한다. 이는 고정된 반사 형태의 방어이며 base64·암호화·임의 변형 전체의 비노출 보증은 아니다. upstream 오류·원시 헤더·쿠키를 중계·보관하지 않고 인증 객체는 부모의 동결 사본으로 한정한다.
+
+v2 수신 진단은 정확한 own data의 비음수 정수 계수8개와 EOF·고정 termination/failedLimit만 사본·동결해 보관한다. `receivedBytes`는 초과를 일으킨 chunk 전체를 포함할 수 있고 `bufferedBytes`는 보관량, `inspectedBytes`는 상한 내 wire 계수 관찰량이다. 관찰량을 JSON·인증 반사 검증 통과량으로 해석하지 않으며 EOF 전 계수는 prefix 관찰이다. 원문 키·값·ID·offset·임의 오류 문자열을 넣지 않고 observer 실패나 외부/과거 오류가 현재 한도 실패 증거를 만들지 못하게 한다. 진단은 승인을 대체하거나 실패의 자동 재실행 근거가 되지 않는다.
+
+4MiB 선택 근거는 등록 합성 corpus와1/2/4MiB 후보의 오프라인 행렬·로컬 자원/취소 관찰이다. RSS·heap·external 관찰과 wire 버퍼 한도를 구분하고 공급자 원문 크기를 추정하지 않는다. 초기 메모리 관찰 실패와 수정 후 측정은 검토 이력으로 보존하며, 로컬 검증 통과를 실제 공급자 호환성·다음 호출 성공으로 표시하지 않는다. 실제 승인·호출·사후 감사 결과는 별도 실행 기록을 따른다.
 
 단일 thread/turn·최종 JSON·선택 근거/줄·민감정보 검증과 EOF/raw hash·final text hash를 분리한다. `contractVerified.cliOutput`을 기존 response 검증과 같은 의미로 쓰지 않으며 `unverifiedResponseChecks` 다섯 항목을 profile·보고서·저장소에서 일치시킨다. operation55초 이후 native/HTTP/broker가 하나의 정리 대기5초를 공유한다. stream cancel이나 native 대기가 불확실하면 성공·추측 정리 없이 `BLOCKED`로 보존한다. 정리 후 `closed`가 기록돼도 최종 child/guardian/PGID·scratch 검사가 불확실하면 성공으로 판정하지 않고 `BLOCKED`로 남긴다. OS/파일 I/O가 정지한 상황까지 절대적인 벽시계 종료를 보증하지 않는다.
 
 하네스의 DB·일반 로그·감사에는 원시/부분/거부 응답을 쓰지 않는다. 격리 Codex가 일시적으로 보유하는 내용은 native 임시 영역의 종료 후 제거와 함께 다루며, 강제 중단·정리 불확실에서 잔류 내용의 완전한 제거를 보증하지 않는다. 원본/Git·DB·감사는 임시 영역 정리 대상이 아니다.
 
-새 검토 본문·hash를 `AWAITING_APPROVAL`로 고정한 뒤 사용자의 별도 TTL10분·1회·retry0 승인을 받아 실제 단건을 실행했다. 승인·사용·소비·attempt·dispatch·upstream은 각1회이며 HTTP200 응답 본문의256KiB 상한 초과로 실패했다. 실제 인증 접근·격리·로컬 정리 확인과 유효 응답/조사 성공을 구분하고 원시 본문은 보관하지 않는다. 원본/Git·고정 자료 보존과 controller/guardian/child/PGID 종료를 사후 감사했다. 원격 추론 중지 여부는 확인할 수 없으며 승인 복원·재시도·한도 변경은 하지 않았다. [실제 결과](stage-4c9-result.md#승인된-relay-실제-단건-호출과-사후-감사)와 [기준 계획](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)을 따른다.
+각 새 검토 본문·hash를 `AWAITING_APPROVAL`로 고정한 뒤 사용자의 별도 TTL10분·1회·retry0 승인으로 실행했다. relay-v1 실제1회의256KiB 초과 실패와 소비 기록을 보존한다. 후속4MiB v2의 새 계획은 로컬1125개 회귀·독립 감사 후 별도 승인됐고 승인·사용·소비·attempt·dispatch·upstream 각1회, HTTP200·362,095byte EOF·유효 보고서·`REPORTED`를 확인했다. 원본/Git·코드/고정 자료 보존과 controller/guardian/child/PGID 종료를 사후 감사했고 원시 본문은 보관하지 않는다. 구체 단건 성공은 일반 공급자 호환성·의미 정확성·회사 보안 검토 통과가 아니다. 원격 추론 중지 여부는 확인할 수 없으며 승인 복원·재시도·실행 중 한도 변경은 하지 않았다. [예산 보완 실제 결과](stage-4c9-result.md#응답-예산-보완의-승인된-실제-단건-호출)와 [기준 계획](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)을 따른다.
 
 ## 7. 회사 자료와 비밀정보
 
