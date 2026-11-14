@@ -8,10 +8,12 @@ import type { ReadonlyLiveConfig, ReadonlyLiveDispatch, ReadonlyLiveDecodedRespo
 import { assertReadonlyLiveDispatch } from '../policy/readonly-live-policy.js';
 import { decodeReadonlyLiveResponse, getReadonlyLiveHttpLimits, getReadonlyLiveJsonDiagnostic, getReadonlyLiveSensitiveDiagnostic,
   getReadonlyLiveSensitiveAttribution, getReadonlyLiveSensitiveMatches, getReadonlyLiveSseDiagnostic, getReadonlyLiveSseEnvelopeDiagnostic, getReadonlyLiveResponseDiagnostic,
+  getReadonlyLiveMetadataDiagnostic,
   type ReadonlyLiveJsonDiagnostic, type ReadonlyLiveSseDiagnostic } from '../policy/readonly-live-protocol.js';
 import type { ReadonlyLiveSensitiveDiagnostic, ReadonlyLiveSensitiveAttribution, ReadonlyLiveSensitiveMatches } from '../policy/readonly-live-sensitive-diagnostics.js';
 import type { ReadonlyLiveSseEnvelopeDiagnostic } from '../policy/readonly-live-sse-envelope-diagnostics.js';
 import type { ReadonlyLiveResponseDiagnostic } from '../policy/readonly-live-protocol.js';
+import { copyReadonlyLiveMetadataDiagnostic, type ReadonlyLiveMetadataDiagnostic } from '../policy/readonly-live-metadata-diagnostics.js';
 import { classifyReadonlyLiveHeaders, copyReadonlyLiveHeaderDiagnostics, type ReadonlyLiveHeaderDiagnostics } from '../policy/readonly-live-http-diagnostics.js';
 import type { CodexCredential } from './codex-credentials.js';
 
@@ -99,7 +101,8 @@ export interface ReadonlyLiveBroker {
   jsonDiagnostic(): ReadonlyLiveJsonDiagnostic | null; sensitiveDiagnostic(): ReadonlyLiveSensitiveDiagnostic | null;
   sensitiveAttribution(): ReadonlyLiveSensitiveAttribution | null; sensitiveMatches(): ReadonlyLiveSensitiveMatches | null;
   sseDiagnostic(): ReadonlyLiveSseDiagnostic | null; sseEnvelopeDiagnostic(): ReadonlyLiveSseEnvelopeDiagnostic | null;
-  responseDiagnostic(): ReadonlyLiveResponseDiagnostic | null; close(): Promise<void>;
+  responseDiagnostic(): ReadonlyLiveResponseDiagnostic | null;
+  metadataDiagnostic(): ReadonlyLiveMetadataDiagnostic | null; close(): Promise<void>;
 }
 
 /** This SSE is a CLI presentation envelope; it contains no invented usage/billing data. */
@@ -134,6 +137,7 @@ export const startReadonlyLiveBroker = async (
   let sseDiagnostic: ReadonlyLiveSseDiagnostic | null = null;
   let sseEnvelopeDiagnostic: ReadonlyLiveSseEnvelopeDiagnostic | null = null;
   let responseDiagnostic: ReadonlyLiveResponseDiagnostic | null = null;
+  let metadataDiagnostic: ReadonlyLiveMetadataDiagnostic | null = null;
   const observeHeaders = (value: ReadonlyLiveHttpObservation): void => {
     const keys = value && Object.keys(value).sort().join(',');
     if (!value || (keys !== 'headerBytes,headerCount,status' && keys !== 'headerBytes,headerCount,headerDiagnostics,status')
@@ -191,6 +195,7 @@ export const startReadonlyLiveBroker = async (
           sseDiagnostic = getReadonlyLiveSseDiagnostic(error);
           sseEnvelopeDiagnostic = getReadonlyLiveSseEnvelopeDiagnostic(error);
           responseDiagnostic = getReadonlyLiveResponseDiagnostic(error);
+          metadataDiagnostic = getReadonlyLiveMetadataDiagnostic(error);
         }
         throw error;
       }
@@ -224,6 +229,7 @@ export const startReadonlyLiveBroker = async (
     sseDiagnostic: () => sseDiagnostic ? { ...sseDiagnostic } : null,
     sseEnvelopeDiagnostic: () => sseEnvelopeDiagnostic ? structuredClone(sseEnvelopeDiagnostic) : null,
     responseDiagnostic: () => responseDiagnostic ? structuredClone(responseDiagnostic) : null,
+    metadataDiagnostic: () => copyReadonlyLiveMetadataDiagnostic(metadataDiagnostic),
     close: async () => {
       signal.removeEventListener('abort', abort); controller.abort(); server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));

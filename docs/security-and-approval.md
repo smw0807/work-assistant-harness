@@ -345,6 +345,10 @@ JSON/SSE는 등록한 제한된 후보 형태만 받아들이며 UTF-8·중복 �
 
 ### 단계 4-C-8의 별도 live 조사 승인
 
+최신 metadata 진단 계획은 사용자의 TTL10분·실제1회·자동 재시도0 승인 후 실행했다. 승인·사용·소비·attempt·전달 예약·upstream은 각1회이며 `created/access-programs/value`로 실패했다. 기존 생략/null 전용 검사에서 non-null 값이 거부된 사실만 확인했으며 실제 값의 형태·내용·의미·도구 활동을 확정하지 않는다. 원본/Git·720개 코드/빌드·이전87개 파일 보존과 프로세스 종료·sandbox 부재는 사후 독립 감사 passed다. 아래 승인 전 준비·과거 실패 기록은 당시 이력이며 [최신 실제 결과](stage-4c8-result.md#metadata-진단-계획의-승인된-실제-단건-호출)를 우선한다. 이번 소비 승인을 복원하거나 추가 호출에 재사용하지 않았다.
+
+metadata 정적 진단 보완은 응답 허용 권한을 넓히지 않는다. 기존 검사 순서·null/undefined·한도·민감정보 거부·공개 오류 code와 v1~v9 hash를 유지하며, `RESPONSE_METADATA`에서 경로4·등록 field39·고정 reason6의 정확한3키만 보관한다. getter 미실행·own data descriptor·일반/null prototype·enum을 검사한 동결 사본만 전달한다. 내부 WeakMap 등록과 현재 decode 검증에서 던진 오류를 함께 확인하므로 위조 transport/stream 오류와 과거의 진짜 진단 오류 재생을 현재 요청의 증거로 쓰지 않는다. 진단 실패가 원래 거부를 대체하지 않으며 `OUTPUT_LIMIT`·`TOOL_USAGE_ACTIVITY`·v1/v2 generic 오류도 보존한다. 로컬 준비 단계의 새 검토 계획은 같은 v9 설정·본문·profile·명세를 쓰고 이전 소비 승인을 재사용하지 않은 채 승인·attempt·실제 전송0에서 멈췄다. 로컬1020개·차등7416건 검증과 [새 준비 상태](stage-4c8-result.md#metadata-정적-진단과-새-승인-대기-계획)는 실제 모델·인증 검증과 구분한다.
+
 최신 v9 실제 단건 검증은 사용자가 TTL10분·최대1회·자동 재시도0을 구체 승인한 뒤 수행했다. 승인·소비·attempt·upstream은 각1회이며 metadata 검증 실패로 유효 보고서가 없다. 원본/Git·코드 보존과 controller·guardian·child·프로세스 그룹 종료, sandbox 부재는 별도 사후 감사로 확인했다. 현재 실제 결과와 누적 상태는 [v9 실행·사후 감사](stage-4c8-result.md#v9-승인된-실제-단건-호출과-사후-감사)를 따르며 아래 준비·구형 버전 기록은 과거 이력으로 보존한다. 이번 승인은 소비됐고 추가 호출에 재사용하지 않는다.
 
 `synthetic-readonly-live-v1`은 등록 합성 fixture의 선택 근거만 실제 모델에 보내는 새 경로다. `readonly-live.sqlite`에 별도 계획·승인·단일 소비를 기록하고 이전 mock/offline/patch 승인을 재사용하지 않는다. 기존 오프라인 명령에는 live 옵션이나 인증 경로를 추가하지 않는다. 읽기·전송 범위와 빈 수정·검사 범위, 원본 identity·revision·다섯 hash·configSnapshot을 새 승인에 고정한다.

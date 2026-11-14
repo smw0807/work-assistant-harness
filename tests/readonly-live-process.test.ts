@@ -295,6 +295,9 @@ for (const scenario of [
   { name: 'v9 blocks a sensitive extension hidden by count-alias collision', version: 'v9', requests: 0,
     sequenceStart: 0, sequenceGap: false, responseExtras: { count_max_output_units: 'sk-' + 'synthetic'.repeat(6), max_output_tokens: 0 },
     extensionSensitive: true, failureCode: 'READONLY_LIVE_INVALID_RESPONSE_RESPONSE_FIELDS' },
+  { name: 'v9 records only fixed metadata failure categories', version: 'v9', requests: 0,
+    sequenceStart: 0, sequenceGap: false, responseExtras: { text: { format: { type: 'PRIVATE_METADATA_TYPE_CANARY' } } },
+    metadataError: true, failureCode: 'READONLY_LIVE_INVALID_RESPONSE_RESPONSE_METADATA' },
 ] as const) {
   test(`native ${scenario.name} with source and cleanup preserved`,
     { skip, timeout: 60000 }, async (t) => {
@@ -367,12 +370,14 @@ for (const scenario of [
       assert.deepEqual(report.response, responseError ? { event: 'created', reason: 'envelope', envelope: { missing: [],
         unexpected: [{ field: 'conversation', valueType: 'null', count: 1 }], observedUnexpected: 1, overflow: false } }
         : extensionSensitive ? { event: 'created', reason: 'extension-sensitive', envelope: null } : null);
+      assert.deepEqual(report.metadata, 'metadataError' in scenario
+        ? { event: 'created', field: 'text-format-type', reason: 'value' } : null);
       assert.equal(report.transport, 'fake'); assert.equal(report.credentialAccess, 'not_run');
       assert.equal(report.isolation, 'passed'); assert.equal(report.upstreamCalls, 1); assert.equal(report.cleanupConfirmed, true);
       assert.equal(report.requestBodyHash, payload.requestBodyHash);
       assert.equal(report.requestEnvelopeHash, payload.requestEnvelopeHash);
       assert.equal(report.connectionProfileHash, payload.connectionProfileHash);
-      assert.doesNotMatch(JSON.stringify(report), /synthetic\.test\.only|tool_usage|image_gen|num_requests|PRIVATE_PADDING_CANARY|PRIVATE_EXTENSION_CANARY|synthetic_extension|resp_PRIVATE_CANARY|opaque_array|sk-/);
+      assert.doesNotMatch(JSON.stringify(report), /synthetic\.test\.only|tool_usage|image_gen|num_requests|PRIVATE_PADDING_CANARY|PRIVATE_EXTENSION_CANARY|PRIVATE_METADATA_TYPE_CANARY|synthetic_extension|resp_PRIVATE_CANARY|opaque_array|sk-/);
       assert.equal(readonlyLiveCleanupConfirmed(dataDirectory, id, { requestBodyHash: payload.requestBodyHash,
         requestEnvelopeHash: payload.requestEnvelopeHash, connectionProfileHash: payload.connectionProfileHash }), true);
       const child = JSON.parse(readFileSync(join(directory, 'child.json'), 'utf8'));

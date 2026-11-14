@@ -1,8 +1,10 @@
 # 단계 4-C-8 합성 다중 파일 실제 모델 조사 결과
 
-기록일: 2026-11-13. **재생성한 v9 계획을 TTL10분으로 별도 승인해 실제1회 호출했으나 응답 metadata 검증에서 실패했다.** 진단은 `READONLY_LIVE_INVALID_RESPONSE_RESPONSE_METADATA`이며 세부 경로·거부 필드·의미는 현재 기록으로 식별할 수 없다. 유효 조사 보고서·responseHash는 없다. 이번 승인·소비·attempt·upstream은 각1회이고 자동 재시도는0이다. 원본/Git33항목·부모11개 identity·HEAD/base·714개 코드/빌드 hash 보존과 controller·guardian·child·프로세스 그룹 종료, sandbox 부재를 사후 독립 감사로 확인했다. 누적 upstream15회 실패·별도 전송 전 실패1회·소비 승인16개이며 수용162는 계속 미완료다.
+기록일: 2026-11-14. **v9 metadata 진단 계획을 TTL10분으로 별도 승인해 실제1회 호출했으나 SSE created 내부 response의 `access_programs` 값 검사에서 실패했다.** 진단은 `READONLY_LIVE_INVALID_RESPONSE_RESPONSE_METADATA`, `metadata={event:created,field:access-programs,reason:value}`다. 기존 생략/null 전용 정책에서 non-null 값이 거부됐음을 확인했으며 실제 값의 형태·내용·의미는 미확인이다. 유효 보고서·responseHash는 없다. 이번 승인·소비·attempt·upstream은 각1회이고 자동 재시도는0이다. 원본/Git33항목·부모11개 identity·HEAD/base·720개 코드/빌드와 이전87개 파일 보존, controller·guardian·child·프로세스 그룹 종료와 sandbox 부재를 사후 독립 감사로 확인했다. 누적 upstream16회 실패·별도 전송 전 실패1회·소비 승인17개이며 수용162는 계속 미완료다.
 
-최신 상태는 아래 [v9 승인된 실제 단건 호출과 사후 감사](#v9-승인된-실제-단건-호출과-사후-감사)를 따른다. [재생성과 로컬 검증](#v9-검토-자료-재생성과-로컬-재검증)의 승인 대기 기록과 과거 각 버전의 실패 이력은 보존한다. 기존 v1~v8 계약·profile·hash를 변경하지 않았으며 추가 호출은 하지 않았다.
+최신 상태는 아래 [metadata 진단 계획의 승인된 실제 단건 호출](#metadata-진단-계획의-승인된-실제-단건-호출)을 따른다. 과거 준비·승인 대기·각 버전의 실패 이력은 보존하며 이번 단건 뒤 추가 호출은 하지 않았다. 기존 v9 수용 조건·공개 오류·config/profile/본문/명세 hash도 변경하지 않았다.
+
+2026-11-14의 [metadata 정적 진단과 새 승인 대기 계획](#metadata-정적-진단과-새-승인-대기-계획)은 이번 호출 전 준비 기록이다. native 포함1020개 회귀·차등7416건을 통과한 코드/빌드 hash를 재검증해 실제1회 호출에 사용했다. 이전 실제 실패의 metadata 필드·origin을 이번 결과로 소급 확정하지 않는다.
 
 ## 구현 범위
 
@@ -89,16 +91,16 @@
 | --- | --- |
 | 151 새 live 계약과 기존 단계 보존 | passed — 정책·DB·설정·구형 승인 분리, 기존 실제 기록 보존과 v1~v8 승인 분리 |
 | 152 합성 읽기·전송·수정 범위 | passed — 선택한 합성 근거와 빈 수정·검사 범위 |
-| 153 검토 본문과 실제 전송 일치 | passed — 로컬에서 정확한 바이트 검증. 동일 본문 hash로 각기 별도 승인한 upstream 총15회, 각 작업 최대1회 |
+| 153 검토 본문과 실제 전송 일치 | passed — 로컬에서 정확한 바이트 검증. 동일 본문 hash로 각기 별도 승인한 upstream 총16회, 각 작업 최대1회 |
 | 154 승인·TTL·소비·동시성 | passed — 원자 소비·전달 예약·전송/완료 시 만료·generation 검사 |
 | 155 인증 지연 접근과 비노출 | passed — 합성 loader·로컬 명령 검사와 승인된 실제 시도의 credentialAccess 확인. 공급자 인증 성공은 미확인 |
 | 156 실제 연결 격리와 종료 | passed — native OS 격리·guardian·임시 디렉터리 정리의 로컬 실증 |
-| 157 공급자 응답과 조사 검증 | passed — 로컬 합성 JSON/SSE·schema·근거·v9 검증. 실제 v9는 RESPONSE_METADATA로 거부됐으며 세부 필드·origin은 미확인 |
+| 157 공급자 응답과 조사 검증 | passed — 로컬 합성 JSON/SSE·schema·근거·v9 검증. 최신 실제 진단은 SSE created/access-programs/value로 거부, 값의 형태·의미는 미확인 |
 | 158 단건 전달·취소·timeout | passed — 로컬 단건·취소·시간 제한·종료 검사. 원격 취소 완료는 미검증 |
 | 159 중단과 재시작 복구 | passed — 실제 로컬 SIGKILL·소비 유지·취소 후 복구·불확실 BLOCKED |
 | 160 private 보관과 보고 사실성 | passed — 링크/권한·내용/감사/marker·합성 검증의 not_run 표시 |
-| 161 CLI·기존 회귀 | passed — v9의 native 포함 전체1005개·집중121개·lint/typecheck/build 통과·실패0·skip0. 직전 response 진단 실제 호출 당시985개 검증 이력 보존 |
-| 162 구체 승인된 실제 단건 조사 | failed / 미완료 — 실제 upstream15회 모두 failed. 실행 파일 부재 v4의 upstream0회 실패는 별도 기록. 소비 승인16개·조사 보고서 없음·자동 재시도0 |
+| 161 CLI·기존 회귀 | passed — metadata 진단의 native 포함 전체1020개·집중98개·차등7416건·lint/typecheck/build 통과. 이전 실제 호출 코드의 검증 이력 보존 |
+| 162 구체 승인된 실제 단건 조사 | failed / 미완료 — 실제 upstream16회 모두 failed. 실행 파일 부재 v4의 upstream0회 실패는 별도 기록. 소비 승인17개·조사 보고서 없음·자동 재시도0 |
 
 ## v1 승인한 실제 1회 결과
 
@@ -834,3 +836,73 @@ v9의 제한된 추가 JSON은 기존 v8보다 넓은 새 수용 정책이다. �
 [사후 감사](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-u3cui20a/post-run-audit.json)와 [독립 사후 감사](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-u3cui20a/post-run-independent-audit.json)는 모두 passed였다. 독립 감사 완료는 UTC `2026-11-13T13:46:47.756Z`다. 원본/Git33항목·부모11개 identity·HEAD/base와 파일hash, 코드/빌드714개·과거 안전 아티팩트의 hash가 보존됐다. controller42028·guardian42043·child42044와 child 프로세스 그룹은 모두 없고 lifecycle/child는 closed, sandbox·빈 HOME/CODEX_HOME도 남지 않았다. 최종 실제 DB의 승인·사용·소비·attempt는 각1회이며 취소된 controller 전송 초안은 계속 미소비다. 감사는 읽기 전용 DB·파일/프로세스 존재 확인만 사용하고 인증 접근이나 모델 호출을 추가하지 않았다.
 
 실제 모델 조사 결과는 failed이고 원본 보존·로컬 종료 감사는 passed다. 누적 실제 upstream15회 모두 실패했으며 전송 전 실패까지 소비 승인은16개다. 수용162는 계속 미완료다. 다음 최소 작업은 실제 재호출 없이 metadata 거부 경계를 구분할 수 있는 원문 없는 로컬 정적 진단을 검토하는 것이다. 후속 구현·새 계획·추가 실제 호출은 이번1회 승인에 포함하지 않는다.
+
+## metadata 정적 진단과 새 승인 대기 계획
+
+이 절은 metadata 진단 계획의 실제 호출 승인 전 준비 기록이다. 후속 승인·단건 결과·사후 감사는 다음 절에 기록하며 준비 아티팩트는 변경하지 않는다.
+
+2026-11-14에 사용자가 승인한 범위는 metadata 정적 진단 추가·로컬 검증·새 검토 자료 준비까지다. 실제 호출은 승인 대기에서 멈추도록 지정했으며 새 승인을 발급하거나 실제 로그인·모델·전송을 사용하지 않았다. 아래 로컬 결과로 이전 실제 실패의 origin·field를 소급 확정하지 않는다.
+
+`readonly-live-metadata-diagnostics.ts`는 정확한 `event/field/reason`3키만 받는다. event는 direct-response/created/in-progress/completed4개, field는 소스에 등록된39개, reason은 shape/value/integer/number/text/size6개다. 이 사유는 실행 중이던 검사 경계이며 원문 값의 확정된 형태나 상세 거부 항목을 보관하는 것이 아니다. 원문 키·값·ID·offset·응답 조각은 기록하지 않는다. 일반/null prototype·own enumerable data descriptor·정확한 enum을 검사하고 getter·symbol·추가 속성을 거부한 분리된 동결 사본을 사용한다.
+
+기존 metadata 검사의 순서·조건·한도·null/undefined 처리는 유지하고 첫 거부 경계만 추적한다. `RESPONSE_METADATA`에만 동결 진단을 붙이며 `OUTPUT_LIMIT`·`TOOL_USAGE_ACTIVITY`·v1/v2 generic 오류와 기존 response/JSON/SSE 진단은 보존한다. 내부 WeakMap 등록과 현재 decode의 실제 feed/finish/direct 검증 경로를 함께 확인해 transport/stream 위조 오류와 과거에 생성된 진짜 오류의 재생을 현재 요청의 증거에서 제외한다. 원래 오류의 진단은 유지하며 진단 생성/복사 실패도 기존 거부를 바꾸지 않는다. broker는 이 로컬 증거만 선택하고 `call-report.json`의 새 `metadata` 항목에 전달한다. profile·decoder 계약 버전이나 요청 설정·본문·명세·해시는 바꾸지 않았다.
+
+| 로컬 검사 | 결과 | 근거 |
+| --- | --- | --- |
+| lint·typecheck·build | passed | [정적 검사](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/static-validation.json), Node26.12.1·pnpm12.18.0 |
+| metadata helper·protocol 집중 검사 | passed | 98개·실패0·skip0, [결과](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/focused-validation.json) |
+| native 포함 전체 회귀 | passed | 1020개·실패0·skip0, 약71.92초, [결과](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/test-validation.json) |
+| 수정 전후 decoder 차등 비교 | passed | 206개 합성 벡터×9profile×4origin=7416건, 수용3292·거부4124, 공개 code·정상 text/raw hash·기존 진단7종의 차이0, [결과](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/differential-validation.json) |
+| 등록 오류 재생 출처 검증 | passed | iterator-next/factory·body/header/status getter×9profile=45건, 기존 공개 code와 원 진단 보존·외부 진단null |
+| v9 계약·기존 작업물 보존 | passed | 이전과 동일한6개 context/input/body/profile/envelope/config hash, 이전 검토 디렉터리87개 파일의 hash·identity·권한·시각 보존 |
+| 실제 로그인·모델·전송·공급자 호환성·의미 정확성 | not_run | 새 실제 검증 계획을 승인하지 않았고 run/transmit·인증 로더를 호출하지 않음 |
+
+기존1005개에 helper4개·protocol8개·broker2개·native1개, 총15개 검사를 추가했다. 첫 집중 검사는95개 통과·2개 실패였으며 기존 민감정보 선행 거부와 완전한 tool_usage 형태를 반영하도록 합성 fixture의 기대를 정정했다. 해당 최초 결과·로그는 보존했다. 허용 조건을 넓혀 통과시키지 않았으며 최종 집중98개와 전체1020개가 통과했다. native 회귀는 실제 고정 바이너리와 OS 격리·localhost broker·guardian을 사용하지만 인증과 upstream은 명시적 합성 값·메모리 가짜 전송기다.
+
+새 자료는 `/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj`에 보관한다. 디렉터리0700·설정/DB/본문/검토서/로그0600, 원본은 디렉터리0555·파일0444다. 고정0.154.0 바이너리는 이전 경로를 그대로 사용해 config/profile/envelope hash도 보존한다. 새 원본 identity·생성 시각·작업 ID를 새 계획 hash에 결합했다. 이전 실패 계획과 승인·소비·감사·취소 초안은 변경하지 않는다.
+
+| 새 검토 계획 | 값 |
+| --- | --- |
+| 검토서 | [review.txt](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/review.txt) |
+| 계획·정확한 본문·준비 검사 | [plan.json](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/plan.json) · [request-body.json](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/request-body.json) · [readiness.json](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/readiness.json) |
+| 작업 ID | `3b325473-4001-4fb4-938a-6fce8ac5f4f0` |
+| 계획 hash | `7295196794b90fc43aa39b53cfdd5684be21f06f875a09c387a1b5322e8b7e1a` |
+| 본문 | 기존과 동일8,897바이트, `bc834b6f60ecaf7d697c7bb279f307e48e16e63a5aabcb2eeaf5aaf327176bbe` |
+| config hash | `cbcfc85c692ed54c41d98e06457d13e7ed4a6d70b5634f89fb47e4cd3d8997f5` |
+| profile hash | `3bdf02d85e066332b5621362daeba8d1fcbc5fb8ea8605a88d36ebd6d1f6b10d` |
+| envelope hash | `2749053e930151d44de5ea08dd60cdac7f516bc36f9c058cd2ce8380bdf8755c` |
+| 생성·만료 | KST `2026-11-14 00:00:27.874` ~ `2026-11-15 00:00:27.874` |
+| 준비 당시 상태 | `AWAITING_APPROVAL`, 승인0·attempt0·소비0·전달 예약0·실제 모델 전송0, run 디렉터리 없음 |
+
+원본/Git33항목·부모11개 identity·HEAD/base와720개 소스/빌드 hash를 새 검토 자료에 기록하고 전후 보존을 확인했다. [독립 감사](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/independent-audit.json)는 passed였으며 이전87개 파일의 hash·identity·권한·시각, 새 DB의 승인0·attempt0·소비0과 run 디렉터리 부재도 확인했다. 감사는 읽기 전용 SQLite 조회와 바이너리의 파일시스템 전용 `verifyReady`만 사용했다. payload와 검토서 본문 사본의24시간 내용 보관 기한, 감사·최소 소비 marker의 기존 경계를 유지한다. 수용162는 계속 미완료이며 실제 호환성·의미 정확성을 확인한 것으로 표시하지 않는다. 다음 최소 작업은 새 검토서·본문·해시·만료와 로컬 준비 상태에 대한 구체 승인 후 최대1회 실제 검증하는 것이다. 이번 작업은 승인 대기에서 멈춘다.
+
+[최종 빌드 검증](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/final-build-validation.json)과 [최종 독립 감사](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/independent-final-audit.json)도 passed였다. 최종 감사는 KST `2026-11-14 00:06:35.597`에 완료했고 동결 아티팩트25개·로그 hash·새 원본/Git·720개 코드/빌드와 이전87개 파일의 보존을 재확인했다. 동결 manifest는 자신과 이후 생성한 최종 감사서를 제외한25개 파일의 목록이다. 새 DB는 계속 승인·attempt·소비0의 `AWAITING_APPROVAL`이고 이전 실제 실패의 소비1과 취소 초안의 미소비 상태도 유지한다. 누적 실제 upstream15회·소비 승인16개는 증가하지 않았다.
+
+## metadata 진단 계획의 승인된 실제 단건 호출
+
+2026-11-14 사용자가 방금 만든 metadata 진단 계획을 TTL10분·실제1회·자동 재시도 없이 승인했다. [사전 검사](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/pre-call-validation.json)와 [독립 사전 감사](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/pre-call-independent-audit.json)에서 정확한 계획·본문8,897바이트·설정/profile/명세 hash·720개 코드/빌드·원본/Git·이전87개 파일·고정 바이너리와 계획 만료, 승인0·attempt0·소비0을 재검증한 뒤 새 승인을 발급했다. 구현이나 허용 조건을 바꾸지 않았고 검증된1020개 회귀·집중98개·차등7416건·lint/typecheck/build 코드 그대로 사용했다. 실제 호출은 아래1회뿐이다.
+
+| 항목 | 실제 기록 |
+| --- | --- |
+| 작업 ID | `3b325473-4001-4fb4-938a-6fce8ac5f4f0` |
+| 계획 hash | `7295196794b90fc43aa39b53cfdd5684be21f06f875a09c387a1b5322e8b7e1a` — 검토·승인 대상과 동일 |
+| 승인 ID | `7df3cbf9-f6c2-4a57-9461-945ef4d43968` |
+| 승인 유효 기간 | KST `2026-11-14 12:41:34.885` ~ `12:51:34.885`, 정확히10분 |
+| 승인 사용 시각 | KST `12:42:00.931` |
+| attempt ID | `3045332d-34bb-4ec2-9e51-30d68e595778` |
+| 시작·전달 예약·종료 | KST `12:42:00.931` · `12:42:00.940` · `12:42:02.214` |
+| 최종 상태 | `FAILED`, `READONLY_LIVE_CALL_FAILED`, `report=null`, `responseHash=null` |
+| 호출 진단 | `READONLY_LIVE_INVALID_RESPONSE_RESPONSE_METADATA`, phase `request`, `transport=live`, `upstreamCalls=1` |
+| metadata 정적 진단 | `event=created`, `field=access-programs`, `reason=value` |
+| HTTP 관찰 | status200, headerCount35, headerBytes3130, MIME/encoding 누락·쿠키3개·기타 문법/중복 위반0 |
+| 기타 내용 진단 | json/sensitive/sensitiveAttribution/sensitiveMatches/sse/sseEnvelope/response 모두null |
+| 로컬 경계 | `isolation=passed`, `credentialAccess=passed`, `cleanupConfirmed=true` |
+| 단건 제약 | 승인1·사용1·소비1·attempt1·전달 예약1·CLI run1·upstream1, 자동 재시도0 |
+
+[승인 기록](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/approval-result.json), [실행 결과](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/run-result.json), [호출 진단](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/live-data/readonly-live-runs/3b325473-4001-4fb4-938a-6fce8ac5f4f0/call-report.json)을 별도 보존한다. 원시 응답·헤더·인증값을 기록하거나 기존 준비 자료를 덮어쓰지 않았다.
+
+이번에는 현재 SSE `response.created` 내부 response의 `access_programs`가 생략/null만 허용하는 기존 검사에서 거부됐음을 확인했다. 검사 시점의 값은 undefined나 null이 아니었다. false·0·빈 문자열·빈 배열·빈 객체도 같은 조건에 거부되므로 이 결과를 비어 있지 않은 값, 활성 기능·권한·도구 활동으로 해석하지 않는다. 실제 값의 형태·내용·의미는 진단에 없고 알 수 없다. 이전 metadata 실패에도 같은 필드가 원인이었다고 소급 확정하지 않으며, HTTP200·경로 확인을 완성 응답·유효 보고서·추론 성공으로 표시하지 않는다.
+
+[사후 감사](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/post-run-audit.json)와 [독립 사후 감사](/Users/songminwoo/.local/share/work-assistant-harness/reviews/stage4c8-v9-metadata-ndefnpaj/post-run-independent-audit.json)는 passed였다. 독립 감사는 KST `2026-11-14 12:44:02.261`에 완료했다. 원본/Git33항목·부모11개 identity·HEAD/base·720개 소스/빌드와 이전87개 파일의 hash·identity·권한·시각을 보존했다. controller40267·guardian40285·child40286과 child 프로세스 그룹은 모두 없고 lifecycle/child는 closed, sandbox·빈 HOME/CODEX_HOME도 남지 않았다. 기존 실패 작업과 취소 초안의 DB는 변경하지 않았다. 감사는 읽기 전용 파일/DB·프로세스 존재 확인만 사용하며 인증·모델 호출을 추가하지 않았다.
+
+원본 보존·로컬 종료 감사는 passed이고 실제 모델 조사 결과는 failed다. 누적 upstream16회 모두 실패했으며 전송 전 실패1회까지 소비 승인은17개다. 수용162는 계속 미완료다. 다음 최소 작업은 `access_programs`의 허용 계약과 값을 노출하지 않는 형태 진단을 검토하는 것이다. 현재 non-null 값을 일반 허용하도록 정책을 바꾸거나 기존 승인을 복원하지 않았다. 후속 수정·새 계획·추가 실제 호출은 이번1회 승인에 포함하지 않는다.

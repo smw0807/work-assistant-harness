@@ -248,6 +248,10 @@ plan·approve·send의 제한 worker만 token과 네트워크를 받는다. 고�
 
 ### 단계 4-C-8의 합성 다중 파일 live 조사
 
+최신 metadata 진단 계획은 TTL10분 새 승인 후 실제1회 실행했고 SSE created/access-programs/value에서 실패했다. non-null 값을 거부한 기존 검사 경계만 확인했으며 실제 형태·의미·도구 활동은 미확인이다. 승인·소비·attempt·upstream 각1회·재시도0회와 원본/Git·720개 코드/빌드·이전87개 파일 보존·프로세스 종료·sandbox 부재를 확인했다. 새 계획의 현재 상태는 `FAILED`이며 아래 승인 대기·실패 이력보다 [최신 실제 실행·감사](stage-4c8-result.md#metadata-진단-계획의-승인된-실제-단건-호출)를 우선한다.
+
+후속 로컬 구현은 `RESPONSE_METADATA` 오류에만 고정 `metadata={event,field,reason}`를 추가한다. 경로4·등록 field39·reason6과 정확한 own data property·동결 사본만 사용하며 decoder 내부 등록과 현재 검증 경로를 확인해 transport/stream 위조·이전 오류 재생을 배제한다. 기존 수용 조건·공개 오류·v9 hash와 이전 실제 기록은 보존한다. native 포함1020개·집중98개·수정 전후 비교7416건이 통과했고 같은 v9 설정·본문·명세의 새 계획을 `AWAITING_APPROVAL`로 준비했다. 승인 전 새 계획의 승인·attempt·실제 전송은0회였으며 [당시 로컬 준비](stage-4c8-result.md#metadata-정적-진단과-새-승인-대기-계획)를 따른다.
+
 최신 v9 단건 실제 검증은 TTL10분의 새 승인 후1회 호출했고 `RESPONSE_METADATA`로 실패했다. 승인·소비·attempt·upstream 각1회와 자동 재시도0회, 원본/Git·코드 보존·프로세스 종료·sandbox 부재를 확인했다. 세부 실패 필드·origin·v9 호환 성공은 미확인이고 유효 보고서는 없다. 아래 과거 준비 상태와 구형 진단 이력보다 [최신 실행 결과](stage-4c8-result.md#v9-승인된-실제-단건-호출과-사후-감사)를 우선한다.
 
 `synthetic-readonly-live-v1`은 고정 합성 문맥의 실제 읽기 전용 조사를 위한 새 정책이다. `ReadonlyLiveService`와 `SqliteReadonlyLiveStore`는 `readonly-live.sqlite`에 계획·승인·단일 attempt·전달 예약·검증한 보고서를 보관한다. 기존 4-C-4/5/6/7 결과나 승인은 변환하지 않는다. 4-C-7의 fake 전용 의존 그래프도 유지한다.
@@ -401,7 +405,7 @@ AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
 | 4-C-5 | 합성 다중 파일 읽기 전용 조사 | 읽기/전송/수정 권한 분리·불변 문맥·단건 모의 호출·근거 보고·취소/복구. 실제 모델 호출 제외 |
 | 4-C-6 | 합성 문맥의 오프라인 전송 검증 | 별도 offline/fake 계약·최종 요청 hash·단건 broker·JSON/NDJSON 응답·취소/복구. 실제 모델·인증 접근·외부 전송 제외 |
 | 4-C-7 | 다중 파일 모델 연결의 오프라인 준비 | 후보 HTTP/JSON/SSE 계약·명세 hash·in-memory fake·제한 worker. live 승격 불가, 실제 공급자 호환성 미검증 |
-| 4-C-8 | 합성 다중 파일의 실제 모델 읽기 전용 조사 | native 포함1005개 로컬 검증 뒤 v9를 TTL10분 승인해1회 호출했으나 RESPONSE_METADATA로 실패. 원본/Git·프로세스 종료 감사 passed, 유효 보고서 없음. 누적 upstream15회 실패·소비 승인16개·자동 재시도0 |
+| 4-C-8 | 합성 다중 파일의 실제 모델 읽기 전용 조사 | metadata 진단 실제1회는 created/access-programs/value로 실패. 원본/Git·프로세스 종료 감사 passed, 수용162 미완료. 기존 계약·native1020개·차등7416건 근거 유지. 누적 실제 upstream16회 실패·소비 승인17개·자동 재시도0 |
 | 4-C 후속 | 대상 저장소의 실제 Codex 작업 브랜치·commit 준비·push | 승인·격리·브랜치 보존과 행위별 승인 별도 검증. PR/MR 생성 제외. 미구현 후속 설계 |
 | 4-D | Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-B-2 승인 범위 밖 |
 

@@ -28,7 +28,9 @@ Slack 요청을 로컬에 기록하고, 합성 자료로 조사와 승인 후 �
 
 단계 4-C-6의 `readonly-transport-*`는 검토한 최종 요청을 별도 승인으로 가짜 전송기에 한 번 전달합니다. 신규 59개를 포함한 전체 642개 테스트와 lint·typecheck·build가 통과했습니다. 실제 모델·인증정보 접근·외부 전송은 제외했으며 [4-C-6 결과](docs/stage-4c6-result.md)에 수용 근거를 기록했습니다.
 
-단계4-C-7은726개 회귀를 통과했습니다. 4-C-8의 최신 v9 계획은 native 포함1005개·lint/typecheck/build 검증 뒤 TTL10분으로 별도 승인해 실제1회 호출했으나 `RESPONSE_METADATA`로 실패했습니다. 세부 필드·origin은 미확인이고 유효 보고서는 없습니다. 이번 승인·attempt·소비·upstream은 각1회, 자동 재시도0회이며 원본/Git 보존·프로세스 종료·sandbox 부재를 독립 감사로 확인했습니다. 누적 upstream15회 실패·전송 전 실패1회·소비 승인16개입니다. 기존 계약과 과거 실패 이력은 [4-C-8 결과](docs/stage-4c8-result.md)에 보존합니다.
+단계4-C-7은726개 회귀를 통과했습니다. 4-C-8의 최신 metadata 진단 계획은 native 포함1020개·집중98개·차등7416건·lint/typecheck/build 검증 뒤 TTL10분으로 별도 승인해 실제1회 호출했습니다. SSE created 내부 `access_programs`의 non-null 값이 기존 정책에 거부돼 `RESPONSE_METADATA`로 실패했으며 값의 형태·의미는 미확인이고 유효 보고서는 없습니다. 이번 승인·attempt·소비·upstream 각1회·자동 재시도0회와 원본/Git·코드·기존 작업물 보존·프로세스 종료를 독립 감사로 확인했습니다. 누적 upstream16회 실패·전송 전 실패1회·소비 승인17개이며 [4-C-8 결과](docs/stage-4c8-result.md)에 기록합니다.
+
+metadata 정적 진단은 기존 v9 수용 조건·오류 코드·hash를 유지합니다. 준비한 계획은 별도 승인으로1회 실행해 현재 `FAILED`이며 소비 승인은 재사용하지 않습니다. [최신 실제 실행·감사](docs/stage-4c8-result.md#metadata-진단-계획의-승인된-실제-단건-호출)와 [승인 전 로컬 준비 기록](docs/stage-4c8-result.md#metadata-정적-진단과-새-승인-대기-계획)을 구분합니다.
 
 ## 설치와 실행
 
@@ -450,6 +452,8 @@ pnpm harness readonly-model-preflight-prune
 
 ## 단계 4-C-8 합성 다중 파일의 실제 모델 읽기 전용 조사
 
+최신 metadata 진단 실제1회는 `created/access-programs/value`로 실패했습니다. 현재 SSE created 내부 response에서 non-null `access_programs`가 기존 생략/null 전용 검사에 거부된 사실만 확인했고 실제 값의 형태·의미·도구 활동은 미확인입니다. 승인·소비·전송 각1회·재시도0회이며 원본/Git 보존·프로세스 종료·sandbox 부재는 사후 감사 passed입니다. [최신 기록](docs/stage-4c8-result.md#metadata-진단-계획의-승인된-실제-단건-호출)을 우선하며 아래 내용은 이전 실제 실패 이력입니다.
+
 2026-11-13에 재생성한 v9 계획을 TTL10분으로 별도 승인해 실제1회 호출했고, 응답 metadata 검증에서 실패했습니다. 승인·attempt·소비·실제 전송은 각1회, 자동 재시도0회입니다. 원본/Git과 코드 hash 보존, controller·guardian·child·프로세스 그룹 종료 및 sandbox 부재를 확인했습니다. 현재 상태는 `FAILED`이며 [최신 실행·감사 기록](docs/stage-4c8-result.md#v9-승인된-실제-단건-호출과-사후-감사)을 따릅니다. 유효 보고서가 없어 수용162는 미완료입니다.
 
 `readonly-live-*`는 등록된 합성 `flow` fixture에서 승인한 근거만 고정 모델에 전달합니다. 기존 4-C-5/6/7 명령과 승인은 유지합니다. 이전 response 진단 실제1회는 `event=created`, `reason=envelope`, `missing=[]`, 예상 밖 속성5개·overflow 없음으로 실패했습니다. 모두 미등록 field 분류이며 array1·음수가 아닌 정수2·null1·object1입니다. 구체 이름·의미는 미확인이고 이전 v8의 origin으로 소급 적용하지 않습니다. 당시 유효 보고서·responseHash는 null이었으며 upstream14회 실패·전송 전 준비 실패1회·소비 승인15개·자동 재시도0회의 이력으로 보존합니다.
@@ -467,6 +471,8 @@ v5는 `Content-Type` 헤더가 없는 경우에만 제한된 본문 접두어로
 기존 고정 진단과 새 `response`는 원문 없이 경로·거부 경계·제한된 필드 분류와 계수만 기록합니다. 이전 response 진단 호출에는 전체985개·집중88개·lint/typecheck/build를 통과한 코드를 사용했습니다(전체 실패/skip0, 약70.7초). 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤습니다. 기존 v1~v8 계약·profile·hash는 보존합니다. 이후 재생성한 v9 계획을 별도 승인해1회 실행했으나 RESPONSE_METADATA로 실패했습니다. 승인·attempt·전송 각1회·자동 재시도0회입니다. 상세 이력은 [4-C-8 결과](docs/stage-4c8-result.md)를 따릅니다.
 
 새 `response` 진단은 direct-response/created/in-progress/completed 경로와9종 거부 경계를 고정 enum으로 구분합니다. 키 검사 실패 때만 누락·예상 밖 필드의 고정 분류·8종 값 형태·횟수·overflow를 기록하며 원문 키·값·ID는 저장하지 않습니다. 필수5개·기존 선택28개와 관찰용8개 이름은 구분하고, 관찰 사전에 이름을 추가해도 응답을 허용하지 않습니다.
+
+추가된 `metadata={event,field,reason}` 진단은 `RESPONSE_METADATA` 거부에서만 현재 decoder의 첫 실패 경계를 기록합니다. 경로4개·소스에 등록된 field39개·검사 사유6개만 허용하며 원문 키·값·응답 조각·ID·offset은 보관하지 않습니다. `shape/value/integer/number/text/size`는 실패한 검사 경계이고 원문 값의 확정된 형태 설명이 아닙니다. 정확한 own data property3개와 enum만 복사·동결하고 getter·symbol·추가 속성을 거부합니다. 내부 등록과 현재 decode 검증 경로를 확인하므로 transport/stream의 위조 오류와 과거 진짜 오류의 재생은 진단 증거가 되지 않습니다. v1/v2의 generic 오류와 `OUTPUT_LIMIT`·`TOOL_USAGE_ACTIVITY`, 기존 response 진단·profile/config/본문/명세 hash를 유지합니다. 이전 실제 실패의 필드·origin을 소급 확인한 것은 아닙니다. 이번 진단을 사용한 실제1회 결과는 최신 실행·감사 기록을 따릅니다.
 
 추가한 `sseEnvelope`는 필수 키 누락의 고정 분류와 예상 밖 root 속성의 고정 필드·값 형태·횟수만 기록합니다. 최대128개 root 속성·32개 조합까지 집계하고 초과는 overflow로 표시합니다. 미등록 이름은 other로 분류하며 원문 키·값·ID는 보관하지 않습니다. 기존 v3~v7 응답 허용 조건·오류 code와 profile/config/body/envelope hash는 그대로입니다.
 

@@ -12,6 +12,7 @@ import { defaultReadonlySelection, hashReadonlyValue } from '../src/policy/reado
 import { buildReadonlyLiveRequestEnvelope, hashReadonlyLiveEnvelope } from '../src/policy/readonly-live-policy.js';
 import { classifyReadonlyLiveHeaders } from '../src/policy/readonly-live-http-diagnostics.js';
 import { HarnessError } from '../src/domain/errors.js';
+import { decodeReadonlyLiveResponse, getReadonlyLiveMetadataDiagnostic } from '../src/policy/readonly-live-protocol.js';
 
 const config: ReadonlyLiveConfig = { enabled: true, policyVersion: 'readonly-live-codex-v1', codexPath: '/private/tmp/synthetic-codex',
   codexSha256: 'a'.repeat(64), model: 'gpt-6.1-sol', authMode: 'chatgpt', timeoutMs: 60000, maxResponseBytes: 16384 };
@@ -344,6 +345,63 @@ test('broker copies response-fields diagnostics from local decoding and ignores 
       assert.equal(broker.calls(), 1); assert.equal(broker.result(), null);
     } finally { await broker.close(); }
   }
+});
+
+test('broker retains frozen metadata categories only from its decoder and never trusts transport-forged diagnostics', async () => {
+  const selected: ReadonlyLiveConfig = { ...config, policyVersion: 'readonly-live-codex-v9' };
+  const requestEnvelope = buildReadonlyLiveRequestEnvelope(dispatch.requestEnvelope.body, 'codex-chatgpt-sse-v9', selected);
+  const request = { requestEnvelope, requestBodyHash: dispatch.requestBodyHash, requestEnvelopeHash: hashReadonlyLiveEnvelope(requestEnvelope) };
+  const expected = { event: 'created', field: 'text-format-type', reason: 'value' };
+  const invalidResponse = { id: 'resp_PRIVATE_METADATA_CANARY', object: 'response', model: config.model, status: 'in_progress', output: [],
+    text: { format: { type: 'PRIVATE_METADATA_TYPE_CANARY' } } };
+  const raw = Buffer.from(`data: ${JSON.stringify({ type: 'response.created', sequence_number: 0, response: invalidResponse })}\n\n`);
+  for (const origin of ['transport', 'stream', 'replayed-stream', 'decoder']) {
+    const local = origin === 'decoder';
+    let replayed: unknown;
+    const broker = await startReadonlyLiveBroker(selected, request, async () => credential, new AbortController().signal, async () => {
+      if (!local) {
+        let error: unknown = new HarnessError('READONLY_LIVE_INVALID_RESPONSE_RESPONSE_METADATA');
+        if (origin === 'replayed-stream') {
+          try { await decodeReadonlyLiveResponse(new Response(raw), new AbortController().signal, { profileId: 'codex-chatgpt-sse-v9' }); }
+          catch (failure) { error = failure; replayed = failure; }
+          assert.deepEqual(getReadonlyLiveMetadataDiagnostic(error), expected);
+        } else Object.defineProperty(error, 'metadataDiagnostic', { value: expected });
+        if (origin === 'transport') throw error;
+        return { status: 200, headers: [['content-type', 'application/json']], body: {
+          [Symbol.asyncIterator]: () => ({ next: async () => { throw error; }, return: async () => ({ done: true }) }),
+        } } as unknown as Response;
+      }
+      return new Response(raw);
+    }, () => {});
+    try {
+      const reply = await send(broker); assert.equal(reply.status, 502); assert.doesNotMatch(await reply.text(), /PRIVATE/);
+      assert.equal(broker.failure(), 'READONLY_LIVE_INVALID_RESPONSE_RESPONSE_METADATA');
+      assert.deepEqual(broker.metadataDiagnostic(), local ? expected : null);
+      if (local) {
+        const diagnostic = broker.metadataDiagnostic()!;
+        assert.equal(Object.isFrozen(diagnostic), true);
+        assert.notEqual(diagnostic, broker.metadataDiagnostic());
+        assert.equal(Reflect.set(diagnostic, 'reason', 'shape'), false);
+        assert.deepEqual(broker.metadataDiagnostic(), expected);
+        assert.doesNotMatch(JSON.stringify(diagnostic), /PRIVATE|resp_|metadataDiagnostic/);
+      }
+      assert.equal(broker.responseDiagnostic(), null); assert.equal(broker.jsonDiagnostic(), null); assert.equal(broker.sseDiagnostic(), null);
+      if (replayed) assert.deepEqual(getReadonlyLiveMetadataDiagnostic(replayed), expected);
+      assert.equal(broker.calls(), 1); assert.equal(broker.result(), null);
+      assert.equal((await send(broker)).status, 403); assert.equal(broker.calls(), 1);
+    } finally { await broker.close(); }
+  }
+});
+
+test('successful metadata validation leaves the broker metadata diagnostic empty', async () => {
+  const selected: ReadonlyLiveConfig = { ...config, policyVersion: 'readonly-live-codex-v9' };
+  const requestEnvelope = buildReadonlyLiveRequestEnvelope(dispatch.requestEnvelope.body, 'codex-chatgpt-sse-v9', selected);
+  const request = { requestEnvelope, requestBodyHash: dispatch.requestBodyHash, requestEnvelopeHash: hashReadonlyLiveEnvelope(requestEnvelope) };
+  const broker = await startReadonlyLiveBroker(selected, request, async () => credential, new AbortController().signal, async () => response(), () => {});
+  try {
+    const reply = await send(broker); assert.equal(reply.status, 200); await reply.text();
+    assert.equal(broker.metadataDiagnostic(), null); assert.equal(broker.failure(), null); assert.equal(broker.calls(), 1);
+  } finally { await broker.close(); }
 });
 
 test('v4 raw header diagnostics distinguish shape, names, values and duplicates without echoing input', () => {

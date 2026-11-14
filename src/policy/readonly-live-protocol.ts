@@ -11,6 +11,7 @@ import { classifyReadonlyLiveSseEnvelope, copyReadonlyLiveSseEnvelopeDiagnostic,
 import { classifyReadonlyLiveResponseEnvelope, copyReadonlyLiveResponseEnvelopeDiagnostic,
   type ReadonlyLiveResponseEnvelopeDiagnostic } from './readonly-live-response-envelope-diagnostics.js';
 import { projectReadonlyLiveResponseExtensions } from './readonly-live-response-extensions.js';
+import { copyReadonlyLiveMetadataDiagnostic, type ReadonlyLiveMetadataDiagnostic } from './readonly-live-metadata-diagnostics.js';
 
 export interface ReadonlyLiveHttpResponse { status: number; headers: [string, string][]; body: AsyncIterable<Uint8Array> }
 export interface ReadonlyLiveDecodeOptions { workTimeoutMs?: number; cleanupTimeoutMs?: number; profileId?: ReadonlyLiveProfileId }
@@ -155,6 +156,20 @@ export const getReadonlyLiveResponseDiagnostic = (error: unknown): ReadonlyLiveR
     if (!code || !Object.hasOwn(code, 'value') || code.value !== 'READONLY_LIVE_INVALID_RESPONSE_RESPONSE_FIELDS'
       || !diagnostic || !Object.hasOwn(diagnostic, 'value')) return null;
     return copyResponseDiagnostic(diagnostic.value);
+  } catch { return null; }
+};
+const metadataDiagnostics = new WeakMap<object, ReadonlyLiveMetadataDiagnostic>();
+/** Only the local metadata validator can attest the first boundary; transport errors cannot supply diagnostics. */
+export const getReadonlyLiveMetadataDiagnostic = (error: unknown): ReadonlyLiveMetadataDiagnostic | null => {
+  try {
+    if (!error || typeof error !== 'object') return null;
+    const snapshot = metadataDiagnostics.get(error);
+    if (!snapshot) return null;
+    const code = Object.getOwnPropertyDescriptor(error, 'code');
+    const diagnostic = Object.getOwnPropertyDescriptor(error, 'metadataDiagnostic');
+    if (!code || !Object.hasOwn(code, 'value') || code.value !== 'READONLY_LIVE_INVALID_RESPONSE_RESPONSE_METADATA'
+      || !diagnostic || !Object.hasOwn(diagnostic, 'value') || diagnostic.value !== snapshot) return null;
+    return copyReadonlyLiveMetadataDiagnostic(snapshot);
   } catch { return null; }
 };
 class ReadonlyLiveResponseError extends HarnessError {
@@ -370,54 +385,105 @@ const responseOptionals = ['created_at', 'completed_at', 'background', 'error', 
   'max_output_tokens', 'max_tool_calls', 'parallel_tool_calls', 'previous_response_id', 'prompt_cache_key', 'prompt_cache_retention',
   'reasoning', 'safety_identifier', 'service_tier', 'store', 'temperature', 'text', 'tool_choice', 'tools', 'top_logprobs', 'top_p',
   'truncation', 'usage', 'user', 'metadata'];
-const validateMetadata = (response: Record<string, unknown>, modern: boolean, typedToolUsage: boolean): void => {
+interface MetadataBoundary { field: ReadonlyLiveMetadataDiagnostic['field']; reason: ReadonlyLiveMetadataDiagnostic['reason'] }
+const validateMetadata = (response: Record<string, unknown>, modern: boolean, typedToolUsage: boolean, boundary: MetadataBoundary): void => {
+  boundary.field = 'tool-usage'; boundary.reason = 'shape';
   if (typedToolUsage && response.tool_usage !== undefined) {
     // Accounting metadata does not authorize tools. This readonly profile only supports zero recorded counts.
     if (toolUsageCounts(response.tool_usage).some((count) => count !== 0)) fail('INVALID_RESPONSE_TOOL_USAGE_ACTIVITY');
   }
+  boundary.field = 'access-programs'; boundary.reason = 'value';
   if (modern && response.access_programs !== undefined && response.access_programs !== null) fail();
-  if (!optionalNull(response.error) || !optionalNull(response.incomplete_details)
-    || (response.tools !== undefined && !emptyArray(response.tools))
-    || (response.tool_choice !== undefined && !['none', 'auto'].includes(response.tool_choice as string))
-    || (response.store !== undefined && response.store !== false)
-    || (response.background !== undefined && response.background !== false)) fail();
-  for (const key of ['created_at', 'completed_at', 'max_output_tokens', 'max_tool_calls', 'top_logprobs']) {
+  boundary.field = 'error'; if (!optionalNull(response.error)) fail();
+  boundary.field = 'incomplete-details'; if (!optionalNull(response.incomplete_details)) fail();
+  boundary.field = 'tools'; if (response.tools !== undefined && !emptyArray(response.tools)) fail();
+  boundary.field = 'tool-choice'; if (response.tool_choice !== undefined && !['none', 'auto'].includes(response.tool_choice as string)) fail();
+  boundary.field = 'store'; if (response.store !== undefined && response.store !== false) fail();
+  boundary.field = 'background'; if (response.background !== undefined && response.background !== false) fail();
+  for (const [key, field] of [['created_at', 'created-at'], ['completed_at', 'completed-at'], ['max_output_tokens', 'max-output-tokens'],
+    ['max_tool_calls', 'max-tool-calls'], ['top_logprobs', 'top-logprobs']] as const) {
+    boundary.field = field; boundary.reason = 'integer';
     if (!optionalNull(response[key]) && !integer(response[key])) fail();
   }
-  for (const key of ['temperature', 'top_p']) {
+  for (const [key, field] of [['temperature', 'temperature'], ['top_p', 'top-p']] as const) {
+    boundary.field = field; boundary.reason = 'number';
     if (!optionalNull(response[key]) && (typeof response[key] !== 'number' || !Number.isFinite(response[key]))) fail();
   }
+  boundary.field = 'parallel-tool-calls'; boundary.reason = 'value';
   if (response.parallel_tool_calls !== undefined && typeof response.parallel_tool_calls !== 'boolean') fail();
-  for (const key of ['instructions', 'previous_response_id', 'prompt_cache_key', 'prompt_cache_retention', 'safety_identifier', 'service_tier', 'truncation', 'user']) {
+  for (const [key, field] of [['instructions', 'instructions'], ['previous_response_id', 'previous-response-id'],
+    ['prompt_cache_key', 'prompt-cache-key'], ['prompt_cache_retention', 'prompt-cache-retention'], ['safety_identifier', 'safety-identifier'],
+    ['service_tier', 'service-tier'], ['truncation', 'truncation'], ['user', 'user']] as const) {
+    boundary.field = field; boundary.reason = 'text';
     if (!optionalNull(response[key])) boundedText(response[key], 8192);
   }
+  boundary.field = 'reasoning'; boundary.reason = 'shape';
   if (response.reasoning !== undefined && !(modern && response.reasoning === null)) {
     const reasoning = object(response.reasoning, [], ['effort', 'summary', ...(modern ? ['context', 'mode'] : [])]);
+    boundary.reason = 'text';
     for (const value of Object.values(reasoning)) if (value !== null) boundedText(value, 64);
-    if (modern && ((!optionalNull(reasoning.context) && !['auto', 'current_turn', 'all_turns'].includes(reasoning.context as string))
-      || (reasoning.mode !== undefined && !['standard', 'pro'].includes(reasoning.mode as string)))) fail();
+    boundary.field = 'reasoning-context'; boundary.reason = 'value';
+    if (modern && !optionalNull(reasoning.context) && !['auto', 'current_turn', 'all_turns'].includes(reasoning.context as string)) fail();
+    boundary.field = 'reasoning-mode';
+    if (modern && reasoning.mode !== undefined && !['standard', 'pro'].includes(reasoning.mode as string)) fail();
   }
+  boundary.field = 'metadata'; boundary.reason = 'shape';
   if (response.metadata !== undefined && !(modern && response.metadata === null)) {
-    if (!response.metadata || typeof response.metadata !== 'object' || Array.isArray(response.metadata)
-      || Object.keys(response.metadata).length > 16 || Buffer.byteLength(canonicalReadonlyJson(response.metadata)) > 2048) fail();
+    if (!response.metadata || typeof response.metadata !== 'object' || Array.isArray(response.metadata)) fail();
+    boundary.reason = 'size';
+    if (Object.keys(response.metadata).length > 16 || Buffer.byteLength(canonicalReadonlyJson(response.metadata)) > 2048) fail();
+    boundary.reason = 'text';
     for (const [key, value] of Object.entries(response.metadata)) { boundedText(key, 64); boundedText(value, 512); }
   }
+  boundary.field = 'usage'; boundary.reason = 'shape';
   if (!optionalNull(response.usage)) {
     const usage = object(response.usage, ['input_tokens', 'output_tokens', 'total_tokens'], ['input_tokens_details', 'output_tokens_details']);
+    boundary.field = 'usage-counts'; boundary.reason = 'integer';
     for (const key of ['input_tokens', 'output_tokens', 'total_tokens']) if (!integer(usage[key])) fail();
-    for (const [key, allowed] of [['input_tokens_details', ['cached_tokens', ...(modern ? ['cache_write_tokens'] : [])]], ['output_tokens_details', ['reasoning_tokens']]] as const) {
-      if (usage[key] !== undefined) for (const value of Object.values(object(usage[key], [], [...allowed]))) if (!integer(value)) fail();
+    for (const [key, allowed, field] of [['input_tokens_details', ['cached_tokens', ...(modern ? ['cache_write_tokens'] : [])], 'usage-input-details'],
+      ['output_tokens_details', ['reasoning_tokens'], 'usage-output-details']] as const) {
+      boundary.field = field; boundary.reason = 'shape';
+      if (usage[key] !== undefined) {
+        const values = Object.values(object(usage[key], [], [...allowed]));
+        boundary.reason = 'integer';
+        for (const value of values) if (!integer(value)) fail();
+      }
     }
   }
+  boundary.field = 'text'; boundary.reason = 'shape';
   if (response.text !== undefined) {
     const text = object(response.text, ['format'], ['verbosity']);
+    boundary.field = 'text-verbosity'; boundary.reason = 'text';
     if (text.verbosity !== undefined) boundedText(text.verbosity, 32);
+    boundary.field = 'text-format'; boundary.reason = 'shape';
     const format = object(text.format, ['type'], ['name', 'schema', 'strict', ...(modern ? ['description'] : [])]);
+    boundary.field = 'text-format-description'; boundary.reason = 'text';
     if (modern && format.description !== undefined) boundedText(format.description, 4096);
-    if (!['text', 'json_schema', 'json_object'].includes(format.type as string)
-      || (format.strict !== undefined && typeof format.strict !== 'boolean')
-      || (format.name !== undefined && typeof format.name !== 'string')
-      || Buffer.byteLength(canonicalReadonlyJson(format)) > 32 * 1024) fail();
+    boundary.field = 'text-format-type'; boundary.reason = 'value';
+    if (!['text', 'json_schema', 'json_object'].includes(format.type as string)) fail();
+    boundary.field = 'text-format-strict';
+    if (format.strict !== undefined && typeof format.strict !== 'boolean') fail();
+    boundary.field = 'text-format-name';
+    if (format.name !== undefined && typeof format.name !== 'string') fail();
+    boundary.field = 'text-format'; boundary.reason = 'size';
+    if (Buffer.byteLength(canonicalReadonlyJson(format)) > 32 * 1024) fail();
+  }
+};
+const validateResponseMetadata = (response: Record<string, unknown>, modern: boolean, typedToolUsage: boolean,
+  event: ReadonlyLiveMetadataDiagnostic['event']): void => {
+  const boundary: MetadataBoundary = { field: 'tool-usage', reason: 'shape' };
+  try { checked(modern, 'RESPONSE_METADATA', () => validateMetadata(response, modern, typedToolUsage, boundary)); }
+  catch (error) {
+    if (modern && error instanceof HarnessError && error.code === 'READONLY_LIVE_INVALID_RESPONSE_RESPONSE_METADATA') {
+      try {
+        const diagnostic = copyReadonlyLiveMetadataDiagnostic({ event, field: boundary.field, reason: boundary.reason });
+        if (diagnostic) {
+          Object.defineProperty(error, 'metadataDiagnostic', { value: diagnostic });
+          metadataDiagnostics.set(error, diagnostic);
+        }
+      } catch { /* Diagnostic collection cannot replace the original rejection. */ }
+    }
+    throw error;
   }
 };
 const validateResponseRaw = (value: unknown, completed: boolean, modern: boolean, typedToolUsage: boolean,
@@ -443,7 +509,7 @@ const validateResponseRaw = (value: unknown, completed: boolean, modern: boolean
   diagnostic.reason = 'status'; if (response.status !== (completed ? 'completed' : 'in_progress')) fail();
   diagnostic.reason = 'model'; if (response.model !== 'gpt-6.1-sol') fail();
   diagnostic.reason = 'output-type'; if (!Array.isArray(response.output)) fail();
-  checked(modern, 'RESPONSE_METADATA', () => validateMetadata(response, modern, typedToolUsage));
+  validateResponseMetadata(response, modern, typedToolUsage, diagnostic.event);
   const output = response.output as unknown[];
   diagnostic.reason = 'output-count';
   if ((!completed && output.length !== 0) || output.length > 5) fail();
@@ -795,6 +861,14 @@ export const decodeReadonlyLiveResponse = async (
   signal.addEventListener('abort', abort, { once: true });
   const workTimer = setTimeout(() => rejectAbort(new HarnessError('READONLY_LIVE_TIMEOUT')), workMs);
   const deadline = performance.now() + workMs;
+  let localMetadataError: object | null = null;
+  const trackLocalMetadataFailure = <T>(validate: () => T): T => {
+    try { return validate(); }
+    catch (error) {
+      if (error && typeof error === 'object' && metadataDiagnostics.has(error)) localMetadataError = error;
+      throw error;
+    }
+  };
   try {
     const normalized: ReadonlyLiveHttpResponse = response instanceof Response
       ? { status: response.status, headers: [...response.headers.entries()], body: response.body as unknown as AsyncIterable<Uint8Array> } : response;
@@ -815,7 +889,7 @@ export const decodeReadonlyLiveResponse = async (
         if (stream === null) return;
         text = pending; pending = '';
       }
-      if (stream) sse.feed(text); else json += text;
+      if (stream) trackLocalMetadataFailure(() => sse.feed(text)); else json += text;
     };
     for (;;) {
       if (signal.aborted) fail('CANCELLED'); if (performance.now() >= deadline) fail('TIMEOUT');
@@ -832,10 +906,18 @@ export const decodeReadonlyLiveResponse = async (
     const tail = checked(modern, 'UTF8', () => { try { return decoder.decode(); } catch { return fail(); } });
     feed(tail);
     if (stream === null) fail('INVALID_RESPONSE_DECODE_BODY_FORMAT');
-    const text = stream ? sse.finish() : validateResponse(parse(json, modern, 'response', typedToolUsage), true, modern, typedToolUsage, 'direct-response', responseExtensions).text;
+    const text = trackLocalMetadataFailure(() => stream ? sse.finish()
+      : validateResponse(parse(json, modern, 'response', typedToolUsage), true, modern, typedToolUsage, 'direct-response', responseExtensions).text);
     if (signal.aborted) fail('CANCELLED'); if (performance.now() >= deadline) fail('TIMEOUT');
     return { text, responseHash: hash.digest('hex') };
   } catch (error) {
+    if (modern && error !== localMetadataError && error && typeof error === 'object' && metadataDiagnostics.has(error)) {
+      const code = Object.getOwnPropertyDescriptor(error, 'code');
+      // A transport may replay a genuine error from another decode; it cannot attest this response's boundary.
+      if (code && Object.hasOwn(code, 'value') && code.value === 'READONLY_LIVE_INVALID_RESPONSE_RESPONSE_METADATA') {
+        throw new HarnessError(code.value);
+      }
+    }
     if (error instanceof HarnessError && ((allowMissingContentType && error.code === 'READONLY_LIVE_INVALID_RESPONSE_DECODE_BODY_FORMAT')
       || (compatibleHeaders && decodeHeaderReasons.some((reason) => error.code === `READONLY_LIVE_INVALID_RESPONSE_DECODE_${reason}`))
       || (modern && diagnosticStages.some((stage) => error.code === `READONLY_LIVE_INVALID_RESPONSE_${stage}`))

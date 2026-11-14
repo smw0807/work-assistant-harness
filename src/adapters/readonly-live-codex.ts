@@ -113,6 +113,7 @@ export class RestrictedReadonlyLiveCodex implements ReadonlyLivePort {
           sse: broker?.sseDiagnostic() ?? null,
           sseEnvelope: broker?.sseEnvelopeDiagnostic() ?? null,
           response: broker?.responseDiagnostic() ?? null,
+          metadata: broker?.metadataDiagnostic() ?? null,
           failureCode: broker?.failure() ?? failureCode,
         }, null, 2), { flag: 'wx', mode: 0o600 });
       }
