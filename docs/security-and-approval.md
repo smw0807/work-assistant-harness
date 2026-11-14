@@ -395,11 +395,19 @@ v8 호환 예외는 첫 response.created root의 추가 필드 정확히1개에�
 
 ### 단계 4-C-9의 로그인 유지 relay 검증 경계
 
-로그인 유지 선택은 등록 합성 SSE와 pinned native를 사용한 offline probe·전환 계획의 범위다. 실제 로그인 파일 조회·계정 확인·refresh·실제 모델 호출은 수행하지 않는다. probe는 실제 credential loader·외부 HTTP transport·live 승인 저장소를 의존하거나 fallback으로 사용하지 않는다. 설치된 바이너리와 기존 설정을 변경하지 않고 빈 HOME·기능 비활성·OS profile·guardian으로 로컬 실행한다.
+첫 로그인 유지 실험은 등록 합성 SSE와 pinned native를 사용한 offline probe·전환 계획이었다. 해당 probe에서 실제 로그인 파일 조회·계정 확인·refresh·모델 호출은 수행하지 않았다. probe는 실제 credential loader·외부 HTTP transport·live 승인 저장소를 의존하거나 fallback으로 사용하지 않는다. 설치된 바이너리와 기존 설정을 변경하지 않고 빈 HOME·기능 비활성·OS profile·guardian으로 로컬 실행한다.
 
 opaque relay 후보에서는 부모가 비공개 metadata·SSE 의미 순서·공급자 tool_usage를 직접 검증하지 않으며 원시 응답 전체 민감정보 검사와 부모/CLI text 비교도 수행하지 않는다. 이를 구형 응답 검증 통과나 공급자 도구 활동0으로 표시하지 않는다. `tools=[]`·로컬 도구 비활성·OS 차단과 CLI 도구 결과 거부, 최종 JSON의 schema·인용·줄·비밀 검사는 별도의 보증이다. 원시/부분/거부 응답은 저장하지 않으며 모델 임시 디렉터리의 종료 후 정리와 잔류 불확실성을 구분한다.
 
-후속 live에는 이 책임 변경을 고정한 새 profile·정책·DB/승인 namespace·보고서 계약이 필요하다. 부모가 인증을 보유하고 정확한 승인 본문·고정 목적지·최대1회·retry/redirect/fallback0·TTL/generation·프로세스 종료를 강제하는 경계는 유지한다. 원시 응답의 인증값 반사로 자식에 비밀이 들어갈 가능성은 별도 차단·검증해야 하며, 의도적인 인증 전달을 막는 것으로 동일한 비노출 보증을 주장하지 않는다. upstream 오류·원시 헤더·쿠키도 그대로 중계하지 않는다. 새 검토 본문·hash가 준비된 뒤 `AWAITING_APPROVAL`에서 멈추며, 이번 방향 선택이나 과거 소비 승인을 실제 전송에 사용하지 않는다. 현재 live 연결은 미구현이며 [기준 계획](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)을 따른다.
+후속 요청으로 이 책임 변경을 고정한 새 profile·정책·DB/승인 namespace·보고서 계약을 구현했다. 기본 비활성 `readonly-relay-codex-v1`은 새 계획과만 결합하며 v9 승인이나 DB를 가져오지 않는다. 부모가 인증을 보유하고 정확한 승인 본문·고정 목적지·최대1회·retry/redirect/fallback0·TTL/generation·프로세스 종료를 강제하는 경계는 유지한다. 인증 조회 직전의 guard와 네트워크 직전의 단건 guard를 분리해 긴 preflight·인증 읽기 이후의 만료·취소도 차단한다.
+
+원시 응답은256KiB EOF까지 메모리로 수집한 뒤에만 자식에 전달한다. 원문과 일반 JSON의 decoded 키/문자열, wire 순서의 문자열 조각 조합·최종 CLI JSON에 실제 token/account가 반사되면 정적으로 거부한다. 조각 상태는64개·JSON 깊이는16으로 제한하고 초과를 거부한다. 이는 고정된 반사 형태의 방어이며 base64·암호화·임의 변형 전체의 비노출 보증은 아니다. upstream 오류·원시 헤더·쿠키를 중계·보관하지 않고 인증 객체는 부모의 동결 사본으로 한정한다.
+
+단일 thread/turn·최종 JSON·선택 근거/줄·민감정보 검증과 EOF/raw hash·final text hash를 분리한다. `contractVerified.cliOutput`을 기존 response 검증과 같은 의미로 쓰지 않으며 `unverifiedResponseChecks` 다섯 항목을 profile·보고서·저장소에서 일치시킨다. operation55초 이후 native/HTTP/broker가 하나의 정리 대기5초를 공유한다. stream cancel이나 native 대기가 불확실하면 성공·추측 정리 없이 `BLOCKED`로 보존한다. 정리 후 `closed`가 기록돼도 최종 child/guardian/PGID·scratch 검사가 불확실하면 성공으로 판정하지 않고 `BLOCKED`로 남긴다. OS/파일 I/O가 정지한 상황까지 절대적인 벽시계 종료를 보증하지 않는다.
+
+하네스의 DB·일반 로그·감사에는 원시/부분/거부 응답을 쓰지 않는다. 격리 Codex가 일시적으로 보유하는 내용은 native 임시 영역의 종료 후 제거와 함께 다루며, 강제 중단·정리 불확실에서 잔류 내용의 완전한 제거를 보증하지 않는다. 원본/Git·DB·감사는 임시 영역 정리 대상이 아니다.
+
+새 검토 본문·hash를 `AWAITING_APPROVAL`로 고정한 뒤 사용자의 별도 TTL10분·1회·retry0 승인을 받아 실제 단건을 실행했다. 승인·사용·소비·attempt·dispatch·upstream은 각1회이며 HTTP200 응답 본문의256KiB 상한 초과로 실패했다. 실제 인증 접근·격리·로컬 정리 확인과 유효 응답/조사 성공을 구분하고 원시 본문은 보관하지 않는다. 원본/Git·고정 자료 보존과 controller/guardian/child/PGID 종료를 사후 감사했다. 원격 추론 중지 여부는 확인할 수 없으며 승인 복원·재시도·한도 변경은 하지 않았다. [실제 결과](stage-4c9-result.md#승인된-relay-실제-단건-호출과-사후-감사)와 [기준 계획](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)을 따른다.
 
 ## 7. 회사 자료와 비밀정보
 

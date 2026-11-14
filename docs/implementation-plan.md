@@ -680,6 +680,8 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 
 #### 단계 4-C-9 ChatGPT 로그인 유지와 Codex 응답 해석으로 전환
 
+**최신 실제 결과:** 새 relay 계획을 사용자 승인 TTL10분으로 실제1회 실행했으며 HTTP200 응답 본문이256KiB 상한을 넘어 `READONLY_RELAY_RESPONSE_LIMIT`로 거부됐다. 유효 조사 보고서는 없고 승인·사용·소비·attempt·dispatch·upstream 각1회·retry0이다. 원본/Git·고정 코드/자료 보존과 로컬 프로세스 종료를 사후 감사했다. [실제 단건 결과](stage-4c9-result.md#승인된-relay-실제-단건-호출과-사후-감사)를 현재 상태로 삼으며 아래 승인 대기 자료는 준비 이력이다. 수용162·178은 미완료이고 누적 실제upstream17회 실패·소비 승인18개다.
+
 **선택한 방향:** ChatGPT 로그인을 유지하고, 공급자 응답 해석을 고정 Codex에 맡기는 relay 구조를 검증한다. 공개 Responses API/API 키로 전환하지 않는다. v9의 `access_programs` 허용값을 추가하는 작업은 진행하지 않는다. v1~v9 계약·설정·hash·승인·실패 기록은 보존한다.
 
 현재 4-C-8은 부모 broker가 비공개 upstream 응답을 직접 해석하고 검증한 text로 합성 SSE를 만들어 Codex에 전달한다. 전환 후보는 부모가 승인한 요청 바이트만 전송하고, 제한된 원시 SSE를 격리 Codex에 전달하는 구조다. 공식 [비대화형 실행 안내](https://learn.chatgpt.com/docs/non-interactive-mode)는 저장된 CLI 인증과 최종 JSON schema 사용을 설명하지만, 우리 pinned 0.154.0·부모 인증 broker·비공개 endpoint의 호환성을 보장하지 않는다. 이 호환성은 로컬 합성 검증과 구체 승인된 실제 검증으로 구분한다.
@@ -708,11 +710,23 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 ##### 후속 live 구현과 실제 호출 gate
 
 1. **로컬 가능성 확인:** 위 probe와 native 합성 검증을 먼저 완료하고 실패·미실행과 보안 차이를 결과 문서에 남긴다. 현재 v9 명령의 동작은 바꾸지 않는다.
-2. **새 live 계약 구현:** 별도 정책·profile·DB/승인 namespace·기본 비활성 adapter를 만든다. `responseValidation=codex-native-output-v1` 같은 해석 모드를 profile/hash에 고정하고, 기존 `contractVerified.response=passed`를 같은 의미로 복사하지 않는다. 응답 해석·원시 검사 미실시·최종 schema/근거 검증을 보고서/저장소에서 구분한다. opaque 응답에 공급자가 인증값을 반사하면 자식에 전달될 수 있으므로, 실제 인증 반사 차단·오류/헤더/쿠키 비중계 정책을 별도로 설계·검증한다. 부모의 의도적인 인증 제공만 제한하는 것으로 자식 비노출을 보증하지 않는다. 전체55초+공유 정리예산5초는 새 live adapter에서 별도로 구현·검증한다. 이 항목은 첫 probe 범위의 미구현 후속 작업이다.
+2. **새 live 계약 구현:** 별도 정책·profile·DB/승인 namespace·기본 비활성 adapter를 만든다. `responseValidation=codex-native-output-v1`을 profile/hash에 고정하고, 기존 `contractVerified.response=passed`를 같은 의미로 복사하지 않는다. 응답 해석·원시 검사 미실시·최종 schema/근거 검증을 보고서/저장소에서 구분한다. opaque 응답에 공급자가 인증값을 반사하면 자식에 전달될 수 있으므로 실제 인증 반사 차단·오류/헤더/쿠키 비중계 정책을 별도로 설계·검증한다. 부모의 의도적인 인증 제공만 제한하는 것으로 자식 비노출을 보증하지 않는다. operation55초+공유 정리예산5초를 새 adapter에서 적용한다. 첫 probe 이후 후속 구현 요청으로 이 항목을 구현했으며 실제 인증/공급자 호환성 검증과 구분한다.
 3. **승인 가능한 자료 준비:** 새 합성 flow 문맥에서 정확한 입력·wire body·범위·설정·고정 바이너리·목적지·해석 정책·한도·다섯 hash·planHash를 생성하고 로컬 검증한다. OS 소유자·필수 TTL1~60분·계획24h·원자 소비·dispatch 현재 시각·취소 generation·중단 복구·보관을 새 계약으로 검증하고 `AWAITING_APPROVAL`에서 멈춘다.
 4. **별도 승인 후 실제 확인:** 사용자가 해당 계획과 TTL·최대1회·재시도0을 구체 승인한 경우에만 부모가 기존 ChatGPT 인증을 지연 접근한다. 자식에게 로그인 파일을 전달하거나 refresh·복제·설정 변경을 하지 않는다. 전송1회·결과·원본/Git·controller/guardian/child/PGID 종료·scratch 부재를 확인한다. 실패·전송 불확실에도 승인 복원·재호출·자동 모델/바이너리 교체는 없다.
 
-**이번 구현 범위:** 첫 로컬 probe와 전환 계획 준비다. 후속 live adapter·승인 DB·실제 호출은 아직 구현/승인된 기능이 아니다. 기존 실제 upstream16회 실패·소비 승인17개의 기록과 수용162 미완료 상태를 유지한다. 상세 실행 결과는 [4-C-9 결과](stage-4c9-result.md)를 따른다.
+**현재 구현·실행 범위:** 첫 로컬 probe와 새 relay 계약·adapter·승인 DB·CLI를 구현하고 정확한 검토 계획을 `AWAITING_APPROVAL`로 준비했다. 이후 사용자가 해당 계획을 TTL10분·실제1회·retry0으로 별도 승인해 단건 실행·실패 결과·원본/Git·프로세스 종료를 확인했다. 실패 뒤 계약/한도 변경·추가 승인·재호출은 하지 않는다. 상세 실행 결과는 [4-C-9 결과](stage-4c9-result.md)를 따른다.
+
+##### 새 relay 계약의 구현·수용 기준
+
+- **namespace:** 정책 `synthetic-readonly-relay-v1`, 설정 `readonly-relay-codex-v1`, profile `codex-chatgpt-relay-v1`, serializer `readonly-relay-json-v1`, transport `codex-cli-relay`로 분리한다. 새 DB `readonly-relay.sqlite`의 테이블은 `readonly_relay_*`, 실행 기록은 `readonly-relay-runs/`다. 구형 v1~v9 code/config/body/profile/승인/DB를 수정·승격하지 않는다. 기존 source 파일 변경은 새 명령 등록에 필요한 `src/cli/main.ts`에 한정한다.
+- **요청과 승인:** 기존 합성 reader·선택 근거·빈 수정/명령 범위를 재사용한다. 동일 근거의 요청 본문은 v9와 동일할 수 있지만 새 profile/설정/명세/계획 hash로 새 승인이 필요하다. 계획24h·필수 승인TTL1~60분·OS 소유자·원자 소비·attempt/dispatch 최대1회·취소/무효화·보관/복구 규칙을 새 저장소에서 강제한다. 인증 조회 직전과 실제 전송 직전에 원본·현재 시각·generation을 별도로 확인한다.
+- **부모와 자식:** 고정 native0.154.0 경로/SHA·빈 HOME·최소 환경·기능 비활성·SBPL·guardian을 유지한다. 부모만 승인된 run에서 기존 ChatGPT 인증을 읽으며 refresh·복제·환경 token fallback은0이다. 자식 본문·헤더·tools·metadata를 무시하고 승인된 wire bytes만 고정 endpoint로 보낸다. 실제 인증 객체는 own data·동결 사본으로만 사용한다.
+- **응답 중계:** HTTP200·헤더64개/16KiB·MIME 생략 또는 UTF8 SSE·encoding 생략/identity만 허용한다. 중복 쿠키는 계수 후 버리고 그 외 중복/잘못된 헤더·redirect/Location·Retry-After·HTTP 오류를 거부한다. 전체256KiB EOF까지 수집한 뒤 일반 SSE frame64KiB/2048개·JSON 깊이16·중복 키·UTF8을 검사하며 실패 시 부분 전달0이다. `[DONE]`은 불투명 sentinel일 뿐 완료 증거로 쓰지 않는다. private 필드의 타입/의미나 공급자 sequence/tool_usage를 검사하지 않는다.
+- **인증 반사:** raw UTF8·일반 JSON의 decoded 키/문자열·wire 순서 문자열 조각·최종 CLI JSON에 actual token/account가 반사되면 거부한다. 무관 문자열을 건너뛴 순서 있는 단순 조각 연결의 prefix 상태를 최대64개로 제한하고 초과는 거부한다. token길이12~16384·account길이12~128과 ASCII 문법을 고정한다. 임의 base64/암호화·변형·재구성 전체의 탐지는 보증하지 않는다.
+- **최종 결과:** 단일 thread→turn→최종 assistant→완료와 엄격한 CLI JSON을 검사한다. bounded reasoning은 결과/권한에 쓰지 않고 기존 정확한 metadata 경고만 예외로 둔다. 도구/추가 turn/복수 최종/미완성·잘못된 Unicode·중복 키를 거부한다. 최종 조사 schema·선택 근거/줄·민감정보·추가 실행 필드 검증을 service에서 수행한다.
+- **보고서:** `responseHash`는 원문 byte, `finalTextHash`는 최종 text를 식별한다. `verification`에 native 해석·EOF·반사 검사 근거를, `contractVerified`에 profile/envelope/cliOutput/evidence를 구분한다. `unverifiedResponseChecks`의 providerMetadata/providerSequence/providerToolUsage는 `not_inspected`, rawSensitiveScan/parentTextComparison은 `not_performed`로 고정해 profile·보고서·저장소에서 검증한다. 공급자 도구 활동0이나 의미 정확성을 주장하지 않는다.
+- **취소·정리:** operation55초와 공유 정리 대기5초를 적용한다. stream cancel·native/guardian·broker 종료 불확실은 `BLOCKED`로 남기며 승인 복원·재전달·추측 PID 종료·원본 자동 정리0이다. closed 상태도 child/guardian/PGID 종료와 scratch 부재를 검증하고 강제 종료 뒤 새 프로세스에서 복구한다. OS/파일 I/O 정지까지 절대 벽시계 종료를 보증하지 않는다.
+- **검토 자료:** 정확한 합성 입력·body·profile·명세·config와 다섯 hash·planHash, 원본/Git manifest·기존 계약 비교·검사 로그·DB 승인/소비/attempt/dispatch0을 private 디렉터리에 저장한다. 로컬 fake/native 검증을 실제 모델/인증/공급자 호환성 통과로 바꾸지 않는다. 새 구체 승인 전 실제 인증·모델·외부 전송은0이다.
 
 #### 후속 단계의 별도 범위
 
@@ -1107,7 +1121,17 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 165 | relay 한도·단건·종료 (4-C-9) | 고정 합성 본문·capability·최대1회·retry0, 요청/응답256KiB·최종16KiB·native 합계128KiB/stderr16KiB·operation55초. 정리 대기는 native5초·broker5초의 단계별 상한이며 전체60초 보장과 구분. 취소/timeout·조기 close·프로세스 종료/scratch 정리의 실행한 검사만 passed. 고정 buffer의 drain 처리와 일반 upstream stream 미검증 구분. |
 | 166 | 최종 출력과 보증 범위 (4-C-9) | CLI 도구·미완성/복수 최종 출력·기존 정확한 metadata 부재 경고를 제외한 오류 거부와 고정 합성 JSON 일치. 후속 최종 조사 schema·인용/줄·비밀·실행 필드 연결 및 raw metadata/tool_usage/부모text교차검증 미실시를 구분. |
 | 167 | 기존 계약·순수 helper 보존 (4-C-9) | v1~v9 profile/config/body/승인/DB 불변. argv/event helper 분리의 기존 export·판정 보존과 lint/typecheck/build/회귀 실제 결과 기록. |
-| 168 | 후속 live gate 분리 (4-C-9) | 새 해석/보고서 계약·정책/DB·구체 검토 계획은 미구현으로 표시. 로컬 probe에서 live 승격·승인 생성·소비·전송 없음, 기존162의 실패/미완료를 대체하지 않음. |
+| 168 | probe와 후속 live gate 분리 (4-C-9) | 로컬 probe에서 live 승격·승인 생성·소비·전송 없음. 후속 새 계약은 별도 구현·검증하며 기존162의 실패/미완료를 대체하지 않음. |
+| 169 | 새 계약·구형 불변 | 새 정책/profile/config/DB/명령 분리와 구형 승인·DB 양방향 혼용 거부. 기존 파일/hash 보존·기본 비활성·임의 연결 옵션0. |
+| 170 | 승인 본문과 지연 인증 | 선택 근거·본문/다섯 hash 결합, 인증 전/전송 전 최신TTL·generation·원본 guard. 자식 body/tools/header 무시·인증 지연·자식 actual credential 제공0·승인 전 호출0. |
+| 171 | 소비·실패·중단 | 원자 claim/dispatch·동시성·DB 실패·일회 소비. 오류/timeout/불확실 뒤 재시도/복원0, 취소·generation·늦은 성공 차단·복구. |
+| 172 | EOF와 일반 응답 검사 | HTTP/헤더/쿠키/encoding·UTF8/SSE/JSON·바이트/frame/깊이 경계와 분할 입력. EOF 및 반사 검사 전 child 전달0, private metadata/sequence 의미 검사와 구분. |
+| 173 | 인증 반사·원시 비보관 | raw/escaped/순서 있는 조각/키·최종 JSON의 actual credential 차단·상태 상한·불변 credential 사본. 원시/부분/거부/오류/쿠키 비보관과 일반 변형 탐지의 한계 명시. |
+| 174 | CLI와 최종 근거 보고 | 단일 turn·도구/추가 출력·오류·미완성/중복 JSON/Unicode·최종16KiB·허구 근거/줄·실행 필드 거부. 두 response hash와 별도 보증/미검증5키를 저장검증. |
+| 175 | 격리·정리·복구 | pinned native·SBPL canary·빈 HOME·환경·추가 exec/네트워크 제한·native출력128KiB/stderr16KiB·공유cleanup5초. SIGKILL·새 프로세스 복구·child/guardian/PGID 종료·scratch 부재/불확실 BLOCKED. |
+| 176 | CLI·보관·회귀 | 8명령·strict옵션/config경합/lease·조회/취소·만료/prune·24h/30d/소비marker·기존계약/원본 무변경과 lint/typecheck/build/전체회귀 결과를 실제 기록. |
+| 177 | 새 승인 대기 검토 자료 | 정확한body·config/profile/envelope/plan hash·원본/Git·코드/빌드·검증로그·DB0건을 private 자료로 고정. 실제 인증·전송·모델0, AWAITING_APPROVAL과 만료·다음 승인 범위 표시. |
+| 178 | 별도 승인된 relay 실제 검증 | 새 구체 계획·TTL 승인 뒤 실제 최대1회·retry0·결과·원본/Git·프로세스/정리 확인. 미승인/미실행은 not_run. 이번 승인된1회는응답256KiB초과로failed·최종조사미완료이며 합성 검증으로 공급자 호환성/수용162를 완료 처리하지 않음. |
 
 ### 최종 검증 묶음
 

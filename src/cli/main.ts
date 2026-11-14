@@ -24,6 +24,7 @@ import { readonlyInvestigationUsage, runReadonlyInvestigationCommand } from './r
 import { readonlyTransportUsage, runReadonlyTransportCommand } from './readonly-transport.js';
 import { readonlyModelPreflightUsage, runReadonlyModelPreflightCommand } from './readonly-model-preflight.js';
 import { readonlyLiveUsage, runReadonlyLiveCommand } from './readonly-live.js';
+import { readonlyRelayUsage, runReadonlyRelayCommand } from './readonly-relay.js';
 
 const scenarios = new Set([
   'inquiry', 'change', 'unclear', 'invalid-json', 'invalid-summary', 'hallucinated-file',
@@ -157,8 +158,9 @@ const run = async (): Promise<void> => {
   }
 };
 
-if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${branchExecutionUsage}\n${codexProposalUsage}\n${codexExecutionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n${readonlyInvestigationUsage}\n${readonlyTransportUsage}\n${readonlyModelPreflightUsage}\n${readonlyLiveUsage}\n`);
-else (process.argv[2]?.startsWith('readonly-live-') ? runReadonlyLiveCommand(process.argv.slice(2))
+if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${branchExecutionUsage}\n${codexProposalUsage}\n${codexExecutionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n${readonlyInvestigationUsage}\n${readonlyTransportUsage}\n${readonlyModelPreflightUsage}\n${readonlyLiveUsage}\n${readonlyRelayUsage}\n`);
+else (process.argv[2]?.startsWith('readonly-relay-') ? runReadonlyRelayCommand(process.argv.slice(2))
+  : process.argv[2]?.startsWith('readonly-live-') ? runReadonlyLiveCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('readonly-model-preflight-') ? runReadonlyModelPreflightCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('readonly-transport-') ? runReadonlyTransportCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('readonly-investigation-') ? runReadonlyInvestigationCommand(process.argv.slice(2))
@@ -173,6 +175,6 @@ else (process.argv[2]?.startsWith('readonly-live-') ? runReadonlyLiveCommand(pro
   : process.argv[2]?.startsWith('execution-') ? runExecutionCommand(process.argv.slice(2))
   : process.argv[2] === 'sandbox-check' ? runSandboxCheckCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('slack-') ? runSlackCommand(process.argv.slice(2)) : run()).catch((error: unknown) => {
-  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${branchExecutionUsage}\n${codexProposalUsage}\n${codexExecutionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n${readonlyInvestigationUsage}\n${readonlyTransportUsage}\n${readonlyModelPreflightUsage}\n${readonlyLiveUsage}\n`);
+  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${branchExecutionUsage}\n${codexProposalUsage}\n${codexExecutionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n${readonlyInvestigationUsage}\n${readonlyTransportUsage}\n${readonlyModelPreflightUsage}\n${readonlyLiveUsage}\n${readonlyRelayUsage}\n`);
   process.exitCode = 1;
 });

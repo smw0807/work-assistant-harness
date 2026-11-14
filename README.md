@@ -512,7 +512,31 @@ inspect·cancel·invalidate는 전역 lease 중에도 동작하며 나머지는 
 
 후속 방향은 ChatGPT 로그인을 유지하고 공급자 응답 해석을 고정 Codex에 맡기는 relay다. 첫 구현은 실제 인증·모델 호출 없이 등록 합성 SSE를 native Codex에 전달하는 로컬 probe이며, 기존 v1~v9 명령과 승인은 유지한다. 공개 API 키 전환이나 `access_programs` 개별 허용 추가는 진행하지 않는다.
 
-relay의 원시 metadata·도구 집계 검증과 최종 보고서 검증은 보증 범위가 달라진다. [전환 계획](docs/implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)과 [로컬 결과](docs/stage-4c9-result.md)에 그 차이를 기록한다. 새 live adapter·전용 승인 저장소·실제 호출 명령은 아직 없고 `liveReady=false`다. 기존 소비 승인을 재사용하지 않는다.
+relay의 원시 metadata·도구 집계 검증과 최종 보고서 검증은 보증 범위가 달라진다. [전환 계획](docs/implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)과 [로컬 결과](docs/stage-4c9-result.md)에 그 차이를 기록한다. 첫 probe는 `liveReady=false`인 합성 실험으로 유지한다. 별도 relay 계약·adapter·승인 저장소를 구현한 뒤 정확한 계획을 TTL10분으로 승인해 실제1회 호출했으나 HTTP200 응답 본문의256KiB 상한 초과로 실패했다. 유효 보고서는 없으며 원본/Git·프로세스 종료 사후 감사를 수행했다. 자동 재시도는0이고 소비 승인을 재사용하지 않는다. [실제 단건 결과](docs/stage-4c9-result.md#승인된-relay-실제-단건-호출과-사후-감사)를 참조한다.
+
+## 단계 4-C-9 별도 relay 계약과 승인
+
+`synthetic-readonly-relay-v1`·`codex-chatgpt-relay-v1`은 기존 ChatGPT 로그인과 고정 native Codex를 사용하는 새 계약입니다. `readonly-live-*`의 v1~v9 정책·DB·승인·hash는 유지하며 새 `readonly-relay.sqlite`와 `readonly-relay-runs/`를 사용합니다. 설정 예시 [readonly-relay.example.json](config/readonly-relay.example.json)은 기본 비활성입니다. 복사한 private 설정의 native 경로·SHA-256을 실제 검증한 값으로 지정해야 합니다. enabled 변경도 계획 hash가 달라지므로 새 계획이 필요합니다.
+
+```sh
+pnpm harness readonly-relay-plan --fixture flow --config /private/path/relay.json --selection all --transfer all --request flow-question --data-dir /private/path/relay-data
+pnpm harness readonly-relay-inspect --task <uuid> --data-dir /private/path/relay-data
+# 정확한 payload·profile·명세·설정과 planHash를 검토하고 별도 승인한 뒤에만 사용
+pnpm harness readonly-relay-approve --task <uuid> --plan-hash <sha256> --expires-in-minutes 10 --config /private/path/relay.json --data-dir /private/path/relay-data
+pnpm harness readonly-relay-run --task <uuid> --plan-hash <sha256> --config /private/path/relay.json --data-dir /private/path/relay-data
+pnpm harness readonly-relay-cancel --task <uuid> --data-dir /private/path/relay-data
+pnpm harness readonly-relay-invalidate --task <uuid> --data-dir /private/path/relay-data
+pnpm harness readonly-relay-recover --task <uuid> --data-dir /private/path/relay-data
+pnpm harness readonly-relay-prune --data-dir /private/path/relay-data
+```
+
+plan/approve/run은 `--config`가 필수입니다. fixture는 `flow`, selection/transfer는 `all|controller|service`, request는 `flow-question|change-request`만 허용합니다. inspect는 `--approval-offset <0..1000000000>`을 지원합니다. inspect/cancel/invalidate 외 명령은 전역 lease를 사용하고, run은 `REPORTED`일 때만 종료 코드0입니다. 다른 URL·모델·헤더·인증·도구·실행 export 옵션은 없습니다.
+
+부모는 승인 본문 바이트만 최대1회 전송하며 인증 조회 직전과 네트워크 전송 직전에 승인 기간·generation·원본을 재검증합니다. 로그인 파일은 승인된 run의 부모만 읽고 refresh·복제·변경하지 않습니다. 자식은 빈 HOME과 단건 capability만 받습니다. retry/redirect/fallback은0이고 실패·중단 뒤 소비를 복원하지 않습니다.
+
+응답은256KiB EOF까지 부모 메모리로 수신한 뒤 UTF8·SSE frame64KiB/2048개·일반 JSON 문법/중복 키/깊이16·인증값 반사를 검사합니다. 통과 전 자식 전달은0입니다. 원문·Unicode escape·순서 있는 JSON 문자열 조각과 최종 CLI JSON의 실제 token/account 반사를 검사하되, 임의 인코딩·암호화·변형 전반의 탐지는 보증하지 않습니다. upstream 헤더·쿠키·오류 본문은 자식에 중계하거나 저장하지 않습니다.
+
+Codex가 응답 의미를 해석하고 하네스는 단일 완료 turn·최종 조사 JSON16KiB·전달 근거/줄·비밀/실행 필드를 검증합니다. 보고서의 `responseHash`는 원시 바이트, `finalTextHash`는 최종 text를 식별합니다. `contractVerified.cliOutput`과 `unverifiedResponseChecks`를 분리하며 private metadata·공급자 sequence/tool_usage·원시 전체 민감정보 검사·부모 text 비교를 통과했다고 표시하지 않습니다. `tools=[]`·OS 격리·CLI 도구 결과 거부는 유지하지만 공급자 도구 활동0을 보증하지 않습니다. operation55초와 공유 정리 대기5초를 적용하고 종료 불확실은 `BLOCKED`로 남깁니다. 하네스 DB·일반 로그에 원시/부분/거부 응답을 저장하지 않습니다. native 임시 영역은 종료 확인 후 제거하며 정리 불확실 시 잔류 내용의 제거를 보증하지 않습니다. 내용24h·terminal 감사30d·DB 수명 소비 marker를 유지합니다.
 
 ## 모의 입력과 오류 재현
 
