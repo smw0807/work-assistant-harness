@@ -508,6 +508,12 @@ plan/approve/run은 `--config`가 필수입니다. plan의 `--selection all|cont
 
 inspect·cancel·invalidate는 전역 lease 중에도 동작하며 나머지는 lease를 요구합니다. inspect는 `--approval-offset <0..1000000000>`을 지원합니다. run은 `REPORTED`일 때만 종료 코드 0입니다. recover는 인증·모델·네트워크 없이 종료·원본·명세 증거를 확인하며 불확실하면 `BLOCKED`로 남깁니다. 회사 자료·실제 저장소·Slack·대상 코드 실행·브랜치/patch·commit/push·PR/MR과 실행 계획 export는 제공하지 않습니다. 기존 대상 작업 브랜치 규칙은 하네스 자체의 개발 규칙으로 확대하지 않습니다.
 
+## ChatGPT 로그인 유지 relay 검토
+
+후속 방향은 ChatGPT 로그인을 유지하고 공급자 응답 해석을 고정 Codex에 맡기는 relay다. 첫 구현은 실제 인증·모델 호출 없이 등록 합성 SSE를 native Codex에 전달하는 로컬 probe이며, 기존 v1~v9 명령과 승인은 유지한다. 공개 API 키 전환이나 `access_programs` 개별 허용 추가는 진행하지 않는다.
+
+relay의 원시 metadata·도구 집계 검증과 최종 보고서 검증은 보증 범위가 달라진다. [전환 계획](docs/implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)과 [로컬 결과](docs/stage-4c9-result.md)에 그 차이를 기록한다. 새 live adapter·전용 승인 저장소·실제 호출 명령은 아직 없고 `liveReady=false`다. 기존 소비 승인을 재사용하지 않는다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.

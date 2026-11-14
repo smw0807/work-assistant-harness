@@ -678,6 +678,42 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 
 **직전 실제 검증 판정:** v9의 로컬 native 포함1005개 회귀·lint/typecheck/build가 통과했고 같은 코드/빌드 hash를 재검증해 실제 단건 호출에 사용했다. TTL10분 승인과 승인·소비·attempt·upstream 각1회, 자동 재시도0회를 확인했으나 `READONLY_LIVE_INVALID_RESPONSE_RESPONSE_METADATA`로 실패했다. 세부 필드·origin·v9 호환 성공은 미확인이다. 원본/Git·부모 identity·714개 코드/빌드 hash 보존과 관련 프로세스 종료·sandbox 부재는 사후 감사 passed다. 누적 upstream15회 모두 failed이고 전송 전 실패까지 소비 승인16개다. 유효 조사 보고서가 없어 수용162는 미완료다. 이전 계약·profile·hash와 소비 기록은 보존하며 재사용하지 않는다. 로컬 검사·감사 통과와 실제 모델 조사 성공·회사 도입 검증을 구분한다.
 
+#### 단계 4-C-9 ChatGPT 로그인 유지와 Codex 응답 해석으로 전환
+
+**선택한 방향:** ChatGPT 로그인을 유지하고, 공급자 응답 해석을 고정 Codex에 맡기는 relay 구조를 검증한다. 공개 Responses API/API 키로 전환하지 않는다. v9의 `access_programs` 허용값을 추가하는 작업은 진행하지 않는다. v1~v9 계약·설정·hash·승인·실패 기록은 보존한다.
+
+현재 4-C-8은 부모 broker가 비공개 upstream 응답을 직접 해석하고 검증한 text로 합성 SSE를 만들어 Codex에 전달한다. 전환 후보는 부모가 승인한 요청 바이트만 전송하고, 제한된 원시 SSE를 격리 Codex에 전달하는 구조다. 공식 [비대화형 실행 안내](https://learn.chatgpt.com/docs/non-interactive-mode)는 저장된 CLI 인증과 최종 JSON schema 사용을 설명하지만, 우리 pinned 0.154.0·부모 인증 broker·비공개 endpoint의 호환성을 보장하지 않는다. 이 호환성은 로컬 합성 검증과 구체 승인된 실제 검증으로 구분한다.
+
+##### 첫 구현: 실제 연결 없는 로컬 relay probe
+
+- 새 probe는 등록된 합성 응답만 사용한다. 실제 credential loader·외부 HTTP transport를 import하거나 주입받지 않고, URL·인증·모델·임의 응답을 받는 live 설정·CLI·승인 DB를 추가하지 않는다. loopback capability 연결과 native 프로세스 실행은 로컬 검증에만 사용한다.
+- 설치된 Codex와 로그인 파일은 변경하지 않는다. 기존 native 0.154.0 경로·SHA-256을 검증하고 빈 HOME/CODEX_HOME·기존 OS 격리·guardian을 사용한다. native 검사는 명시적 opt-in으로만 실행한다.
+- 합성 `access_programs: {cyber: "standard"}`와 사용되지 않는 추가 metadata를 포함한 SSE를 그대로 전달해 Codex의 최종 출력 처리를 확인한다. 이는 실제 관측값의 재현이 아니며 실제 `access_programs`의 형태·내용·의미는 계속 미확인이다.
+- 단건 relay·본문 고정·요청/합성 응답 각각256KiB·native stdout/stderr 합계128KiB·stderr16KiB·최종 JSON16KiB·operation55초 한도를 적용한다. probe의 정리 대기는 native 최대5초·broker 최대5초의 단계별 상한이며, 파일 I/O까지 포함한 전체60초 보장은 아니다. 테스트에 한해 operation timeout을 더 짧게 설정할 수 있다. 취소·timeout·조기 종료·최종 CLI 도구/미완성 출력 거부·모델 임시 디렉터리 정리를 검사한다. CLI 오류는 기존 지정 모델의 정확한 metadata 부재 경고 예외만 유지한다. 첫 probe의 최종 결과는 등록 합성 JSON과의 정확한 일치로 제한한다. 고정 fixture 전체를256KiB 이하로 준비해8KiB씩 쓰며 sink drain/close/abort를 다루지만, 일반 upstream stream의 거대 chunk·지연 iterator·backpressure 보장은 후속 검증이다. 전체 선택 근거/인용 검증 연결도 후속 live 계약의 작업이며 일반 로그와 결과 문서에 원시/부분/거부 응답을 저장하지 않는다.
+- CLI argv와 기존 event parser를 재사용할 때는 네트워크·인증 없는 순수 모듈로 분리하고 기존 export와 판정을 보존한다. 구형 live adapter나 실제 broker를 offline probe의 의존 그래프에 연결하지 않는다.
+- probe 결과는 `offline`·`synthetic`·`liveReady=false`다. 실제 인증 접근·모델 호출·외부 전송·공급자 호환성은 `not_run`이다. probe 성공을 실제 호출 승인이나 새 live 설정으로 내보내지 않는다.
+
+##### 바뀌는 검증 책임
+
+| 항목 | 기존 v9 | relay 후보의 책임 |
+| --- | --- | --- |
+| 전송할 요청·인증·목적지·횟수 | 부모의 승인 snapshot·단건 broker | 부모가 계속 강제. 자식 본문·metadata로 변경 불가 |
+| 비공개 metadata·SSE 의미/순서 | 부모 decoder의 상세 검증 | pinned Codex가 해석. 부모의 동일 검증 통과로 표시하지 않음 |
+| 원시 응답 전체 민감정보 검사 | 부모 decoder가 수행 | opaque relay에서는 미수행. 원시 내용 비보관과 최종 JSON 민감정보 검사를 별도로 기록 |
+| 공급자 tool_usage | 알려진 형태·모든 수치0 검사 | 검사하지 않음. 공급자 도구 활동0을 보증하지 않음 |
+| 실제 도구 권한 | `tools=[]`·기능 비활성·OS 차단 | 계속 강제하고 CLI tool/command/file/MCP/web 결과 거부 |
+| 최종 보고서 | 부모 text와 CLI text 비교 후 schema/인용 검사 | CLI turn/최종 text와 schema/선택 근거/줄/비밀/실행 필드 검사. 부모 text 교차검증은 대체됨 |
+| 완료·감사 | 응답 완료·hash·프로세스 종료 | transport EOF/raw hash와 CLI 완료/final text hash, 프로세스 종료를 분리 |
+
+##### 후속 live 구현과 실제 호출 gate
+
+1. **로컬 가능성 확인:** 위 probe와 native 합성 검증을 먼저 완료하고 실패·미실행과 보안 차이를 결과 문서에 남긴다. 현재 v9 명령의 동작은 바꾸지 않는다.
+2. **새 live 계약 구현:** 별도 정책·profile·DB/승인 namespace·기본 비활성 adapter를 만든다. `responseValidation=codex-native-output-v1` 같은 해석 모드를 profile/hash에 고정하고, 기존 `contractVerified.response=passed`를 같은 의미로 복사하지 않는다. 응답 해석·원시 검사 미실시·최종 schema/근거 검증을 보고서/저장소에서 구분한다. opaque 응답에 공급자가 인증값을 반사하면 자식에 전달될 수 있으므로, 실제 인증 반사 차단·오류/헤더/쿠키 비중계 정책을 별도로 설계·검증한다. 부모의 의도적인 인증 제공만 제한하는 것으로 자식 비노출을 보증하지 않는다. 전체55초+공유 정리예산5초는 새 live adapter에서 별도로 구현·검증한다. 이 항목은 첫 probe 범위의 미구현 후속 작업이다.
+3. **승인 가능한 자료 준비:** 새 합성 flow 문맥에서 정확한 입력·wire body·범위·설정·고정 바이너리·목적지·해석 정책·한도·다섯 hash·planHash를 생성하고 로컬 검증한다. OS 소유자·필수 TTL1~60분·계획24h·원자 소비·dispatch 현재 시각·취소 generation·중단 복구·보관을 새 계약으로 검증하고 `AWAITING_APPROVAL`에서 멈춘다.
+4. **별도 승인 후 실제 확인:** 사용자가 해당 계획과 TTL·최대1회·재시도0을 구체 승인한 경우에만 부모가 기존 ChatGPT 인증을 지연 접근한다. 자식에게 로그인 파일을 전달하거나 refresh·복제·설정 변경을 하지 않는다. 전송1회·결과·원본/Git·controller/guardian/child/PGID 종료·scratch 부재를 확인한다. 실패·전송 불확실에도 승인 복원·재호출·자동 모델/바이너리 교체는 없다.
+
+**이번 구현 범위:** 첫 로컬 probe와 전환 계획 준비다. 후속 live adapter·승인 DB·실제 호출은 아직 구현/승인된 기능이 아니다. 기존 실제 upstream16회 실패·소비 승인17개의 기록과 수용162 미완료 상태를 유지한다. 상세 실행 결과는 [4-C-9 결과](stage-4c9-result.md)를 따른다.
+
 #### 후속 단계의 별도 범위
 
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
@@ -1066,6 +1102,12 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 160 | private 보관과 보고 사실성 (4-C-8) | DB/sidecar·설정 링크/권한 보호, 내용24h·최초 terminal 감사30d·소비 marker. 모의/실제 응답 근거 분리, 대상 무변경·실행false, 의미 정확성 미검증·제외 항목 표시. |
 | 161 | CLI·기존 회귀 (4-C-8) | 8개 명령·필수 config/TTL·strict 옵션·lease·조회/취소·구형 승인 거부. 기존726개+신규 검사, lint/typecheck/build 실제 결과 기록. |
 | 162 | 구체 승인된 실제 단건 조사 (4-C-8) | 최종 입력·profile·범위 승인 후 실제 호출 최대1회, 전송hash·근거 인용·불확실성·원본/Git 보존과 로컬 보고 확인. 미승인/미실행이면 not_run. 회사 자료·실제 저장소·Slack·대상 실행·Git 원격0. |
+| 163 | 로그인 유지 relay의 offline 경계 (4-C-9) | 등록 합성 응답만 사용. 실제 credential/외부 transport의 runtime import·호출·fallback0, live CLI/config/승인 DB 연결0. 실제 로그인·모델·외부 전송 not_run·liveReady=false. |
+| 164 | pinned native의 합성 SSE 처리 (4-C-9) | 고정 바이너리·빈 HOME·OS 격리·guardian으로 합성 access_programs 객체/추가 metadata 응답을 직접 전달. 실제 공급자 형태/호환성 검증과 구분. |
+| 165 | relay 한도·단건·종료 (4-C-9) | 고정 합성 본문·capability·최대1회·retry0, 요청/응답256KiB·최종16KiB·native 합계128KiB/stderr16KiB·operation55초. 정리 대기는 native5초·broker5초의 단계별 상한이며 전체60초 보장과 구분. 취소/timeout·조기 close·프로세스 종료/scratch 정리의 실행한 검사만 passed. 고정 buffer의 drain 처리와 일반 upstream stream 미검증 구분. |
+| 166 | 최종 출력과 보증 범위 (4-C-9) | CLI 도구·미완성/복수 최종 출력·기존 정확한 metadata 부재 경고를 제외한 오류 거부와 고정 합성 JSON 일치. 후속 최종 조사 schema·인용/줄·비밀·실행 필드 연결 및 raw metadata/tool_usage/부모text교차검증 미실시를 구분. |
+| 167 | 기존 계약·순수 helper 보존 (4-C-9) | v1~v9 profile/config/body/승인/DB 불변. argv/event helper 분리의 기존 export·판정 보존과 lint/typecheck/build/회귀 실제 결과 기록. |
+| 168 | 후속 live gate 분리 (4-C-9) | 새 해석/보고서 계약·정책/DB·구체 검토 계획은 미구현으로 표시. 로컬 probe에서 live 승격·승인 생성·소비·전송 없음, 기존162의 실패/미완료를 대체하지 않음. |
 
 ### 최종 검증 묶음
 

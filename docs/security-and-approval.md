@@ -393,6 +393,14 @@ v6는 공식 `tool_usage` 경로에 한해 필수·선택 키와 정수만으로
 
 v8 호환 예외는 첫 response.created root의 추가 필드 정확히1개에만 적용한다. boolean·ASCII 식별자1~64자·알려진 SSE/제어/prototype 예약 키 제외를 모두 만족해야 하고, 검증용 사본에서 제외한 뒤 필수3키와 내부 response를 엄격하게 검사한다. 필드 값은 동작에 쓰지 않으며 원본 전체 민감정보·중복 키·바이트/hash·원본 identity·도구·sequence·완료 검사는 그대로다. 다른 이벤트·중첩 response·직접 JSON에는 예외를 적용하지 않는다. 실제 필드의 이름·의미·ASCII 형태를 확인한 것은 아니며 일반 API 호환 정책이 ChatGPT endpoint schema를 보장한다고 주장하지 않는다. 새 v8 profile·계획·승인으로 분리하고 기존 v1~v7 계약을 보존한다.
 
+### 단계 4-C-9의 로그인 유지 relay 검증 경계
+
+로그인 유지 선택은 등록 합성 SSE와 pinned native를 사용한 offline probe·전환 계획의 범위다. 실제 로그인 파일 조회·계정 확인·refresh·실제 모델 호출은 수행하지 않는다. probe는 실제 credential loader·외부 HTTP transport·live 승인 저장소를 의존하거나 fallback으로 사용하지 않는다. 설치된 바이너리와 기존 설정을 변경하지 않고 빈 HOME·기능 비활성·OS profile·guardian으로 로컬 실행한다.
+
+opaque relay 후보에서는 부모가 비공개 metadata·SSE 의미 순서·공급자 tool_usage를 직접 검증하지 않으며 원시 응답 전체 민감정보 검사와 부모/CLI text 비교도 수행하지 않는다. 이를 구형 응답 검증 통과나 공급자 도구 활동0으로 표시하지 않는다. `tools=[]`·로컬 도구 비활성·OS 차단과 CLI 도구 결과 거부, 최종 JSON의 schema·인용·줄·비밀 검사는 별도의 보증이다. 원시/부분/거부 응답은 저장하지 않으며 모델 임시 디렉터리의 종료 후 정리와 잔류 불확실성을 구분한다.
+
+후속 live에는 이 책임 변경을 고정한 새 profile·정책·DB/승인 namespace·보고서 계약이 필요하다. 부모가 인증을 보유하고 정확한 승인 본문·고정 목적지·최대1회·retry/redirect/fallback0·TTL/generation·프로세스 종료를 강제하는 경계는 유지한다. 원시 응답의 인증값 반사로 자식에 비밀이 들어갈 가능성은 별도 차단·검증해야 하며, 의도적인 인증 전달을 막는 것으로 동일한 비노출 보증을 주장하지 않는다. upstream 오류·원시 헤더·쿠키도 그대로 중계하지 않는다. 새 검토 본문·hash가 준비된 뒤 `AWAITING_APPROVAL`에서 멈추며, 이번 방향 선택이나 과거 소비 승인을 실제 전송에 사용하지 않는다. 현재 live 연결은 미구현이며 [기준 계획](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)을 따른다.
+
 ## 7. 회사 자료와 비밀정보
 
 회사 계정·저장소 연결 전에 AI 제공자, 모델, 실행 위치, 전송 가능 자료, 보관 기간과 감사 요구를 회사 정책에 따라 확인한다. 회사 승인이 없으면 합성 데이터로 계속 개발한다.

@@ -293,6 +293,12 @@ v7는 공식 생성 이벤트 예시의 sequence1을 지원하기 위해 첫 seq
 
 v8의 `created-boolean-extension-v1`은 첫 response.created root의 추가 필드가 정확히1개·boolean·ASCII 식별자1~64자이며 등록된 SSE/제어/prototype 예약 키가 아닐 때에만 검증용 사본에서 제외한다. 필수 type·sequence_number·response를 다시 엄격하게 검사하고 해당 추가 필드를 동작에 사용하지 않는다. 원본 전체 민감정보 검사·hash·내부 response·다른 이벤트·직접 JSON·도구·sequence·완료 검증은 유지한다. 실제 필드명·의미·ASCII 형태는 미확인이며 공식 API의 event data 속성 추가 정책을 참고한 좁은 호환 범위다. ChatGPT endpoint schema 보장으로 설명하지 않고 새 v8 profile로 분리해 v1~v7 hash를 보존한다.
 
+### 단계 4-C-9의 로그인 유지 relay 후보
+
+ChatGPT 로그인을 유지하고 응답 해석을 고정 Codex에 맡기는 방향을 선택했다. 첫 구현은 등록 합성 SSE를 localhost capability broker에서 격리 native Codex에 전달하는 offline probe다. 실제 credential loader·외부 전송·live 설정·승인 DB에는 연결하지 않는다. 기존 v1~v9 경로는 유지하며 `access_programs` 허용값을 추가하지 않는다.
+
+후속 live 후보에서 부모는 계속 정확한 승인 본문·목적지·인증·단건 전송을 강제한다. 응답은 바이트/시간 한도 안에서 중계하고 Codex가 해석한 최종 결과를 하네스가 schema·근거·민감정보로 검증한다. 이때 부모의 비공개 metadata/sequence/tool_usage 검사와 부모/CLI text 비교는 기존과 같은 보증이 아니다. 새 profile·보고서 계약·승인 경계가 필요하며 아직 live adapter로 구현하지 않았다. [구현 순서와 책임 변경](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환), [로컬 검증 결과](stage-4c9-result.md)를 구분한다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.
@@ -406,6 +412,7 @@ AWAITING_APPROVAL → APPROVED → SENDING → SIMULATED / FAILED / UNKNOWN
 | 4-C-6 | 합성 문맥의 오프라인 전송 검증 | 별도 offline/fake 계약·최종 요청 hash·단건 broker·JSON/NDJSON 응답·취소/복구. 실제 모델·인증 접근·외부 전송 제외 |
 | 4-C-7 | 다중 파일 모델 연결의 오프라인 준비 | 후보 HTTP/JSON/SSE 계약·명세 hash·in-memory fake·제한 worker. live 승격 불가, 실제 공급자 호환성 미검증 |
 | 4-C-8 | 합성 다중 파일의 실제 모델 읽기 전용 조사 | metadata 진단 실제1회는 created/access-programs/value로 실패. 원본/Git·프로세스 종료 감사 passed, 수용162 미완료. 기존 계약·native1020개·차등7416건 근거 유지. 누적 실제 upstream16회 실패·소비 승인17개·자동 재시도0 |
+| 4-C-9 | ChatGPT 로그인 유지 relay의 로컬 가능성 검증 | 등록 합성 SSE와 pinned native만 사용. 실제 인증/모델/외부 전송·live 승격 없음. 새 live 계약·승인 연결은 후속 미구현 |
 | 4-C 후속 | 대상 저장소의 실제 Codex 작업 브랜치·commit 준비·push | 승인·격리·브랜치 보존과 행위별 승인 별도 검증. PR/MR 생성 제외. 미구현 후속 설계 |
 | 4-D | Gmail·Calendar·Drive의 선택 확장 | 기능마다 별도의 인증·권한·데이터 범위·승인 검증. 4-B-2 승인 범위 밖 |
 
