@@ -5,7 +5,7 @@ import { inflateSync } from 'node:zlib';
 import git from 'isomorphic-git';
 import { HarnessError } from '../domain/errors.js';
 import type { PersonalReadonlyRegistration, PersonalReadonlyRepository } from '../domain/personal-readonly.js';
-import type { ReadonlyEntryIdentity, ReadonlyEvidence, ReadonlyParentIdentity } from '../domain/readonly-investigation.js';
+import type { ReadonlyEntryIdentity, ReadonlyEvidence, ReadonlyParentIdentity, ReadonlyRange } from '../domain/readonly-investigation.js';
 import { assertReadonlyEvidenceBudget, canonicalReadonlyJson, createReadonlyEvidence, hashReadonlyValue,
   isReadonlyId, normalizeReadonlyRanges, READONLY_LIMITS } from '../policy/readonly-investigation-policy.js';
 import { containsSensitiveText } from '../policy/redaction.js';
@@ -299,7 +299,10 @@ const restrictedGitFs = (state: Observation) => {
     }, writeFile: denied, mkdir: denied, rmdir: denied, unlink: denied, readlink: denied, symlink: denied,
   } };
 };
-export const inspectPersonalReadonlyRepository = async (value: PersonalReadonlyRegistration, id: string): Promise<PersonalReadonlyRepository> => {
+type EvidenceDeriver = (repoId: string, baseCommit: string, range: ReadonlyRange, bytes: Uint8Array) => ReadonlyEvidence;
+interface CollectionContract { fileBytes: 32768 | 65536; deriveEvidence: EvidenceDeriver }
+const originalContract: CollectionContract = Object.freeze({ fileBytes: 32768, deriveEvidence: createReadonlyEvidence });
+const inspectRepository = async (value: PersonalReadonlyRegistration, id: string, contract: CollectionContract): Promise<PersonalReadonlyRepository> => {
   try {
     const registration = registrationCopy(value);
     if (!isReadonlyId(id)) throw unsafe();
@@ -329,11 +332,11 @@ export const inspectPersonalReadonlyRepository = async (value: PersonalReadonlyR
         tree = entry.oid; mode = entry.mode;
       }
       const blob = await git.readBlob({ fs: reader, dir: state.root, oid: tree, cache });
-      const result = readBounded(join(state.root, path), READONLY_LIMITS.fileBytes, state.parents);
-      if (blob.oid !== tree || blob.blob.byteLength > READONLY_LIMITS.fileBytes || createHash('sha1').update(`blob ${blob.blob.byteLength}\0`).update(blob.blob).digest('hex') !== blob.oid
+      const result = readBounded(join(state.root, path), contract.fileBytes, state.parents);
+      if (blob.oid !== tree || blob.blob.byteLength > contract.fileBytes || createHash('sha1').update(`blob ${blob.blob.byteLength}\0`).update(blob.blob).digest('hex') !== blob.oid
         || !result.bytes.equals(blob.blob)
         || Boolean(result.stat.mode & 0o111) !== (mode === '100755')) throw unsafe();
-      for (const range of registration.readRanges.filter((range) => range.path === path)) createReadonlyEvidence(registration.repoId, registration.baseCommit, range, result.bytes);
+      for (const range of registration.readRanges.filter((range) => range.path === path)) contract.deriveEvidence(registration.repoId, registration.baseCommit, range, result.bytes);
       manifest.push(identity(path, result.stat, hashReadonlyValue(result.bytes))); selected.set(path, { oid: blob.oid, mode });
     }
     selectedIndex(index, selected);
@@ -343,11 +346,11 @@ export const inspectPersonalReadonlyRepository = async (value: PersonalReadonlyR
       parents: [...state.parents.values()].sort(comparePaths), readAllowedFiles: paths,
       gitEntries: [...state.gitEntries.values()].sort(comparePaths), headRef };
     const result = { ...repository, identityHash: repositoryHash(repository) };
-    assertPersonalReadonlyRepositoryNow(result); return result;
+    assertRepositoryNow(result, contract.fileBytes); return result;
   } catch { throw unsafe(); }
 };
 /** Synchronous final source guard: re-hash selected bytes and every Git file actually used by inspection. */
-export const assertPersonalReadonlyRepositoryNow = (repository: PersonalReadonlyRepository): void => {
+const assertRepositoryNow = (repository: PersonalReadonlyRepository, fileBytes: 32768 | 65536): void => {
   try {
     repository = repositoryCopy(repository);
     plain(repository, ['id', 'kind', 'repoId', 'sourceRoot', 'baseCommit', 'sourceManifestHash', 'identityHash', 'manifest', 'parents', 'readAllowedFiles', 'gitEntries', 'headRef']);
@@ -363,7 +366,7 @@ export const assertPersonalReadonlyRepositoryNow = (repository: PersonalReadonly
     }
     for (const item of [...repository.manifest, ...repository.gitEntries]) {
       if (item.kind !== 'file' || (item.path.startsWith('.git/') ? !gitPath(item.path) : !allowedPath(item.path))) throw unsafe();
-      const result = readBounded(join(state.root, item.path), item.path.startsWith('.git/') ? gitFileBytes : READONLY_LIMITS.fileBytes, state.parents);
+      const result = readBounded(join(state.root, item.path), item.path.startsWith('.git/') ? gitFileBytes : fileBytes, state.parents);
       state.bytes += result.bytes.length; if (state.bytes > gitTotalBytes) throw unsafe();
       if (canonicalReadonlyJson(identity(item.path, result.stat, hashReadonlyValue(result.bytes))) !== canonicalReadonlyJson(item)) throw unsafe();
     }
@@ -371,19 +374,35 @@ export const assertPersonalReadonlyRepositoryNow = (repository: PersonalReadonly
     if (canonicalReadonlyJson([...state.parents.values()].sort(comparePaths)) !== canonicalReadonlyJson(repository.parents)) throw unsafe();
   } catch { throw unsafe(); }
 };
-export const assertPersonalReadonlyRepository = async (repository: PersonalReadonlyRepository): Promise<void> => { assertPersonalReadonlyRepositoryNow(repository); };
-export const collectPersonalReadonlyEvidence = async (repository: PersonalReadonlyRepository, value: PersonalReadonlyRegistration): Promise<ReadonlyEvidence[]> => {
+const collectEvidenceNow = (repository: PersonalReadonlyRepository, value: PersonalReadonlyRegistration, contract: CollectionContract): ReadonlyEvidence[] => {
   try {
     repository = repositoryCopy(repository);
-    const registration = registrationCopy(value); assertPersonalReadonlyRepositoryNow(repository);
+    const registration = registrationCopy(value); assertRepositoryNow(repository, contract.fileBytes);
     if (registration.repoId !== repository.repoId || registration.sourceRoot !== repository.sourceRoot || registration.baseCommit !== repository.baseCommit
       || canonicalReadonlyJson([...new Set(registration.readRanges.map((item) => item.path))].sort()) !== canonicalReadonlyJson(repository.readAllowedFiles)) throw unsafe();
     const parents = new Map(repository.parents.map((item) => [item.path, { ...item }]));
     const evidence = registration.readRanges.map((range) => {
-      const bytes = readBounded(join(repository.sourceRoot, range.path), READONLY_LIMITS.fileBytes, parents).bytes;
+      const bytes = readBounded(join(repository.sourceRoot, range.path), contract.fileBytes, parents).bytes;
       if (hashReadonlyValue(bytes) !== repository.manifest.find((item) => item.path === range.path)?.hash) throw unsafe();
-      return createReadonlyEvidence(repository.repoId, repository.baseCommit, range, bytes);
+      return contract.deriveEvidence(repository.repoId, repository.baseCommit, range, bytes);
     });
-    assertReadonlyEvidenceBudget(evidence); assertPersonalReadonlyRepositoryNow(repository); return evidence;
+    assertReadonlyEvidenceBudget(evidence); assertRepositoryNow(repository, contract.fileBytes); return evidence;
   } catch { throw unsafe(); }
+};
+export const inspectPersonalReadonlyRepository = (registration: PersonalReadonlyRegistration, id: string): Promise<PersonalReadonlyRepository> =>
+  inspectRepository(registration, id, originalContract);
+export const assertPersonalReadonlyRepositoryNow = (repository: PersonalReadonlyRepository): void => assertRepositoryNow(repository, 32768);
+export const assertPersonalReadonlyRepository = async (repository: PersonalReadonlyRepository): Promise<void> => { assertPersonalReadonlyRepositoryNow(repository); };
+export const collectPersonalReadonlyEvidence = async (repository: PersonalReadonlyRepository, registration: PersonalReadonlyRegistration): Promise<ReadonlyEvidence[]> =>
+  collectEvidenceNow(repository, registration, originalContract);
+
+/** Harness code injects its fixed derivation function; no registration, CLI or payload may supply a callback or byte limit. */
+export const createPersonalReadonlyCollectionReader = (deriveEvidence: EvidenceDeriver) => {
+  if (typeof deriveEvidence !== 'function') throw unsafe();
+  const contract: CollectionContract = Object.freeze({ fileBytes: 65536, deriveEvidence });
+  return Object.freeze({
+    inspect: (registration: PersonalReadonlyRegistration, id: string): Promise<PersonalReadonlyRepository> => inspectRepository(registration, id, contract),
+    assertNow: (repository: PersonalReadonlyRepository): void => assertRepositoryNow(repository, 65536),
+    collectNow: (repository: PersonalReadonlyRepository, registration: PersonalReadonlyRegistration): ReadonlyEvidence[] => collectEvidenceNow(repository, registration, contract),
+  });
 };

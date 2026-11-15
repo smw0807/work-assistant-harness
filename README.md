@@ -566,6 +566,18 @@ reader는 대상 프로그램·Git CLI·설정·hooks를 실행하거나 import�
 
 이번 준비는 로컬 수집·가짜 전송/합성 native 검증·새 검토 자료까지이며 실제 개인 자료의 인증·모델·외부 전송은 승인 대기입니다. 대상 코드의 설치·테스트·빌드·스크립트·수정·거래 API 호출·자동 답장·Git 변경은 제공하지 않습니다. 구체 결과와 누락 근거는 [4-C-10 결과](docs/stage-4c10-result.md)를 따릅니다.
 
+## 개인 저장소 수집 v2와 마스킹 근거
+
+[새 등록 예시](config/personal-readonly-collection.example.json)는 `version: personal-readonly-registration-v2`와 `collectionPolicy: personal-readonly-collection-v2`를 명시합니다. 위 `personal-readonly-*` 명령을 그대로 사용하지만 새 입력/계획 v2와 수집 profile/hash로 승인을 분리합니다. 기존 개인 v1·relay-v2의 설정/profile/본문/hash·원문 민감 거부와 소비 기록은 유지합니다. 기존 계획을 자동 승격하지 않습니다.
+
+새 수집 계약은 **원본 파일64KiB·전체 안전 view64KiB·개별 전송 발췌32KiB·근거 합계64KiB**를 구분합니다. 기존 relay-v2 profile은 변경 없는 전송 구성 요소이며, 그 안의 legacy `fileBytes: 32768`을 새 원본 수집 권한으로 해석하지 않습니다. 실제 원본 읽기/변환 권한은 별도로 승인하는 `collectionProfile`과 hash에 고정합니다. 입력128KiB·8파일/16범위/범위당200줄·전송 수신4MiB·최종16KiB는 유지합니다.
+
+원본 전체를 기존 UTF8/binary·민감 검사로 먼저 검사합니다. 민감 거부를 무시해 원문을 허용하지 않으며, 명시된 새 계약에서만 고정 패턴의 매치 전체를 줄 보존 마커로 바꿉니다. 그 전체 view가 동일 민감 검사에 다시 통과해야 선택 줄을 근거로 쓸 수 있습니다. 경로·Git·크기·binary 오류는 마스킹 대상이 아닙니다. 원문이 거부되고 view만 통과한 상태, 마스크 개수·줄수와 원본/view hash를 구분합니다. 원시 매치·비밀값이나 원문/전체 view 본문은 DB·보고서에 복제하지 않습니다.
+
+새 근거의 `fileHash`는 안전한 전체 view의 hash이며 원본 파일 hash는 private provenance에 둡니다. 모델에는 선택한 안전 발췌와 view hash·변환 고지만 전달합니다. 줄 번호는 보존되지만 변환된 자료이므로 가려진 코드를 추정하거나 완전한 원본으로 표시하면 안 됩니다. 새 보고서는 `collection.evidenceOrigin: line-preserving-derived-view`와 수집/근거 hash를 필수로 기록합니다. 원본이 달라지면 view가 같아도 승인·인증·전송·완료 단계에서 차단합니다.
+
+v1/v2는 같은 개인 DB의 lifecycle을 공유하며 계약별로 검증합니다. v2 작업이 있는 DB를 구형 실행 파일로 열면 알 수 없는 계약으로 거부될 수 있습니다. [4-C-11 결과](docs/stage-4c11-result.md)는 준비 당시의 승인0 상태와 이후 TTL10분·실제1회·재시도0 승인으로 실행한 `FAILED / PERSONAL_READONLY_TIMEOUT`을 구분해 기록합니다. 원본/Git 보존과 로컬 종료는 확인했으며, 추가 실제 호출에는 새 계획과 별도 승인이 필요합니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.

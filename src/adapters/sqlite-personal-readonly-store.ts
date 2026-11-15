@@ -4,13 +4,13 @@ import { basename, dirname, isAbsolute } from 'node:path';
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 import { HarnessError } from '../domain/errors.js';
 import type { ReadonlyContext } from '../domain/readonly-investigation.js';
-import type { PersonalReadonlyPayload, PersonalReadonlyPlan } from '../domain/personal-readonly.js';
+import type { AnyPersonalPayload, AnyPersonalPlan } from '../domain/personal-readonly-collection.js';
 import { READONLY_RELAY_UNVERIFIED_RESPONSE_CHECKS, type ReadonlyRelayDispatch } from '../domain/readonly-relay.js';
 import type {
   PersonalReadonlyApproval, PersonalReadonlyApprovalRequest, PersonalReadonlyAttempt, PersonalReadonlyStore, PersonalReadonlyPruneResult,
-  PersonalReadonlyReport, PersonalReadonlyRunRequest, PersonalReadonlySnapshot, PersonalReadonlyStatus, PersonalReadonlyTask,
+  AnyPersonalReport, PersonalReadonlyRunRequest, PersonalReadonlySnapshot, PersonalReadonlyStatus, PersonalReadonlyTask,
 } from '../ports/personal-readonly.js';
-import { assertPersonalReadonlyPlan, parsePersonalReadonlyResult, validatePersonalReadonlyPayload } from '../policy/personal-readonly-policy.js';
+import { assertAnyPersonalPlan, parseAnyPersonalResult, validateAnyPersonalPayload } from '../policy/personal-readonly-contract.js';
 import { assertRuntimeFile, runtimePathMetadata } from '../policy/runtime-path.js';
 
 const invalid = (): HarnessError => new HarnessError('PERSONAL_READONLY_INVALID_RECORD');
@@ -37,7 +37,7 @@ const decode = <T>(value: unknown, limit = 262_144): T => {
   if (JSON.stringify(parsed) !== value) throw invalid();
   return parsed as T;
 };
-interface PayloadRecord { payload: PersonalReadonlyPayload; report: PersonalReadonlyReport | null }
+interface PayloadRecord { payload: AnyPersonalPayload; report: AnyPersonalReport | null }
 
 /** 본문은 24시간 payload 테이블에만 두고 승인·시도·감사에는 hash와 상태만 보관한다. */
 export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
@@ -84,10 +84,10 @@ export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
     this.protectFiles();
   }
 
-  create(plan: PersonalReadonlyPlan, payload: PersonalReadonlyPayload, context: ReadonlyContext): PersonalReadonlySnapshot {
+  create(plan: AnyPersonalPlan, payload: AnyPersonalPayload, context: ReadonlyContext): PersonalReadonlySnapshot {
     this.prune(context);
-    assertPersonalReadonlyPlan(plan);
-    validatePersonalReadonlyPayload(plan, payload);
+    assertAnyPersonalPlan(plan);
+    validateAnyPersonalPayload(plan, payload);
     if (plan.ownerId !== context.ownerId) throw new HarnessError('PERSONAL_READONLY_OWNER_MISMATCH');
     if (context.now.toISOString() < plan.createdAt || context.now.toISOString() >= plan.expiresAt) throw new HarnessError('PERSONAL_READONLY_EXPIRED');
     return this.transaction(() => {
@@ -176,7 +176,7 @@ export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
     });
   }
 
-  finish(id: string, generation: number, report: PersonalReadonlyReport | null, failureCode: string | null, context: ReadonlyContext): PersonalReadonlySnapshot {
+  finish(id: string, generation: number, report: AnyPersonalReport | null, failureCode: string | null, context: ReadonlyContext): PersonalReadonlySnapshot {
     this.prune(context);
     if ((report === null) !== (failureCode !== null) || (failureCode !== null && !validFailure(failureCode))) throw invalid();
     return this.transaction(() => {
@@ -325,7 +325,7 @@ export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
     if (!row) return null;
     const task = decode<PersonalReadonlyTask>(row.payload);
     if (!exact(task, ['investigationId', 'plan', 'status', 'generation', 'updatedAt', 'terminalAt', 'failureCode', 'reportHash'])) throw invalid();
-    try { assertPersonalReadonlyPlan(task.plan); } catch { throw invalid(); }
+    try { assertAnyPersonalPlan(task.plan); } catch { throw invalid(); }
     if (task.investigationId !== id || task.plan.id !== id || !statuses.includes(task.status) || !Number.isSafeInteger(task.generation)
       || task.generation < 0 || task.generation > 1 || !timestamp(task.updatedAt) || task.updatedAt < task.plan.createdAt
       || (terminal(task.status) ? !timestamp(task.terminalAt) || task.terminalAt > task.updatedAt || task.terminalAt < task.plan.createdAt : task.terminalAt !== null)
@@ -353,14 +353,14 @@ export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
     return row ? this.parseApproval(row, task.plan) : null;
   }
 
-  private parseApproval(row: Record<string, SQLOutputValue>, plan: PersonalReadonlyPlan): PersonalReadonlyApproval {
+  private parseApproval(row: Record<string, SQLOutputValue>, plan: AnyPersonalPlan): PersonalReadonlyApproval {
     const approval = decode<PersonalReadonlyApproval>(row.payload);
     this.assertApproval(approval, plan);
     if (row.approval_id !== approval.approvalId || row.investigation_id !== approval.investigationId || row.used_at !== approval.usedAt || row.revoked_at !== approval.revokedAt) throw invalid();
     return approval;
   }
 
-  private assertApproval(approval: PersonalReadonlyApproval, plan: PersonalReadonlyPlan): void {
+  private assertApproval(approval: PersonalReadonlyApproval, plan: AnyPersonalPlan): void {
     if (!exact(approval, ['approvalId', 'investigationId', 'ownerId', 'planHash', 'planSnapshot', 'createdAt', 'expiresAt', 'usedAt', 'revokedAt'])
       || !identifier(approval.approvalId) || approval.investigationId !== plan.id || approval.ownerId !== plan.ownerId
       || approval.planHash !== plan.planHash || JSON.stringify(approval.planSnapshot) !== JSON.stringify(plan)
@@ -412,7 +412,7 @@ export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
     if (!row) return null;
     const record = decode<PayloadRecord>(row.payload, 2_097_152);
     if (!exact(record, ['payload', 'report']) || row.expires_at !== task.plan.expiresAt || row.payload_hash !== hash(String(row.payload))) throw invalid();
-    try { validatePersonalReadonlyPayload(task.plan, record.payload); } catch { throw invalid(); }
+    try { validateAnyPersonalPayload(task.plan, record.payload); } catch { throw invalid(); }
     if (record.report !== null) this.assertReport(record.report, task, record.payload);
     if ((record.report ? hash(JSON.stringify(record.report)) : null) !== task.reportHash) throw invalid();
     const attempt = this.attempt(task);
@@ -420,8 +420,8 @@ export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
     return record;
   }
 
-  private assertReport(report: PersonalReadonlyReport, task: PersonalReadonlyTask, payload: PersonalReadonlyPayload): void {
-    if (!exact(report, ['mode', 'transport', 'responseOrigin', 'investigationId', 'planHash', 'contextHash', 'inputHash', 'requestBodyHash', 'connectionProfileHash', 'requestEnvelopeHash', 'responseHash', 'finalTextHash', 'result', 'createdAt', 'targetUnchanged', 'executionAllowed', 'semanticAccuracyVerified', 'verification', 'contractVerified', 'unverifiedResponseChecks', 'excludedOperationsReason', 'checks'])
+  private assertReport(report: AnyPersonalReport, task: PersonalReadonlyTask, payload: AnyPersonalPayload): void {
+    if (!exact(report, ['mode', 'transport', 'responseOrigin', 'investigationId', 'planHash', 'contextHash', 'inputHash', 'requestBodyHash', 'connectionProfileHash', 'requestEnvelopeHash', 'responseHash', 'finalTextHash', 'result', 'createdAt', 'targetUnchanged', 'executionAllowed', 'semanticAccuracyVerified', 'verification', 'contractVerified', 'unverifiedResponseChecks', 'excludedOperationsReason', 'checks', ...(task.plan.policy === 'personal-readonly-investigation-v2' ? ['collection'] : [])])
       || report.mode !== 'live' || report.transport !== 'codex-cli-relay' || report.responseOrigin !== 'model' || report.investigationId !== task.investigationId || report.planHash !== task.plan.planHash
       || report.contextHash !== task.plan.contextHash || report.inputHash !== task.plan.inputHash || report.requestBodyHash !== task.plan.requestBodyHash || report.connectionProfileHash !== task.plan.connectionProfileHash || report.requestEnvelopeHash !== task.plan.requestEnvelopeHash || !digest(report.responseHash) || !digest(report.finalTextHash)
       || !timestamp(report.createdAt) || report.createdAt < task.plan.createdAt || report.createdAt >= task.plan.expiresAt
@@ -436,11 +436,16 @@ export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
       || JSON.stringify(report.contractVerified) !== JSON.stringify({ profile: 'passed', envelope: 'passed', cliOutput: 'passed', evidence: 'passed' })
       || !exact(report.unverifiedResponseChecks, Object.keys(READONLY_RELAY_UNVERIFIED_RESPONSE_CHECKS))
       || JSON.stringify(report.unverifiedResponseChecks) !== JSON.stringify(READONLY_RELAY_UNVERIFIED_RESPONSE_CHECKS) || report.excludedOperationsReason !== 'readonly-relay-only') throw invalid();
+    if (task.plan.policy === 'personal-readonly-investigation-v2' && (!('collection' in report)
+      || !exact(report.collection, ['policy', 'profileHash', 'sourceViewsHash', 'evidenceOrigin'])
+      || report.collection.policy !== 'personal-readonly-collection-v2'
+      || report.collection.profileHash !== task.plan.collectionProfileHash || report.collection.sourceViewsHash !== task.plan.sourceViewsHash
+      || report.collection.evidenceOrigin !== 'line-preserving-derived-view')) throw invalid();
     const live = report.verification.transport === 'live' ? 'passed' : 'not_run';
     if (JSON.stringify(report.checks) !== JSON.stringify({ sourceUnchanged: 'passed', targetCodeExecution: 'not_run', realModel: live,
       externalTransmission: live, credentialAccess: report.verification.credentialAccess, providerCompatibility: live,
       liveIsolation: report.verification.isolation, semanticAccuracy: 'not_run' })) throw invalid();
-    try { parsePersonalReadonlyResult(JSON.stringify(report.result), payload); } catch { throw invalid(); }
+    try { parseAnyPersonalResult(JSON.stringify(report.result), payload); } catch { throw invalid(); }
   }
 
   private snapshot(task: PersonalReadonlyTask, context: ReadonlyContext, offset = 0): PersonalReadonlySnapshot {
@@ -461,7 +466,7 @@ export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
     this.database.prepare('UPDATE personal_readonly_tasks SET status = ?, terminal_at = ?, payload = ? WHERE investigation_id = ?')
       .run(task.status, task.terminalAt, JSON.stringify(task), task.investigationId);
   }
-  private writeApproval(approval: PersonalReadonlyApproval, plan: PersonalReadonlyPlan): void {
+  private writeApproval(approval: PersonalReadonlyApproval, plan: AnyPersonalPlan): void {
     this.assertApproval(approval, plan);
     this.database.prepare('UPDATE personal_readonly_approvals SET used_at = ?, revoked_at = ?, payload = ? WHERE approval_id = ?')
       .run(approval.usedAt, approval.revokedAt, JSON.stringify(approval), approval.approvalId);

@@ -1,0 +1,10 @@
+{
+  "version": "personal-readonly-registration-v2",
+  "collectionPolicy": "personal-readonly-collection-v2",
+  "repoId": "personal-example",
+  "sourceRoot": "/absolute/path/to/personal-repository",
+  "baseCommit": "0000000000000000000000000000000000000000",
+  "question": "Explain the selected request flow and its checks. Mark masked or missing call connections as uncertain and cite only visible supplied lines.",
+  "readRanges": [{ "path": "src/main.ts", "startLine": 1, "endLine": 20 }],
+  "transferPaths": ["src/main.ts"]
+}

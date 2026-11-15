@@ -11,8 +11,8 @@ import { SqlitePersonalReadonlyStore } from '../adapters/sqlite-personal-readonl
 import { PersonalReadonlyService } from '../application/investigate-personal-readonly.js';
 import { HarnessError } from '../domain/errors.js';
 import type { ReadonlyRelayConfig } from '../domain/readonly-relay.js';
-import { parsePersonalReadonlyRegistration } from '../policy/personal-readonly-policy.js';
-import type { PersonalReadonlyRegistration } from '../domain/personal-readonly.js';
+import { parseAnyPersonalRegistration } from '../policy/personal-readonly-contract.js';
+import type { AnyPersonalRegistration } from '../domain/personal-readonly-collection.js';
 import { parseReadonlyRelayConfig } from '../policy/readonly-relay-policy.js';
 import { parseReadonlyTransportJson } from '../policy/readonly-transport-protocol.js';
 import type { ReadonlyRelayPort } from '../ports/readonly-relay.js';
@@ -120,7 +120,7 @@ export const runPersonalReadonlyCommand = async (args: string[]): Promise<void> 
   process.umask(0o077);
   const { command, options } = parseArguments(args);
   const sourceRoot = await realpath(resolve(dirname(fileURLToPath(import.meta.url)), '../../..'));
-  const registration = options.has('--registration') ? parsePersonalReadonlyRegistration(await readPrivateJson(options.get('--registration')!)) : undefined;
+  const registration = options.has('--registration') ? parseAnyPersonalRegistration(await readPrivateJson(options.get('--registration')!)) : undefined;
   const requestedData = resolve(options.get('--data-dir') ?? defaultDataDirectory());
   await assertCanonicalDirectoryParents(requestedData, false);
   if (registration) {
@@ -149,7 +149,7 @@ export const runPersonalReadonlyCommand = async (args: string[]): Promise<void> 
       const request = { investigationId: id, planHash: options.get('--plan-hash') ?? '' };
       let result: object;
       if (command === 'plan') {
-        result = await service.plan(registration as PersonalReadonlyRegistration, context);
+        result = await service.plan(registration as AnyPersonalRegistration, context);
       } else if (command === 'approve') {
         result = { approval: await service.approve({ ...request, expiresInMinutes: Number(options.get('--expires-in-minutes')) }, context),
           ...await service.inspect(id, context) };

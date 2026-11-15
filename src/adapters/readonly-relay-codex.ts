@@ -17,7 +17,7 @@ import { sendReadonlyRelayRequest, startReadonlyRelayBroker, type ReadonlyRelayB
 
 export interface SyntheticConnection { credential: ReadonlyRelayCredential; transport: ReadonlyRelayTransport }
 export interface ReadonlyRelayInputContract {
-  policy: 'personal-readonly-investigation-v1';
+  policy: 'personal-readonly-investigation-v1' | 'personal-readonly-investigation-v2';
   assertDispatch: ReadonlyRelayDispatchValidator;
 }
 const fail = (suffix: string): never => { throw new HarnessError(`READONLY_RELAY_${suffix}`); };
@@ -52,7 +52,7 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
     // Only a separately constructed trusted harness adapter selects a personal input policy.
     if (this.inputContract && (!Object.isFrozen(this.inputContract)
       || Object.keys(this.inputContract).sort().join(',') !== 'assertDispatch,policy'
-      || this.inputContract.policy !== 'personal-readonly-investigation-v1'
+      || !['personal-readonly-investigation-v1', 'personal-readonly-investigation-v2'].includes(this.inputContract.policy)
       || typeof this.inputContract.assertDispatch !== 'function')) fail('INVALID_TRANSPORT');
     const validateDispatch = this.inputContract?.assertDispatch ?? assertReadonlyRelayDispatch;
     validateDispatch(dispatch, config);

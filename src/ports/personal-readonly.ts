@@ -1,5 +1,5 @@
 import type { ReadonlyContext } from '../domain/readonly-investigation.js';
-import type { PersonalReadonlyPayload, PersonalReadonlyPlan } from '../domain/personal-readonly.js';
+import type { AnyPersonalPayload, AnyPersonalPlan } from '../domain/personal-readonly-collection.js';
 import type { ReadonlyRelayResult, ReadonlyRelayDispatch } from '../domain/readonly-relay.js';
 import type { ReadonlyRelayVerification } from './readonly-relay.js';
 import type { READONLY_RELAY_UNVERIFIED_RESPONSE_CHECKS } from '../domain/readonly-relay.js';
@@ -8,7 +8,7 @@ export type PersonalReadonlyStatus = 'AWAITING_APPROVAL' | 'APPROVED' | 'RUNNING
   | 'FAILED' | 'BLOCKED' | 'CANCELLED' | 'INTERRUPTED';
 export interface PersonalReadonlyTask {
   investigationId: string;
-  plan: PersonalReadonlyPlan;
+  plan: AnyPersonalPlan;
   status: PersonalReadonlyStatus;
   generation: number;
   updatedAt: string;
@@ -23,7 +23,7 @@ export interface PersonalReadonlyApproval {
   investigationId: string;
   ownerId: string;
   planHash: string;
-  planSnapshot: PersonalReadonlyPlan;
+  planSnapshot: AnyPersonalPlan;
   createdAt: string;
   expiresAt: string;
   usedAt: string | null;
@@ -72,24 +72,33 @@ export interface PersonalReadonlyReport {
   excludedOperationsReason: 'readonly-relay-only';
   checks: { sourceUnchanged: 'passed'; targetCodeExecution: 'not_run'; realModel: 'passed' | 'not_run'; externalTransmission: 'passed' | 'not_run'; credentialAccess: 'passed' | 'not_run'; providerCompatibility: 'passed' | 'not_run'; liveIsolation: 'passed' | 'not_run'; semanticAccuracy: 'not_run' };
 }
+export interface PersonalCollectionReport extends PersonalReadonlyReport {
+  collection: {
+    policy: 'personal-readonly-collection-v2';
+    profileHash: string;
+    sourceViewsHash: string;
+    evidenceOrigin: 'line-preserving-derived-view';
+  };
+}
+export type AnyPersonalReport = PersonalReadonlyReport | PersonalCollectionReport;
 export interface PersonalReadonlySnapshot {
   task: PersonalReadonlyTask;
   approvals: PersonalReadonlyApproval[];
   approvalPage: { offset: number; total: number; nextOffset: number | null };
   attempt: PersonalReadonlyAttempt | null;
-  payload: PersonalReadonlyPayload | null;
-  report: PersonalReadonlyReport | null;
+  payload: AnyPersonalPayload | null;
+  report: AnyPersonalReport | null;
   payloadExpired: boolean;
 }
 export interface PersonalReadonlyPruneResult { payloadsRemoved: number; auditsRemoved: number }
 export interface PersonalReadonlyStore {
-  create(plan: PersonalReadonlyPlan, payload: PersonalReadonlyPayload, context: ReadonlyContext): PersonalReadonlySnapshot;
+  create(plan: AnyPersonalPlan, payload: AnyPersonalPayload, context: ReadonlyContext): PersonalReadonlySnapshot;
   inspect(id: string, context: ReadonlyContext, offset?: number): PersonalReadonlySnapshot;
   approve(request: PersonalReadonlyApprovalRequest, context: ReadonlyContext): PersonalReadonlyApproval;
   claim(request: PersonalReadonlyRunRequest, context: ReadonlyContext): PersonalReadonlyAttempt;
   assertRunnable(id: string, generation: number, context: ReadonlyContext): void;
   dispatch<T>(id: string, generation: number, context: ReadonlyContext, invoke: (request: ReadonlyRelayDispatch) => T): T;
-  finish(id: string, generation: number, report: PersonalReadonlyReport | null, failureCode: string | null, context: ReadonlyContext): PersonalReadonlySnapshot;
+  finish(id: string, generation: number, report: AnyPersonalReport | null, failureCode: string | null, context: ReadonlyContext): PersonalReadonlySnapshot;
   cancel(id: string, context: ReadonlyContext): PersonalReadonlySnapshot;
   invalidate(id: string, context: ReadonlyContext): PersonalReadonlySnapshot;
   recover(id: string, context: ReadonlyContext, cleanupConfirmed?: boolean): PersonalReadonlySnapshot;

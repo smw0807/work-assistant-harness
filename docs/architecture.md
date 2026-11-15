@@ -315,6 +315,14 @@ reader는 Git CLI·대상 코드 실행 없이 commit/tree/blob과 선택 파일
 
 공통 native/broker는 기본 synthetic validator를 유지하고, 별도 개인 adapter의 고정 validator만 새 개인 입력을 허용한다. 등록·대상 코드·모델은 validator·목적지·권한을 선택할 수 없다. 기존 relay-v2 profile/config/명세의 형식·수신/출력 한도와 보증 범위는 유지한다. 이번 실제 개인 계획은 로컬 검증 뒤 `AWAITING_APPROVAL`에서 멈추며 구체 자료의 외부 전송은 후속 별도 승인이다. [준비 결과](stage-4c10-result.md)를 따른다.
 
+### 단계 4-C-11의 원본 수집과 안전 view
+
+새 `personal-readonly-collection-v2`는 원본64KiB·전체 view64KiB·발췌32KiB·근거 합계64KiB의 수집 권한을 별도 profile/hash에 묶는다. 기존 relay-v2 profile/config는 전송 구성 요소로 그대로 참조하고 원본 한도 변경으로 설명하지 않는다. 등록 v2·입력 v2·계획 v2를 구분하며 기존 개인 v1 helper와 hash는 보존한다. 개인 DB의 plan/payload/result 검증기는 정확한 계약으로 분기하고 lifecycle·원자 소비·취소/복구·보관 SQL은 공유한다.
+
+reader는 원본 Git blob과 worktree를 대조한 뒤 원문 전체 검사를 수행한다. 원문이 민감 검사에 거부되면 그 상태는 남기고, 새 계약의 줄 보존 마스킹 view만 전체 동일 검사를 다시 통과시켜 선택 발췌를 만든다. binary·경로·Git·크기 실패는 변환으로 우회하지 않는다. 원문과 전체 view는 메모리에만 두고 payload에는 안전 발췌·private source/view proof만 저장한다. 모델에는 view 근거와 변환 고지를 전달한다.
+
+승인·인증·전송·완료의 guard는 raw identity뿐 아니라 view proof와 선택 근거를 다시 생성해 비교한다. 원본 변경이 동일한 마스킹 결과를 만들어도 source hash로 차단한다. v2 보고서의 별도 collection metadata는 파생 근거임을 나타내며 기존 verification·미검증5항목은 그대로다. 준비는 `AWAITING_APPROVAL`에서 멈춘다. [결과](stage-4c11-result.md)를 따른다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.

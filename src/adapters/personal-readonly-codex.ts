@@ -1,15 +1,35 @@
 import { HarnessError } from '../domain/errors.js';
 import { PERSONAL_READONLY_POLICY } from '../domain/personal-readonly.js';
-import type { ReadonlyRelayConfig } from '../domain/readonly-relay.js';
+import { PERSONAL_COLLECTION_PLAN_POLICY } from '../domain/personal-readonly-collection.js';
+import type { ReadonlyRelayConfig, ReadonlyRelayDispatch } from '../domain/readonly-relay.js';
+import type { ReadonlyRelayPort, ReadonlyRelayTransmissionResult } from '../ports/readonly-relay.js';
+import { assertAnyPersonalDispatch } from '../policy/personal-readonly-contract.js';
 import { assertPersonalReadonlyDispatch } from '../policy/personal-readonly-policy.js';
+import { assertPersonalCollectionDispatch } from '../policy/personal-readonly-collection-policy.js';
+import { parseReadonlyTransportJson } from '../policy/readonly-transport-protocol.js';
 import { RestrictedReadonlyRelayCodex, type SyntheticConnection } from './readonly-relay-codex.js';
 
 const personalInputContract = Object.freeze({ policy: PERSONAL_READONLY_POLICY, assertDispatch: assertPersonalReadonlyDispatch });
+const collectionInputContract = Object.freeze({ policy: PERSONAL_COLLECTION_PLAN_POLICY, assertDispatch: assertPersonalCollectionDispatch });
 
-/** Shares the unchanged v2 transport while fixing the separate personal-evidence input validator in code. */
-export class RestrictedPersonalReadonlyCodex extends RestrictedReadonlyRelayCodex {
-  constructor(config: ReadonlyRelayConfig, dataDirectory: string, investigationId: string, synthetic?: SyntheticConnection) {
+/** The approved body selects only one of two fixed harness validators, never a caller-supplied function. */
+export class RestrictedPersonalReadonlyCodex implements ReadonlyRelayPort {
+  readonly mode = 'live' as const;
+  readonly transport = 'codex-cli-relay' as const;
+  constructor(private readonly config: ReadonlyRelayConfig, private readonly dataDirectory: string,
+    private readonly investigationId: string, private readonly synthetic?: SyntheticConnection) {
     if (config.policyVersion !== 'readonly-relay-codex-v2') throw new HarnessError('PERSONAL_READONLY_INVALID_CONFIG');
-    super(config, dataDirectory, investigationId, synthetic, personalInputContract);
+  }
+  async verifyReady(): Promise<void> {
+    await new RestrictedReadonlyRelayCodex(this.config, this.dataDirectory, this.investigationId).verifyReady();
+  }
+  async transmit(dispatch: ReadonlyRelayDispatch, signal: AbortSignal, beforeTransmission: () => void,
+    beforeCredentialAccess: () => void): Promise<ReadonlyRelayTransmissionResult> {
+    assertAnyPersonalDispatch(dispatch, this.config);
+    const request = parseReadonlyTransportJson(dispatch.requestEnvelope.body, 256 * 1024) as { input: { content: { text: string }[] }[] };
+    const input = parseReadonlyTransportJson(request.input[0]!.content[0]!.text, 128 * 1024) as { inputPolicyVersion: string };
+    const contract = input.inputPolicyVersion === 'personal-readonly-input-v2' ? collectionInputContract : personalInputContract;
+    return new RestrictedReadonlyRelayCodex(this.config, this.dataDirectory, this.investigationId, this.synthetic, contract)
+      .transmit(dispatch, signal, beforeTransmission, beforeCredentialAccess);
   }
 }

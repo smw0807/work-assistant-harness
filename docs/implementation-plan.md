@@ -752,6 +752,16 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - 로컬 가짜 전송과 고정 native의 합성 자료 검증으로 승인 전 호출0, 승인 혼용·변조·만료·재사용 거부, 허구 인용/줄·잘못된 JSON·악성 지시·민감/추가 실행 필드 거부, source 변경 시 인증/전송0, 취소·종료·복구를 확인한다. 실제 개인 저장소 내용은 로컬 수집과 검토 자료에만 사용하며 가짜 테스트에서 네트워크로 보내지 않는다.
 - 검토 자료에는 정확한 선택 근거·질문·입력·wire body·profile/설정과 각 hash·유효기간·원본/코드 보존 manifest, passed/failed/not_run을 분리한 결과를 저장한다. 마지막 상태는 승인/사용/소비/attempt/dispatch0의 `AWAITING_APPROVAL`이며 이후 구체 별도 승인 전 실제 호출0을 유지한다.
 
+##### 단계 4-C-11 개인 자료 수집 한도와 안전 view 분리
+
+사용자가 요청한 누락 두 파일의 수집 문제를 해결하되 기존 relay-v2와 개인 v1 계약·hash·원문 민감 거부는 유지한다. 이번 범위는 로컬 구현·검증·새 검토 자료이며 실제 인증/모델/전송은 승인 대기다. 대상 파일·설정·Git을 수정하거나 실행하지 않는다.
+
+- 새 `personal-readonly-collection-v2`는 원본 파일64KiB·전체 안전 view64KiB·발췌32KiB·근거 합계64KiB를 분리한다. 기존8파일·16범위·범위당200줄·입력128KiB는 유지한다. 기존 relay-v2 profile은 변경 없는 전송 구성 요소로 참조하고 그 안의 legacy fileBytes32KiB를 새 원본 수집 권한으로 설명하지 않는다. 새 수집 profile/hash·입력 v2·계획 v2와 명시적인 등록 v2를 승인 snapshot/body/plan hash에 결합한다.
+- 먼저 원본 전체에 기존 UTF8/binary·민감 검사를 수행한다. 크기·경로·Git·binary 오류는 마스킹으로 우회하지 않는다. 민감 거부는 원문이 거부됐다고 유지하며 자동 허용·원문 전송하지 않는다. 새 계약에 한해 고정 패턴의 매치 전체를 줄 보존 마커로 바꾼 파생 view를 만들고, 그 전체에 동일한 기존 민감 검사를 다시 통과시킨 뒤 선택 범위를 추출한다. 실패·잔존·마스크 한도 초과는 거부한다. 미완성 private-key 블록은 header만 제거해 남은 본문을 노출하지 않는다.
+- private provenance는 원본 hash/바이트와 view hash/바이트·고정 검사 상태·마스크 개수/줄 범위를 구분한다. 원시 매치·값·조각·임의 오류 문자열과 원문/전체 view 본문을 보고서나 DB에 복제하지 않는다. 모델에는 선택된 안전 발췌·view hash·변환 고지만 전달하며 원본 identity와 root는 private에 둔다. 줄 번호가 같아도 변환된 근거이며 가려진 의미를 사실로 복원하지 못한다.
+- 원본이 바뀌면 마스킹 뒤 view가 같더라도 승인·인증·전송·완료 guard에서 원본 hash로 거부한다. view와 발췌도 재생성해 private provenance와 정확히 비교한다. 구형 개인 v1과 새 계약은 별도 검증기로만 처리하고 DB의 기존 소비·TTL·취소·복구·보관을 공유하며, 구형 계획/승인을 자동 승격하지 않는다. 알 수 없는 계약이나 v1/v2 혼용은 거부한다.
+- 합성 경계/비밀/PEM·CRLF·마스크 중복/초과·변환 후 잔존·원본 교체·같은 view의 다른 원본·승인 혼용·재시작/보관·native fake/종료·기존 hash 회귀를 로컬에서 검증한다. 실제 대상에는 명시 선택한 파일의 읽기/근거 준비와 전후 보존 확인만 수행한다. 새 plan은 `AWAITING_APPROVAL`, 승인/사용/소비/attempt/dispatch0과 실제 호출0에서 멈춘다. 마스킹이나 근거 범위 때문에 확인하지 못하는 부분은 검토 자료에 남긴다.
+
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 
@@ -1170,6 +1180,12 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 192 | relay-v2 보존과 개인 adapter | 구형 profile/config/body/hash·기본 판정을 유지하고 개인 입력 validator만 고정 하네스 코드로 주입. 개인 입력을 구형 synthetic broker에서 거부, 새 native 합성 검증의 EOF/두hash/최종 근거·단건·정리 확인. |
 | 193 | 개인 범위 문서·검토 자료 | 선택 파일+Git identity 관찰과 전체 clean 미판정을 구분. 누락/거부 파일·불충분한 호출 흐름을 명시하고 정확한 input/body/profile/hash·원본·코드·검사 결과를 private 자료로 고정. |
 | 194 | 개인 실제 호출 승인 대기 | 새 개인 계획은 AWAITING_APPROVAL, 승인/사용/소비/attempt/dispatch0·실제 인증/모델/외부 전송0. 기존 승인 재사용·자동 호출·push0. |
+| 195 | 별도 개인 수집 계약 | registration/input/plan의 명시적 v2와 collection profile hash를 결합한다. source64KiB·full view64KiB·excerpt32KiB만 새 계약에 적용하고, 기존 personal-v1·relay-v2 profile/config/32KiB 필드와 4MiB 응답 계약은 보존한다. 미등록·혼합 버전·임의 상한은 거부한다. |
+| 196 | 원본 거부와 안전 view 구분 | 원본 전체의 기존 binary/민감 검사를 유지한다. 민감 거부만 명시적 마스킹 대상으로 삼고 전체 view를 같은 검사로 재검증한다. 겹친 패턴·CRLF·미완성 private key·mask 한도를 검증하며 raw 거부 상태와 source/view hash·보존된 줄 수를 구분한다. |
+| 197 | view 근거와 원본 변경 차단 | fileHash는 full safe view를 뜻하며 선택 발췌·mask notice·sourceViewsHash를 입력과 계획에 결합한다. 원본 본문·match·full view는 저장/전송하지 않는다. 마스킹 값만 달라져 같은 view가 되더라도 원본 identity/hash 변화는 승인·인증·전송·완료·복구에서 차단한다. 끝 빈 줄·빈 발췌도 기존 줄 수/hash/예산 판정을 유지한다. |
+| 198 | 두 개인 버전의 저장·보고 | 공통 DB의 기존 원자 승인/단건/TTL/취소/복구/보관은 유지하고 확정된 버전별 validator만 선택한다. 새 보고서는 collection provenance 4필드를 필수로 저장하며 구형 보고서는 기존 shape만 허용한다. 구형 binary의 새 row 거부와 rollback 제약을 문서화한다. |
+| 199 | 로컬 검증·새 승인 대기 | 합성 회귀·native fake·정적 검사와 기존 계약/자료 보존을 확인한다. 개인 파일의 제한된 읽기·원본/Git 보존·정확한 body/plan/collection hash·private 권한·DB0 계수를 독립 감사한다. 실제 인증/모델/전송0, 새 계획은 AWAITING_APPROVAL에서 멈추며 의미 정확성과 완전한 호출 흐름은 미검증이다. |
+| 200 | 별도 승인된 개인 수집 v2 실제 단건 | TTL10분·최대1회·자동 재시도0 승인으로 정확한 새 입력을 호출한다. 실제1회는55초 timeout·EOF 미도달로 FAILED이며 유효 보고서/두 응답 hash 없음. 승인/사용/소비/attempt/dispatch/upstream 각1회·재시도0, 원본/view·Git·고정 자료 보존과 controller/guardian/child/PGID 종료·scratch 부재 및 독립 사후 감사21항목 passed를 기록한다. 경계 관찰2490을 frame 초과 종료로 재분류하거나 시간 연장 성공을 가정하지 않는다. |
 
 ### 최종 검증 묶음
 
