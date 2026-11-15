@@ -592,6 +592,8 @@ v1/v2는 같은 개인 DB의 lifecycle을 공유하며 계약별로 검증합니
 
 `pnpm harness migration-check --config /absolute/path/to/private-migration/migration-check.json`으로 실행 환경과 기존 계약의 정적 준비 상태를 확인합니다. [설정 템플릿](config/migration-check.example.json)과 [실행 가이드](docs/migration-guide.md)에 경로·권한·설치 준비 및 결과 해석을 설명합니다.
 
+회사 장비의 새 대화에서 이어갈 때는 [오프라인 검증 인수인계](docs/company-offline-handoff.md)를 사용합니다. 현재 구현·개인 검증 상태, 회사에서 확인할 조건, 실행 범위와 순서, 짧은 시작 문구를 포함합니다.
+
 이 명령은 명시한 비활성 진단 설정과 고정 native 파일만 제한적으로 읽고, 저장 디렉터리와 `sandbox-exec`는 메타데이터만 확인합니다. 회사 저장소 등록·인증 접근·네트워크·바이너리 실행·DB 생성은 하지 않습니다. 진단 자체는 파일을 쓰지 않으며 `pnpm harness`의 선행 TypeScript 빌드는 `dist`를 씁니다. 현재 지원은 macOS ARM64이고, pnpm 버전 관찰은 실행기가 제공한 미검증 메타데이터입니다. `passed`여도 `liveReady=false`·`executionAllowed=false`·`approvalCreated=false`이며 회사 승인이나 실제 호출 권한이 되지 않습니다. 구현과 검증 결과는 [4-C-14 결과](docs/stage-4c14-result.md)를 따릅니다.
 
 ## 모의 입력과 오류 재현
