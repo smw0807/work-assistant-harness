@@ -1,5 +1,6 @@
 import type { ReadonlyEvidence, ReadonlyRange } from './readonly-investigation.js';
 import type { PersonalReadonlyPayload, PersonalReadonlyPlan, PersonalReadonlyRegistration, PersonalReadonlySnapshot } from './personal-readonly.js';
+import type { PersonalBudgetPayload, PersonalBudgetPlan, PersonalBudgetRegistration } from './personal-readonly-budget.js';
 
 export const PERSONAL_COLLECTION_POLICY = 'personal-readonly-collection-v2' as const;
 export const PERSONAL_COLLECTION_PLAN_POLICY = 'personal-readonly-investigation-v2' as const;
@@ -57,8 +58,8 @@ export interface PersonalCollectionPlan extends Omit<PersonalReadonlyPlan, 'poli
   collectionProfileHash: string;
   sourceViewsHash: string;
 }
-export type AnyPersonalRegistration = PersonalReadonlyRegistration | PersonalCollectionRegistration;
-export type AnyPersonalPayload = PersonalReadonlyPayload | PersonalCollectionPayload;
-export type AnyPersonalPlan = PersonalReadonlyPlan | PersonalCollectionPlan;
+export type AnyPersonalRegistration = PersonalReadonlyRegistration | PersonalCollectionRegistration | PersonalBudgetRegistration;
+export type AnyPersonalPayload = PersonalReadonlyPayload | PersonalCollectionPayload | PersonalBudgetPayload;
+export type AnyPersonalPlan = PersonalReadonlyPlan | PersonalCollectionPlan | PersonalBudgetPlan;
 export interface PersonalSourceView extends PersonalSourceViewProof { bytes: Uint8Array }
 export type PersonalCollectionRange = ReadonlyRange;

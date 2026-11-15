@@ -1,0 +1,11 @@
+{
+  "version": "personal-readonly-registration-v3",
+  "collectionPolicy": "personal-readonly-collection-v2",
+  "executionBudgetPolicy": "readonly-relay-execution-budget-v1",
+  "repoId": "personal-example",
+  "sourceRoot": "/absolute/path/to/personal-repository",
+  "baseCommit": "0000000000000000000000000000000000000000",
+  "question": "Explain visible selected calls and checks; mark masked or missing connections as uncertain. Use only the explicitly approved fixed execution budget.",
+  "readRanges": [{ "path": "src/main.ts", "startLine": 1, "endLine": 20 }],
+  "transferPaths": ["src/main.ts"]
+}

@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "policyVersion": "readonly-relay-codex-v3",
+  "codexPath": "/absolute/path/to/codex",
+  "codexSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "model": "gpt-6.1-sol",
+  "authMode": "chatgpt",
+  "timeoutMs": 125000,
+  "maxResponseBytes": 16384
+}

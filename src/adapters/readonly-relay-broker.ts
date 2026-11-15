@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import { HarnessError } from '../domain/errors.js';
 import type { ReadonlyRelayConfig, ReadonlyRelayDispatch } from '../domain/readonly-relay.js';
 import { assertReadonlyRelayDispatch, getReadonlyRelayLimits } from '../policy/readonly-relay-policy.js';
+import { getReadonlyRelayExecutionBudget, parseAnyReadonlyRelayConfig } from '../policy/readonly-relay-budget-policy.js';
 import { assertReadonlyRelayCredentialText, collectReadonlyRelayResponse, type ReadonlyRelayReceptionOptions } from '../policy/readonly-relay-protocol.js';
 import { copyReadonlyRelayReceptionDiagnostic, type ReadonlyRelayReceptionDiagnostic } from '../policy/readonly-relay-reception-diagnostics.js';
 import type { CodexCredential } from './codex-credentials.js';
@@ -69,7 +70,9 @@ export const startReadonlyRelayBroker = async (
   validateDispatch: ReadonlyRelayDispatchValidator = assertReadonlyRelayDispatch,
 ): Promise<ReadonlyRelayBroker> => {
   if (typeof validateDispatch !== 'function') fail('INVALID_TRANSPORT');
+  config = parseAnyReadonlyRelayConfig(config);
   validateDispatch(dispatch, config);
+  const budget = getReadonlyRelayExecutionBudget(config);
   if (![loadCredential, transport, beforeTransmission, beforeCredentialAccess].every((value) => typeof value === 'function')) fail('INVALID_TRANSPORT');
   if (signal.aborted) fail('CANCELLED');
   const approved = structuredClone(dispatch);
@@ -126,9 +129,12 @@ export const startReadonlyRelayBroker = async (
       beforeTransmission(); calls++;
       const upstream = await transport(approved, credential, controller.signal, observeHeaders);
       // Full bounded EOF and reflection checks precede the first byte sent to the uncredentialed child.
-      const receptionOptions: ReadonlyRelayReceptionOptions | undefined = approved.requestEnvelope.profileId === 'codex-chatgpt-relay-v2'
-        ? { responseBytes: getReadonlyRelayLimits(approved.requestEnvelope.profileId).responseBytes as NonNullable<ReadonlyRelayReceptionOptions['responseBytes']>,
-          observeDiagnostic: (value) => { reception = copyReadonlyRelayReceptionDiagnostic(value); } } : undefined;
+      const observeDiagnostic = (value: ReadonlyRelayReceptionDiagnostic): void => { reception = copyReadonlyRelayReceptionDiagnostic(value); };
+      const receptionOptions: ReadonlyRelayReceptionOptions | undefined = approved.requestEnvelope.profileId === 'codex-chatgpt-relay-v3'
+        ? { executionBudget: budget, observeDiagnostic }
+        : approved.requestEnvelope.profileId === 'codex-chatgpt-relay-v2'
+          ? { responseBytes: getReadonlyRelayLimits(approved.requestEnvelope.profileId).responseBytes as NonNullable<ReadonlyRelayReceptionOptions['responseBytes']>, observeDiagnostic }
+          : undefined;
       const collected = await collectReadonlyRelayResponse(upstream, controller.signal, credential, receptionOptions);
       if (controller.signal.aborted) fail('CANCELLED');
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
@@ -156,7 +162,7 @@ export const startReadonlyRelayBroker = async (
   const abort = (): void => { controller.abort(); server.closeAllConnections(); };
   signal.addEventListener('abort', abort, { once: true });
   server.headersTimeout = 5000; server.requestTimeout = 5000; server.maxConnections = 4;
-  server.on('connection', (socket) => socket.setTimeout(55_000, () => socket.destroy()));
+  server.on('connection', (socket) => socket.setTimeout(budget.workTimeoutMs, () => socket.destroy()));
   server.on('upgrade', (_request, socket) => socket.destroy()); server.on('connect', (_request, socket) => socket.destroy());
   try { await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); }); }); }
   catch { signal.removeEventListener('abort', abort); fail('BROKER_FAILED'); }
@@ -170,7 +176,7 @@ export const startReadonlyRelayBroker = async (
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([Promise.all([new Promise<void>((resolve) => server.close(() => resolve())), ...active]),
-          new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new HarnessError('READONLY_RELAY_LIFECYCLE_UNSAFE')), 5000); })]);
+          new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new HarnessError('READONLY_RELAY_LIFECYCLE_UNSAFE')), budget.cleanupTimeoutMs); })]);
       } finally { finalTextGuard = null; if (timer) clearTimeout(timer); }
     } };
 };

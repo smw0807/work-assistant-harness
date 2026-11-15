@@ -4,6 +4,7 @@ import { isAbsolute, relative, sep } from 'node:path';
 import { HarnessError } from '../domain/errors.js';
 import type { ReadonlyContext } from '../domain/readonly-investigation.js';
 import type { AnyPersonalPayload, AnyPersonalRegistration, AnyPersonalPlan } from '../domain/personal-readonly-collection.js';
+import { PERSONAL_BUDGET_POLICY } from '../domain/personal-readonly-budget.js';
 import { READONLY_RELAY_UNVERIFIED_RESPONSE_CHECKS, type ReadonlyRelayConfig } from '../domain/readonly-relay.js';
 import type { ReadonlyRelayPort, ReadonlyRelayTransmissionResult } from '../ports/readonly-relay.js';
 import type {
@@ -16,8 +17,9 @@ import {
   parseAnyPersonalResult, validateAnyPersonalPayload,
 } from '../policy/personal-readonly-contract.js';
 import { assertPersonalReadonlyRepositoryNow, collectPersonalReadonlyEvidence, inspectPersonalReadonlyRepository } from '../adapters/personal-readonly-repository.js';
-import { parseReadonlyRelayConfig } from '../policy/readonly-relay-policy.js';
+import { parseAnyReadonlyRelayConfig } from '../policy/readonly-relay-budget-policy.js';
 import { assertPersonalCollectionPayloadNow, collectPersonalCollectionEvidence, inspectPersonalCollectionRepository } from '../adapters/personal-readonly-collection-repository.js';
+import { assertPersonalBudgetPayloadNow, collectPersonalBudgetEvidence, inspectPersonalBudgetRepository } from '../adapters/personal-readonly-budget-repository.js';
 
 type CleanupHashes = Pick<AnyPersonalPlan, 'requestBodyHash' | 'requestEnvelopeHash' | 'connectionProfileHash'>;
 const hashes = (plan: AnyPersonalPlan): CleanupHashes => ({ requestBodyHash: plan.requestBodyHash,
@@ -27,12 +29,15 @@ const safeFailure = (error: unknown): string => {
   if (!(error instanceof HarnessError)) return 'PERSONAL_READONLY_CALL_FAILED';
   if (['READONLY_RELAY_LIFECYCLE_UNSAFE', 'PERSONAL_READONLY_LIFECYCLE_UNSAFE'].includes(error.code)) return 'PERSONAL_READONLY_RECOVERY_UNCERTAIN';
   const allowed = ['INVALID_RESPONSE', 'OUTPUT_LIMIT', 'TIMEOUT', 'EXPIRED', 'SOURCE_CHANGED'];
-  const suffix = allowed.find((item) => error.code === `READONLY_RELAY_${item}` || error.code === `PERSONAL_READONLY_${item}` || error.code === `PERSONAL_COLLECTION_${item}`);
+  const suffix = allowed.find((item) => error.code === `READONLY_RELAY_${item}` || error.code === `PERSONAL_READONLY_${item}` || error.code === `PERSONAL_COLLECTION_${item}` || error.code === `PERSONAL_BUDGET_${item}`);
   return suffix ? `PERSONAL_READONLY_${suffix}` : 'PERSONAL_READONLY_CALL_FAILED';
 };
 const assertSourceNow = (payload: AnyPersonalPayload): void => {
-  if (payload.registration.version === 'personal-readonly-registration-v2') {
-    if (!('collectionProfile' in payload)) throw new HarnessError('PERSONAL_READONLY_INVALID_CONTRACT');
+  if (payload.registration.version === 'personal-readonly-registration-v3') {
+    if (!('executionBudget' in payload)) throw new HarnessError('PERSONAL_READONLY_INVALID_CONTRACT');
+    assertPersonalBudgetPayloadNow(payload);
+  } else if (payload.registration.version === 'personal-readonly-registration-v2') {
+    if (!('collectionProfile' in payload) || 'executionBudget' in payload) throw new HarnessError('PERSONAL_READONLY_INVALID_CONTRACT');
     assertPersonalCollectionPayloadNow(payload);
   } else if (payload.registration.version === 'personal-readonly-registration-v1') {
     if ('collectionProfile' in payload) throw new HarnessError('PERSONAL_READONLY_INVALID_CONTRACT');
@@ -69,6 +74,8 @@ export class PersonalReadonlyService {
     assertReadonlyContext(context);
     const config = this.requireConfig(false);
     const registered = parseAnyPersonalRegistration(registration);
+    const expectedConfig = registered.version === 'personal-readonly-registration-v3' ? 'readonly-relay-codex-v3' : 'readonly-relay-codex-v2';
+    if (config.policyVersion !== expectedConfig) throw new HarnessError('PERSONAL_READONLY_INVALID_CONFIG');
     this.assertDataDirectory(registered);
     this.store.prune(context);
     let payload: AnyPersonalPayload;
@@ -76,9 +83,13 @@ export class PersonalReadonlyService {
       const repository = await inspectPersonalReadonlyRepository(registered, randomUUID());
       const evidence = await collectPersonalReadonlyEvidence(repository, registered);
       payload = createAnyPersonalPayload(repository, registered, evidence, context, config);
-    } else {
+    } else if (registered.version === 'personal-readonly-registration-v2') {
       const repository = await inspectPersonalCollectionRepository(registered, randomUUID());
       const collected = await collectPersonalCollectionEvidence(repository, registered);
+      payload = createAnyPersonalPayload(repository, registered, collected, context, config);
+    } else {
+      const repository = await inspectPersonalBudgetRepository(registered, randomUUID());
+      const collected = await collectPersonalBudgetEvidence(repository, registered);
       payload = createAnyPersonalPayload(repository, registered, collected, context, config);
     }
     const plan = createAnyPersonalPlan(payload, context, config);
@@ -131,7 +142,9 @@ export class PersonalReadonlyService {
     const abort = (): void => { controller.abort(); notifyAbort(); };
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
-    const timeout = setTimeout(() => { timedOut = true; abort(); }, plan.limits.responseTimeoutMs);
+    const workTimeoutMs = plan.policy === 'personal-readonly-investigation-v3' ? plan.executionBudget.workTimeoutMs : plan.limits.responseTimeoutMs;
+    const cleanupTimeoutMs = plan.policy === 'personal-readonly-investigation-v3' ? plan.executionBudget.cleanupTimeoutMs : plan.limits.cleanupTimeoutMs;
+    const timeout = setTimeout(() => { timedOut = true; abort(); }, workTimeoutMs);
     const monitor = setInterval(() => {
       try { this.store.assertRunnable(request.investigationId, attempt.generation, currentContext(context)); }
       catch { monitoringFailure = true; abort(); }
@@ -171,7 +184,7 @@ export class PersonalReadonlyService {
       const outcome = await Promise.race([transmission, aborted]);
       if (outcome.kind === 'abort' || controller.signal.aborted) {
         const cleanup = await Promise.race([transmission, new Promise<{ kind: 'uncertain' }>((resolve) => {
-          cleanupTimer = setTimeout(() => resolve({ kind: 'uncertain' }), plan.limits.cleanupTimeoutMs);
+          cleanupTimer = setTimeout(() => resolve({ kind: 'uncertain' }), cleanupTimeoutMs);
         })]);
         cleanupConfirmed = cleanup.kind !== 'uncertain' && !(cleanup.kind === 'error' && safeFailure(cleanup.error) === 'PERSONAL_READONLY_RECOVERY_UNCERTAIN');
         throw new HarnessError(timedOut ? 'PERSONAL_READONLY_TIMEOUT' : 'PERSONAL_READONLY_CANCELLED');
@@ -193,9 +206,14 @@ export class PersonalReadonlyService {
         excludedOperationsReason: 'readonly-relay-only', checks: { sourceUnchanged: 'passed', targetCodeExecution: 'not_run', realModel: live,
           externalTransmission: live, credentialAccess: raw.verification.credentialAccess, providerCompatibility: live,
           liveIsolation: raw.verification.isolation, semanticAccuracy: 'not_run' } };
-      if (plan.policy === 'personal-readonly-investigation-v2') report = { ...report, collection: {
+      if (plan.policy === 'personal-readonly-investigation-v2' || plan.policy === 'personal-readonly-investigation-v3') report = { ...report, collection: {
         policy: 'personal-readonly-collection-v2', profileHash: plan.collectionProfileHash, sourceViewsHash: plan.sourceViewsHash,
         evidenceOrigin: 'line-preserving-derived-view' } };
+      if (plan.policy === 'personal-readonly-investigation-v3') {
+        if (!('collection' in report)) throw new HarnessError('PERSONAL_READONLY_INVALID_RESPONSE');
+        report = { ...report, executionBudget: { policy: PERSONAL_BUDGET_POLICY,
+          profileHash: plan.executionBudgetHash, workTimeoutMs: plan.executionBudget.workTimeoutMs, frames: plan.executionBudget.frames } };
+      }
     } catch (error) {
       failureCode = safeFailure(error);
       if (failureCode === 'PERSONAL_READONLY_RECOVERY_UNCERTAIN') cleanupConfirmed = false;
@@ -248,7 +266,8 @@ export class PersonalReadonlyService {
     if (contains(sourceRoot, dataDirectory) || contains(dataDirectory, sourceRoot)) throw new HarnessError('PERSONAL_READONLY_UNSAFE_DATA_DIRECTORY');
   }
   private requireConfig(enabled: boolean): ReadonlyRelayConfig {
-    const config = parseReadonlyRelayConfig(this.config);
+    const config = parseAnyReadonlyRelayConfig(this.config);
+    if (!['readonly-relay-codex-v2', 'readonly-relay-codex-v3'].includes(config.policyVersion)) throw new HarnessError('PERSONAL_READONLY_INVALID_CONFIG');
     if (enabled && !config.enabled) throw new HarnessError('PERSONAL_READONLY_DISABLED');
     return config;
   }

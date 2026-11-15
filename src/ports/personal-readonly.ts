@@ -80,7 +80,15 @@ export interface PersonalCollectionReport extends PersonalReadonlyReport {
     evidenceOrigin: 'line-preserving-derived-view';
   };
 }
-export type AnyPersonalReport = PersonalReadonlyReport | PersonalCollectionReport;
+export interface PersonalBudgetReport extends PersonalCollectionReport {
+  executionBudget: {
+    policy: 'readonly-relay-execution-budget-v1';
+    profileHash: string;
+    workTimeoutMs: number;
+    frames: number;
+  };
+}
+export type AnyPersonalReport = PersonalReadonlyReport | PersonalCollectionReport | PersonalBudgetReport;
 export interface PersonalReadonlySnapshot {
   task: PersonalReadonlyTask;
   approvals: PersonalReadonlyApproval[];

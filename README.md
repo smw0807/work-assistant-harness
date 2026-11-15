@@ -578,6 +578,14 @@ reader는 대상 프로그램·Git CLI·설정·hooks를 실행하거나 import�
 
 v1/v2는 같은 개인 DB의 lifecycle을 공유하며 계약별로 검증합니다. v2 작업이 있는 DB를 구형 실행 파일로 열면 알 수 없는 계약으로 거부될 수 있습니다. [4-C-11 결과](docs/stage-4c11-result.md)는 준비 당시의 승인0 상태와 이후 TTL10분·실제1회·재시도0 승인으로 실행한 `FAILED / PERSONAL_READONLY_TIMEOUT`을 구분해 기록합니다. 원본/Git 보존과 로컬 종료는 확인했으며, 추가 실제 호출에는 새 계획과 별도 승인이 필요합니다.
 
+## 시간·프레임 실행 예산 계약
+
+새 실행 예산은 기존 relay-v2·개인 수집 v2를 보존하고 별도 `readonly-relay-codex-v3` 설정과 개인 등록/입력/계획 v3로 연결합니다. [새 설정 예시](config/readonly-relay-execution-budget.example.json)와 [개인 등록 예시](config/personal-readonly-budget.example.json)를 private 경로에서 작성해 `personal-readonly-*`의 기존8개 명령을 사용합니다. 임의 timeout/frame 옵션이나 실행 중 자동 상한 증가는 제공하지 않습니다. 설정의 전체 timeout과 operation·native idle·collector·broker·guardian의 예산, 정리 상한을 하나의 고정 `readonly-relay-execution-budget-v1` 명세에서 가져옵니다.
+
+로컬 후보 비교는 work90/120초·4096/8192프레임을 대상으로 하며 실제 공급자의 완료시간을 예측하는 검사가 아닙니다. 논리 시간으로 긴 합성 stream의 수용 범위를 비교하고, 실제55초 초과 native fake와 별도로 검증합니다. 전체 응답4MiB·frame64KiB·최종16KiB·native 출력 합계128KiB/stderr16KiB·공유 정리5초·EOF/민감정보/인증 반사 검사와 단건·재시도0은 유지합니다.
+
+새 개인 계획은 기존 수집 v2의 안전 view와 원본 provenance를 재사용하고 별도 실행 예산/hash를 입력·계획·보고서에 결합합니다. 구형 등록·계획·승인을 자동 변환하지 않으며 unknown/mixed 계약을 거부합니다. [4-C-12 결과](docs/stage-4c12-result.md)는 로컬 준비의 승인0 이력과 이후 TTL10분·실제1회·재시도0 승인으로 실행한 `REPORTED` 성공을 구분합니다. 실제1회는84.074초·1,216,800byte EOF와 유효 보고서·원본 보존·로컬 종료를 확인했으며, 추가 실제 호출에는 새 계획과 별도 승인이 필요합니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.

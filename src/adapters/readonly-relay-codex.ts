@@ -5,7 +5,9 @@ import { HarnessError } from '../domain/errors.js';
 import type { CodexConfig } from '../domain/codex-config.js';
 import { READONLY_RELAY_UNVERIFIED_RESPONSE_CHECKS, type ReadonlyRelayConfig, type ReadonlyRelayDispatch } from '../domain/readonly-relay.js';
 import type { ReadonlyRelayPort, ReadonlyRelayTransmissionResult } from '../ports/readonly-relay.js';
-import { assertReadonlyRelayDispatch, parseReadonlyRelayConfig } from '../policy/readonly-relay-policy.js';
+import { assertReadonlyRelayDispatch } from '../policy/readonly-relay-policy.js';
+import type { ReadonlyRelayExecutionBudget } from '../domain/readonly-relay-budget.js';
+import { copyReadonlyRelayExecutionBudget, getReadonlyRelayExecutionBudget, getReadonlyRelayExecutionBudgetHash, parseAnyReadonlyRelayConfig } from '../policy/readonly-relay-budget-policy.js';
 import { parseReadonlyRelayCodexOutput } from '../policy/readonly-relay-protocol.js';
 import { READONLY_OUTPUT_SCHEMA } from '../policy/readonly-investigation-policy.js';
 import { codexProposalArguments } from './codex-cli-contract.js';
@@ -17,15 +19,19 @@ import { sendReadonlyRelayRequest, startReadonlyRelayBroker, type ReadonlyRelayB
 
 export interface SyntheticConnection { credential: ReadonlyRelayCredential; transport: ReadonlyRelayTransport }
 export interface ReadonlyRelayInputContract {
-  policy: 'personal-readonly-investigation-v1' | 'personal-readonly-investigation-v2';
+  policy: 'personal-readonly-investigation-v1' | 'personal-readonly-investigation-v2' | 'personal-readonly-investigation-v3';
   assertDispatch: ReadonlyRelayDispatchValidator;
 }
 const fail = (suffix: string): never => { throw new HarnessError(`READONLY_RELAY_${suffix}`); };
 
 /** Only the relay gets the longer idle wait: it first buffers bounded upstream EOF. */
-export const readonlyRelayCodexArguments = (config: CodexConfig, workspace: string, port: number): string[] =>
-  codexProposalArguments(config, workspace, port).map((argument) => argument === 'model_providers.harness.stream_idle_timeout_ms=30000'
-    ? 'model_providers.harness.stream_idle_timeout_ms=55000' : argument);
+export const readonlyRelayCodexArguments = (config: CodexConfig, workspace: string, port: number,
+  executionBudget?: ReadonlyRelayExecutionBudget): string[] => {
+  const selected = executionBudget === undefined ? null : copyReadonlyRelayExecutionBudget(executionBudget);
+  if (executionBudget !== undefined && !selected) return fail('INVALID_EXECUTION_BUDGET');
+  return codexProposalArguments(config, workspace, port).map((argument) => argument === 'model_providers.harness.stream_idle_timeout_ms=30000'
+    ? `model_providers.harness.stream_idle_timeout_ms=${selected?.workTimeoutMs ?? 55000}` : argument);
+};
 
 /** Parent-only login, one approved request, bounded opaque response, and a separate native-output contract. */
 export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
@@ -36,9 +42,9 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
     private readonly inputContract?: ReadonlyRelayInputContract) {}
 
   async verifyReady(): Promise<void> {
-    const config = parseReadonlyRelayConfig(this.config);
+    const config = parseAnyReadonlyRelayConfig(this.config);
     if (!config.enabled) fail('DISABLED');
-    try { await verifyCodexBinary({ ...config, policyVersion: 'codex-cli-proposal-v1' }); }
+    try { await verifyCodexBinary({ ...config, policyVersion: 'codex-cli-proposal-v1', timeoutMs: 60000 }); }
     catch (error) {
       if (error instanceof HarnessError) throw error;
       fail('BINARY_UNAVAILABLE');
@@ -47,12 +53,12 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
 
   async transmit(dispatch: ReadonlyRelayDispatch, signal: AbortSignal, beforeTransmission: () => void,
     beforeCredentialAccess: () => void): Promise<ReadonlyRelayTransmissionResult> {
-    const config = parseReadonlyRelayConfig(this.config);
+    const config = parseAnyReadonlyRelayConfig(this.config);
     if (!config.enabled) fail('DISABLED');
     // Only a separately constructed trusted harness adapter selects a personal input policy.
     if (this.inputContract && (!Object.isFrozen(this.inputContract)
       || Object.keys(this.inputContract).sort().join(',') !== 'assertDispatch,policy'
-      || !['personal-readonly-investigation-v1', 'personal-readonly-investigation-v2'].includes(this.inputContract.policy)
+      || !['personal-readonly-investigation-v1', 'personal-readonly-investigation-v2', 'personal-readonly-investigation-v3'].includes(this.inputContract.policy)
       || typeof this.inputContract.assertDispatch !== 'function')) fail('INVALID_TRANSPORT');
     const validateDispatch = this.inputContract?.assertDispatch ?? assertReadonlyRelayDispatch;
     validateDispatch(dispatch, config);
@@ -60,18 +66,20 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
     if (typeof beforeTransmission !== 'function' || typeof beforeCredentialAccess !== 'function') fail('INVALID_TRANSPORT');
     if (this.synthetic !== undefined && (!this.synthetic || typeof this.synthetic.transport !== 'function'
       || !this.synthetic.credential || this.synthetic.credential.kind !== 'chatgpt')) fail('INVALID_TRANSPORT');
-    const legacyConfig: CodexConfig = { ...config, policyVersion: 'codex-cli-proposal-v1' };
+    const legacyConfig: CodexConfig = { ...config, policyVersion: 'codex-cli-proposal-v1', timeoutMs: 60000 };
+    const budget = getReadonlyRelayExecutionBudget(config);
+    const selectedBudget = config.policyVersion === 'readonly-relay-codex-v3' ? budget : undefined;
     const location = { dataDirectory: this.dataDirectory, investigationId: this.investigationId };
     const lifecycle = createReadonlyRelayLifecycle(location, { requestBodyHash: dispatch.requestBodyHash,
       requestEnvelopeHash: dispatch.requestEnvelopeHash, connectionProfileHash: dispatch.requestEnvelope.connectionProfileHash });
     const workspace = join(lifecycle.directory, 'sandbox'); const home = join(workspace, 'home');
-    const started = performance.now(); const deadline = started + 55_000; const totalDeadline = started + 60_000;
+    const started = performance.now(); const deadline = started + budget.workTimeoutMs; const totalDeadline = started + budget.totalTimeoutMs;
     const controller = new AbortController();
     let cleanupDeadline: number | null = null; let timedOut = false; let uncertain = false;
     let notifyAbort: () => void = () => {};
     const aborted = new Promise<null>((resolve) => { notifyAbort = () => resolve(null); });
     const abort = (): void => {
-      cleanupDeadline ??= Math.min(totalDeadline, performance.now() + 5000);
+      cleanupDeadline ??= Math.min(totalDeadline, performance.now() + budget.cleanupTimeoutMs);
       controller.abort(); notifyAbort();
     };
     signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
@@ -81,7 +89,7 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
     let isolation = false; let credentialAccess = false; let cleanupConfirmed = false; let phase = 'preflight';
     let failureCode: string | null = null; let finalTextHash: string | null = null;
     const remainingCleanup = (): number => {
-      cleanupDeadline ??= Math.min(totalDeadline, performance.now() + 5000);
+      cleanupDeadline ??= Math.min(totalDeadline, performance.now() + budget.cleanupTimeoutMs);
       return Math.max(0, cleanupDeadline - performance.now());
     };
     const waitUntil = async <T>(pending: Promise<T>, milliseconds: number): Promise<T> => {
@@ -127,8 +135,8 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
       const foundVersion = await operation(runSandboxedCodex(config.codexPath, ['--version'], workspace, activeBroker.port, environment, '', controller.signal, 4096));
       if (foundVersion.trim() !== 'codex-cli 0.154.0') fail('BINARY_UNSUPPORTED');
       isolation = true; phase = 'request'; lifecycle.running();
-      const output = await operation(runReadonlyRelayProcess(config.codexPath, readonlyRelayCodexArguments(legacyConfig, workspace, activeBroker.port),
-        workspace, activeBroker.port, environment, dispatch.requestEnvelope.body, controller.signal, location));
+      const output = await operation(runReadonlyRelayProcess(config.codexPath, readonlyRelayCodexArguments(legacyConfig, workspace, activeBroker.port, selectedBudget),
+        workspace, activeBroker.port, environment, dispatch.requestEnvelope.body, controller.signal, location, selectedBudget));
       const relayed = activeBroker.result();
       const brokerFailure = activeBroker.failure();
       if (brokerFailure) {
@@ -170,7 +178,9 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
           isolation: isolation ? 'passed' : 'not_run', credentialAccess: credentialAccess ? 'passed' : 'not_run',
           transport: this.synthetic ? 'fake' : 'live', upstreamCalls: broker?.calls() ?? 0, cleanupConfirmed,
           http: broker?.httpObservation() ?? null, relay: broker?.result() ?? null, finalTextHash,
-          ...(dispatch.requestEnvelope.profileId === 'codex-chatgpt-relay-v2' ? { reception: broker?.receptionDiagnostic() ?? null } : {}),
+          ...(dispatch.requestEnvelope.profileId === 'codex-chatgpt-relay-v2' || dispatch.requestEnvelope.profileId === 'codex-chatgpt-relay-v3'
+            ? { reception: broker?.receptionDiagnostic() ?? null } : {}),
+          ...(selectedBudget ? { executionBudget: selectedBudget, executionBudgetHash: getReadonlyRelayExecutionBudgetHash(selectedBudget) } : {}),
           failureCode: cleanupConfirmed ? broker?.failure() ?? failureCode : 'READONLY_RELAY_LIFECYCLE_UNSAFE',
         }, null, 2), { flag: 'wx', mode: 0o600 });
       }

@@ -7,17 +7,19 @@ export const READONLY_RELAY_UNVERIFIED_RESPONSE_CHECKS = Object.freeze({
   providerMetadata: 'not_inspected', providerSequence: 'not_inspected', providerToolUsage: 'not_inspected',
   rawSensitiveScan: 'not_performed', parentTextComparison: 'not_performed',
 } as const);
-export type ReadonlyRelayProfileId = 'codex-chatgpt-relay-v1' | 'codex-chatgpt-relay-v2';
-export interface ReadonlyRelayConfig {
+export type ReadonlyRelayProfileId = 'codex-chatgpt-relay-v1' | 'codex-chatgpt-relay-v2' | 'codex-chatgpt-relay-v3';
+interface ReadonlyRelayConfigFields {
   enabled: boolean;
-  policyVersion: 'readonly-relay-codex-v1' | 'readonly-relay-codex-v2';
   codexPath: string;
   codexSha256: string;
   model: 'gpt-6.1-sol';
   authMode: 'chatgpt';
-  timeoutMs: 60000;
   maxResponseBytes: 16384;
 }
+export type ReadonlyRelayConfig = ReadonlyRelayConfigFields & (
+  { policyVersion: 'readonly-relay-codex-v1' | 'readonly-relay-codex-v2'; timeoutMs: 60000 }
+  | { policyVersion: 'readonly-relay-codex-v3'; timeoutMs: 125000 }
+);
 export interface ReadonlyRelayLimits extends ReadonlyLimits {
   requestBytes: number; responseBytes: number; envelopeBytes: number; headerBytes: number; headers: number;
   responseHeaderBytes?: number; responseHeaders?: number;

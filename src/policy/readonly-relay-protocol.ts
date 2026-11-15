@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { setImmediate as yieldImmediate } from 'node:timers/promises';
+import type { ReadonlyRelayExecutionBudget } from '../domain/readonly-relay-budget.js';
+import { copyReadonlyRelayExecutionBudget } from './readonly-relay-budget-policy.js';
 import { HarnessError } from '../domain/errors.js';
 import { copyReadonlyRelayReceptionDiagnostic, type ReadonlyRelayReceptionDiagnostic } from './readonly-relay-reception-diagnostics.js';
 
@@ -123,7 +125,7 @@ export const assertReadonlyRelayCredentialText = (text: string, credential: { ac
 };
 
 /** Every data frame is bounded JSON or the exact opaque [DONE] sentinel; no completion claim is inferred. */
-const inspectSse = (raw: string, credentials: readonly string[]): void => {
+const inspectSse = (raw: string, credentials: readonly string[], maximumFrames: number = READONLY_RELAY_RESPONSE_LIMITS.frames): void => {
   const inspectString = reflectionScanner(credentials);
   const text = raw.startsWith('\uFEFF') ? raw.slice(1) : raw;
   const lines = /[^\r\n]*(?:\r\n|\r|\n|$)/gu;
@@ -135,7 +137,7 @@ const inspectSse = (raw: string, credentials: readonly string[]): void => {
     frameBytes += Buffer.byteLength(rawLine);
     if (frameBytes > READONLY_RELAY_RESPONSE_LIMITS.frameBytes) fail('FRAME_LIMIT');
     if (line === '') {
-      if (++frames > READONLY_RELAY_RESPONSE_LIMITS.frames) fail('FRAME_LIMIT');
+      if (++frames > maximumFrames) fail('FRAME_LIMIT');
       if (data.length) {
         const payload = data.join('\n'); dataFrames++;
         if (payload !== '[DONE]') parseJson(payload, READONLY_RELAY_RESPONSE_LIMITS.frameBytes, inspectString);
@@ -166,6 +168,7 @@ const validateHeaders = (response: Response, reject: (suffix: string) => never =
 export interface ReadonlyRelayReceptionOptions {
   responseBytes?: 262144 | 1048576 | 2097152 | 4194304;
   observeDiagnostic?: (snapshot: ReadonlyRelayReceptionDiagnostic) => void;
+  executionBudget?: ReadonlyRelayExecutionBudget;
 }
 const responseBudgets = [262144, 1048576, 2097152, 4194304] as const;
 const terminationFor = (suffix: string): ReadonlyRelayReceptionDiagnostic['termination'] => {
@@ -222,14 +225,25 @@ const createWireCounter = () => {
   };
 };
 
-const cancelReader = async (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> => {
+const cancelReader = async (reader: ReadableStreamDefaultReader<Uint8Array>, cleanupTimeoutMs: number = READONLY_RELAY_RESPONSE_LIMITS.cleanupTimeoutMs): Promise<void> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([Promise.resolve().then(() => reader.cancel()), new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new RelayProtocolError('READONLY_RELAY_LIFECYCLE_UNSAFE')), READONLY_RELAY_RESPONSE_LIMITS.cleanupTimeoutMs);
+      timer = setTimeout(() => reject(new RelayProtocolError('READONLY_RELAY_LIFECYCLE_UNSAFE')), cleanupTimeoutMs);
     })]);
   } catch { fail('LIFECYCLE_UNSAFE'); }
   finally { if (timer) clearTimeout(timer); }
+};
+
+/** Offline, memory-only comparison of two registered frame candidates using the production framing core; no time or transport override is exposed. */
+export const inspectReadonlyRelayExecutionBudgetFixture = (body: Uint8Array,
+  credential: { accessToken: string; accountId: string }, candidate: 4096 | 8192): void => {
+  if (!(body instanceof Uint8Array) || body.byteLength > 4194304) fail('RESPONSE_LIMIT');
+  if (candidate !== 4096 && candidate !== 8192) fail('INVALID_OPTIONS');
+  const credentials = credentialStrings(credential);
+  let raw: string;
+  try { raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body); } catch { return fail('INVALID_UTF8'); }
+  assertNoReflection(raw, credentials); inspectSse(raw, credentials, candidate);
 };
 
 /** Nothing is returned to the child until EOF, framing and credential checks all finish successfully. */
@@ -240,6 +254,9 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
   let interrupt: () => void = () => {};
   let subscribed = false;
   let responseBytes: number = READONLY_RELAY_RESPONSE_LIMITS.responseBytes;
+  let maximumFrames: number = READONLY_RELAY_RESPONSE_LIMITS.frames;
+  let workTimeoutMs: number = READONLY_RELAY_RESPONSE_LIMITS.workTimeoutMs;
+  let cleanupTimeoutMs: number = READONLY_RELAY_RESPONSE_LIMITS.cleanupTimeoutMs;
   let observer: ReadonlyRelayReceptionOptions['observeDiagnostic'];
   let receivedBytes = 0; let bufferedBytes = 0; let inspectedBytes = 0; let chunks = 0; let maxChunkBytes = 0;
   let termination: ReadonlyRelayReceptionDiagnostic['termination'] = 'invalid-response';
@@ -286,7 +303,7 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
         if (!options || typeof options !== 'object' || Array.isArray(options)
           || ![Object.prototype, null].includes(Object.getPrototypeOf(options))) rejectCurrent('INVALID_OPTIONS');
         const keys = Reflect.ownKeys(options);
-        if (keys.some((key) => !['responseBytes', 'observeDiagnostic'].includes(key as string))) rejectCurrent('INVALID_OPTIONS');
+        if (keys.some((key) => !['responseBytes', 'observeDiagnostic', 'executionBudget'].includes(key as string))) rejectCurrent('INVALID_OPTIONS');
         const fields: Record<string, unknown> = Object.create(null);
         for (const key of keys) {
           const descriptor = Object.getOwnPropertyDescriptor(options, key);
@@ -301,6 +318,12 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
           if (!(responseBudgets as readonly unknown[]).includes(fields.responseBytes)) rejectCurrent('INVALID_OPTIONS');
           responseBytes = fields.responseBytes as number;
         }
+        if (Object.hasOwn(fields, 'executionBudget')) {
+          const selected = copyReadonlyRelayExecutionBudget(fields.executionBudget);
+          if (!selected || Object.hasOwn(fields, 'responseBytes') && fields.responseBytes !== selected.responseBytes) rejectCurrent('INVALID_OPTIONS');
+          responseBytes = selected.responseBytes; maximumFrames = selected.frames; workTimeoutMs = selected.workTimeoutMs;
+          cleanupTimeoutMs = selected.cleanupTimeoutMs;
+        }
       } catch { rejectCurrent('INVALID_OPTIONS'); }
     }
     wire = observer ? createWireCounter() : null;
@@ -311,7 +334,7 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
     validateHeaders(response, rejectCurrent);
     if (signal.aborted) rejectCurrent('CANCELLED');
     interrupt = () => interruptWith('CANCELLED');
-    timer = setTimeout(() => interruptWith('TIMEOUT'), READONLY_RELAY_RESPONSE_LIMITS.workTimeoutMs);
+    timer = setTimeout(() => interruptWith('TIMEOUT'), workTimeoutMs);
     signal.addEventListener('abort', interrupt, { once: true });
     subscribed = true;
     const storage = Buffer.alloc(responseBytes);
@@ -338,7 +361,7 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
     const body = storage.subarray(0, bufferedBytes);
     let raw: string;
     try { raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body); } catch { return rejectCurrent('INVALID_UTF8'); }
-    try { assertNoReflection(raw, credentials); inspectSse(raw, credentials); }
+    try { assertNoReflection(raw, credentials); inspectSse(raw, credentials, maximumFrames); }
     catch (error) {
       if (isLocalError(error)) {
         termination = terminationFor(error.code.slice('READONLY_RELAY_'.length)); failedLimit = failedLimitFor(termination);
@@ -350,7 +373,7 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
   } catch (error) {
     receptionFinished = true;
     if (reader && !eof) {
-      try { await cancelReader(reader); } catch (cleanup) { termination = 'cleanup-uncertain'; throw cleanup; }
+      try { await cancelReader(reader, cleanupTimeoutMs); } catch (cleanup) { termination = 'cleanup-uncertain'; throw cleanup; }
     }
     throw isLocalError(error) ? error : new RelayProtocolError('READONLY_RELAY_INVALID_RESPONSE');
   } finally {

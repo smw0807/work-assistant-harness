@@ -13,7 +13,7 @@ import { HarnessError } from '../domain/errors.js';
 import type { ReadonlyRelayConfig } from '../domain/readonly-relay.js';
 import { parseAnyPersonalRegistration } from '../policy/personal-readonly-contract.js';
 import type { AnyPersonalRegistration } from '../domain/personal-readonly-collection.js';
-import { parseReadonlyRelayConfig } from '../policy/readonly-relay-policy.js';
+import { parseAnyReadonlyRelayConfig } from '../policy/readonly-relay-budget-policy.js';
 import { parseReadonlyTransportJson } from '../policy/readonly-transport-protocol.js';
 import type { ReadonlyRelayPort } from '../ports/readonly-relay.js';
 import { acquireRuntimeLease, defaultDataDirectory, prepareDataDirectory } from './runtime.js';
@@ -135,8 +135,10 @@ export const runPersonalReadonlyCommand = async (args: string[]): Promise<void> 
   process.on('SIGINT', abort); process.on('SIGTERM', abort);
   let store: SqlitePersonalReadonlyStore | null = null;
   try {
-    const config = options.has('--config') ? parseReadonlyRelayConfig(await readPrivateJson(options.get('--config')!)) : undefined;
-    if (config && config.policyVersion !== 'readonly-relay-codex-v2') throw new HarnessError('PERSONAL_READONLY_INVALID_CONFIG');
+    const config = options.has('--config') ? parseAnyReadonlyRelayConfig(await readPrivateJson(options.get('--config')!)) : undefined;
+    if (config && !['readonly-relay-codex-v2', 'readonly-relay-codex-v3'].includes(config.policyVersion)) throw new HarnessError('PERSONAL_READONLY_INVALID_CONFIG');
+    if (registration && config && config.policyVersion !== (registration.version === 'personal-readonly-registration-v3'
+      ? 'readonly-relay-codex-v3' : 'readonly-relay-codex-v2')) throw new HarnessError('PERSONAL_READONLY_INVALID_CONFIG');
     store = new SqlitePersonalReadonlyStore(join(dataDirectory, 'personal-readonly.sqlite'));
     // 생성자에서는 인증을 읽지 않는다. 승인·dispatch 후 adapter.transmit만 실제 연결을 열 수 있다.
     const port = command === 'run' ? new RestrictedPersonalReadonlyCodex(config!, dataDirectory, options.get('--task')!) : deniedTransport;

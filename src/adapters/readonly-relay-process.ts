@@ -1,9 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { ReadonlyRelayExecutionBudget } from '../domain/readonly-relay-budget.js';
+import { copyReadonlyRelayExecutionBudget } from '../policy/readonly-relay-budget-policy.js';
 import { readonlyRelayScratchIdentity, removeReadonlyRelayScratch, updateReadonlyRelayChild, type ReadonlyRelayLocation, type ReadonlyRelayScratchIdentity } from './readonly-relay-lifecycle.js';
 
 interface ProcessRequest {
   executable: string; arguments: string[]; profile: string; workspace: string;
   environment: NodeJS.ProcessEnv; input: string; maxBytes: number; location: ReadonlyRelayLocation;
+  executionBudget?: ReadonlyRelayExecutionBudget;
 }
 let child: ChildProcessWithoutNullStreams | null = null;
 let request: ProcessRequest | null = null;
@@ -15,13 +18,20 @@ const stop = (): void => {
   try { if (child?.pid) process.kill(-child.pid, 'SIGKILL'); } catch { /* Already closed. */ }
   if (!child) process.exit(1);
 };
-const timer = setTimeout(stop, 55_000);
+const started = performance.now();
+let timer = setTimeout(stop, 55_000);
 process.stdout.on('error', stop);
 process.on('exit', () => { try { if (child?.pid) process.kill(-child.pid, 'SIGKILL'); } catch { /* Already closed. */ } });
 process.on('disconnect', stop);
 process.on('SIGTERM', stop); process.on('SIGINT', stop);
 process.on('message', (message: ProcessRequest | { cancel: true }) => {
   if ('cancel' in message || request) { stop(); return; }
+  const budgetField = Object.getOwnPropertyDescriptor(message, 'executionBudget');
+  if (budgetField) {
+    const budget = budgetField.enumerable && Object.hasOwn(budgetField, 'value') ? copyReadonlyRelayExecutionBudget(budgetField.value) : null;
+    if (!budget || message.maxBytes !== budget.nativeOutputBytes) { stop(); return; }
+    clearTimeout(timer); timer = setTimeout(stop, Math.max(0, started + budget.workTimeoutMs - performance.now()));
+  }
   request = message;
   let scratch: ReadonlyRelayScratchIdentity;
   try {

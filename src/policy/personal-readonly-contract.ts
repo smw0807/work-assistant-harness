@@ -3,11 +3,14 @@ import type { ReadonlyContext, ReadonlyEvidence } from '../domain/readonly-inves
 import { PERSONAL_READONLY_POLICY, type PersonalReadonlyPayload, type PersonalReadonlyPlan, type PersonalReadonlyRepository } from '../domain/personal-readonly.js';
 import { PERSONAL_COLLECTION_PLAN_POLICY, type AnyPersonalPayload, type AnyPersonalPlan, type AnyPersonalRegistration,
   type PersonalCollectionEvidence, type PersonalCollectionPayload, type PersonalCollectionPlan } from '../domain/personal-readonly-collection.js';
+import { PERSONAL_BUDGET_PLAN_POLICY, type PersonalBudgetPayload, type PersonalBudgetPlan } from '../domain/personal-readonly-budget.js';
 import type { ReadonlyRelayConfig, ReadonlyRelayDispatch, ReadonlyRelayResult } from '../domain/readonly-relay.js';
 import { assertPersonalReadonlyDispatch, assertPersonalReadonlyPlan, createPersonalReadonlyPayload, createPersonalReadonlyPlan,
   parsePersonalReadonlyRegistration, parsePersonalReadonlyResult, validatePersonalReadonlyPayload } from './personal-readonly-policy.js';
 import { assertPersonalCollectionDispatch, assertPersonalCollectionPlan, createPersonalCollectionPayload, createPersonalCollectionPlan,
   parsePersonalCollectionRegistration, parsePersonalCollectionResult, validatePersonalCollectionPayload } from './personal-readonly-collection-policy.js';
+import { assertPersonalBudgetDispatch, assertPersonalBudgetPlan, createPersonalBudgetPayload, createPersonalBudgetPlan,
+  parsePersonalBudgetRegistration, parsePersonalBudgetResult, validatePersonalBudgetPayload } from './personal-readonly-budget-policy.js';
 import { parseReadonlyTransportJson } from './readonly-transport-protocol.js';
 
 const reject = (): never => { throw new HarnessError('PERSONAL_READONLY_INVALID_CONTRACT'); };
@@ -31,11 +34,16 @@ const isCollectionPayload = (payload: AnyPersonalPayload): payload is PersonalCo
   registrationVersion(payload) === 'personal-readonly-registration-v2' && ownData(ownData(payload, 'context'), 'policy') === PERSONAL_COLLECTION_PLAN_POLICY;
 const isReadonlyPlan = (plan: AnyPersonalPlan): plan is PersonalReadonlyPlan => ownData(plan, 'policy') === PERSONAL_READONLY_POLICY;
 const isCollectionPlan = (plan: AnyPersonalPlan): plan is PersonalCollectionPlan => ownData(plan, 'policy') === PERSONAL_COLLECTION_PLAN_POLICY;
+const isBudgetPayload = (payload: AnyPersonalPayload): payload is PersonalBudgetPayload =>
+  registrationVersion(payload) === 'personal-readonly-registration-v3' && ownData(ownData(payload, 'context'), 'policy') === PERSONAL_BUDGET_PLAN_POLICY;
+const isBudgetPlan = (plan: AnyPersonalPlan): plan is PersonalBudgetPlan => ownData(plan, 'policy') === PERSONAL_BUDGET_PLAN_POLICY;
 
 export const parseAnyPersonalRegistration = (value: unknown): AnyPersonalRegistration => {
   switch (ownData(value, 'version')) {
     case 'personal-readonly-registration-v1': return parsePersonalReadonlyRegistration(value);
     case 'personal-readonly-registration-v2': return parsePersonalCollectionRegistration(value);
+    case 'personal-readonly-registration-v3':
+      try { return parsePersonalBudgetRegistration(value); } catch { return reject(); }
     default: return reject();
   }
 };
@@ -47,21 +55,26 @@ export const createAnyPersonalPayload = (repository: PersonalReadonlyRepository,
     return createPersonalReadonlyPayload(repository, parsed, collected, context, config);
   }
   if (Array.isArray(collected)) return reject();
-  return createPersonalCollectionPayload(repository, parsed, collected, context, config);
+  return parsed.version === 'personal-readonly-registration-v2'
+    ? createPersonalCollectionPayload(repository, parsed, collected, context, config)
+    : createPersonalBudgetPayload(repository, parsed, collected, context, config);
 };
 export const createAnyPersonalPlan = (payload: AnyPersonalPayload, context: ReadonlyContext, config: ReadonlyRelayConfig): AnyPersonalPlan => {
   if (isReadonlyPayload(payload)) return createPersonalReadonlyPlan(payload, context, config);
   if (isCollectionPayload(payload)) return createPersonalCollectionPlan(payload, context, config);
+  if (isBudgetPayload(payload)) return createPersonalBudgetPlan(payload, context, config);
   return reject();
 };
 export const assertAnyPersonalPlan = (plan: AnyPersonalPlan, config?: ReadonlyRelayConfig): void => {
   if (isReadonlyPlan(plan)) return assertPersonalReadonlyPlan(plan, config);
   if (isCollectionPlan(plan)) return assertPersonalCollectionPlan(plan, config);
+  if (isBudgetPlan(plan)) return assertPersonalBudgetPlan(plan, config);
   return reject();
 };
 export const validateAnyPersonalPayload = (plan: AnyPersonalPlan, payload: AnyPersonalPayload, config?: ReadonlyRelayConfig): void => {
   if (isReadonlyPlan(plan) && isReadonlyPayload(payload)) return validatePersonalReadonlyPayload(plan, payload, config);
   if (isCollectionPlan(plan) && isCollectionPayload(payload)) return validatePersonalCollectionPayload(plan, payload, config);
+  if (isBudgetPlan(plan) && isBudgetPayload(payload)) return validatePersonalBudgetPayload(plan, payload, config);
   return reject();
 };
 /** Only the fixed input policy inside an exact wire body chooses a trusted harness validator. */
@@ -79,11 +92,13 @@ export const assertAnyPersonalDispatch = (dispatch: ReadonlyRelayDispatch, confi
   switch (ownData(value, 'inputPolicyVersion')) {
     case 'personal-readonly-input-v1': return assertPersonalReadonlyDispatch(dispatch, config);
     case 'personal-readonly-input-v2': return assertPersonalCollectionDispatch(dispatch, config);
+    case 'personal-readonly-input-v3': return assertPersonalBudgetDispatch(dispatch, config);
     default: return reject();
   }
 };
 export const parseAnyPersonalResult = (raw: string, payload: AnyPersonalPayload): ReadonlyRelayResult => {
   if (isReadonlyPayload(payload)) return parsePersonalReadonlyResult(raw, payload);
   if (isCollectionPayload(payload)) return parsePersonalCollectionResult(raw, payload);
+  if (isBudgetPayload(payload)) return parsePersonalBudgetResult(raw, payload);
   return reject();
 };

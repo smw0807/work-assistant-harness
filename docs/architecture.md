@@ -323,6 +323,14 @@ reader는 원본 Git blob과 worktree를 대조한 뒤 원문 전체 검사를 �
 
 승인·인증·전송·완료의 guard는 raw identity뿐 아니라 view proof와 선택 근거를 다시 생성해 비교한다. 원본 변경이 동일한 마스킹 결과를 만들어도 source hash로 차단한다. v2 보고서의 별도 collection metadata는 파생 근거임을 나타내며 기존 verification·미검증5항목은 그대로다. 준비는 `AWAITING_APPROVAL`에서 멈춘다. [결과](stage-4c11-result.md)를 따른다.
 
+### 단계 4-C-12의 시간·프레임 실행 예산
+
+기존 relay-v2와 개인 수집 v2는 고정된 구형 계약으로 유지한다. 새 전송 profile/config는 별도 execution budget snapshot/hash로 operation·native idle·collector·broker 응답 대기·guardian·전체 operation+공유 정리를 연결한다. 수집 v2의 reader/마스킹은 그대로 재사용하며 명시적인 개인 등록/입력/계획 v3가 새 전송 계약을 선택한다. 구형 승인·payload를 새 예산으로 승격하지 않는다.
+
+공통 runtime은 검증한 config에서 고정 budget을 선택한다. 임의 환경·CLI·모델 출력으로 예산을 넘기지 않으며 guardian IPC도 정확한 하네스 등록 tuple만 수용한다. 구형 호출의 기본 인자·판정은 유지하고 새 config 경로만 확장된 시간/frame 검사를 사용한다. 응답 body4MiB·frame64KiB·최종16KiB와 EOF/인증 반사 이전 전달0, 원문 비보관은 그대로다.
+
+개인 DB는 구형 수명 규칙을 공유하되 버전별 plan/payload/report를 검증한다. 새 보고서는 수집 v2 collection provenance와 추가 executionBudget provenance를 필수로 포함한다. 승인·인증·전송·완료·복구에서 원본/view를 재생성하며 같은 view가 되는 원본 변경도 차단한다. 로컬 후보 비교와 pinned native fake는 실제 공급자 완료·개인 조사 의미 검증과 구분한다. [준비 결과](stage-4c12-result.md)를 따른다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.

@@ -762,6 +762,18 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - 원본이 바뀌면 마스킹 뒤 view가 같더라도 승인·인증·전송·완료 guard에서 원본 hash로 거부한다. view와 발췌도 재생성해 private provenance와 정확히 비교한다. 구형 개인 v1과 새 계약은 별도 검증기로만 처리하고 DB의 기존 소비·TTL·취소·복구·보관을 공유하며, 구형 계획/승인을 자동 승격하지 않는다. 알 수 없는 계약이나 v1/v2 혼용은 거부한다.
 - 합성 경계/비밀/PEM·CRLF·마스크 중복/초과·변환 후 잔존·원본 교체·같은 view의 다른 원본·승인 혼용·재시작/보관·native fake/종료·기존 hash 회귀를 로컬에서 검증한다. 실제 대상에는 명시 선택한 파일의 읽기/근거 준비와 전후 보존 확인만 수행한다. 새 plan은 `AWAITING_APPROVAL`, 승인/사용/소비/attempt/dispatch0과 실제 호출0에서 멈춘다. 마스킹이나 근거 범위 때문에 확인하지 못하는 부분은 검토 자료에 남긴다.
 
+##### 단계 4-C-12 시간·프레임 실행 예산의 공동 관리
+
+개인 수집 v2의 실제1회는55초 operation 제한에서 EOF 이전에 실패했다. prefix의 빈 줄 경계2490은 진단값이며 실제 frame 초과 종료로 재분류하지 않는다. 현재2048 경계 한도도 후속 설계에서 함께 검토한다. 이번 범위는 새 계약 구현·합성 검증·개인 자료의 로컬 준비이며 실제 인증·로그인 상태 조회/refresh·모델·공급자 전송은0회에서 멈춘다.
+
+- 기존 relay-v1/v2의 config/profile/본문/승인 hash·55초/5초/2048 기본 판정과 개인 수집 v2의 원본64KiB/view64KiB/발췌32KiB·민감 거부/마스킹 재검사를 유지한다. 새 `readonly-relay-execution-budget-v1`을 별도 v3 전송 profile/config와 새 개인 등록/입력/계획에 결합한다. 구형 계획·승인을 자동 승격하거나 실행 중 상한을 늘리지 않는다.
+- work90/120초와 frame4096/8192 후보를 명시적인 합성 corpus로 비교한다. 55초를 넘는 EOF와 관찰 prefix보다 큰 frame 수를 위한 여유 목표·논리 시간과 실제 시간의 구분·CPU/RSS 기준을 먼저 기록하고, 통과하는 최소 후보 하나를 고정한다. 실제 응답의 전체 크기·완료 시간·의미를 추정한 corpus라고 설명하지 않는다.
+- 선택한 예산의 operation·collector·broker 응답 대기·native idle·guardian과 총 operation+정리 시간을 같은 고정 명세에서 가져온다. 실제 요청 수신용 짧은 header/request 한도는 응답 예산과 구분한다. 정리는5초의 별도 공유 상한이며 서비스 timeout이 남은 정리 시간을 새 operation으로 연장하지 못한다. native guardian의 IPC는 하네스가 고정한 예산만 허용한다.
+- 전체 응답4MiB·개별 frame64KiB·JSON 깊이16·최종16KiB·native 출력 합계128KiB/stderr16KiB·EOF/인증 반사 완료 전 자식 본문 전달0을 유지한다. 기존 수신 진단11필드의 의미·형식을 바꾸지 않으며 경계 관찰과 EOF 후 의미 검증을 구분한다. 실제 원문/부분/거부 응답은 저장하지 않는다.
+- 새 개인 계약은 수집 v2 reader·변환기·private source/view proof를 재사용하며 새 전송 예산/hash와 명시적으로 결합한다. 승인 전 호출0·버전 혼용/변조·같은 view의 원본 변경·단건 소비/dispatch·취소·복구·보관과 보고서 provenance를 검증한다. 같은 DB에 구형 row를 그대로 두고 새 버전만 추가하며 구형 binary의 새 row 지원을 주장하지 않는다.
+- 합성 timer로 새 시간 경계/초과·멈춘/무한 stream·취소를 확인하고 pinned native의 가짜 credential/upstream으로55초를 실제로 넘는 EOF와2048 초과 frame의 단건·최종 schema·종료를 확인한다. 로컬 elapsed/CPU/RSS·실행한 검사와 미실시를 구분하며 모의 성공을 실제 개인 조사 성공으로 표시하지 않는다.
+- 정확한 질문/범위/본문·수집 및 실행 예산·profile/config/plan hash·원본/Git·코드/빌드·검증 로그·private 권한을 새 검토 자료로 고정한다. 마지막 DB 상태는 `AWAITING_APPROVAL`, 승인/사용/소비/attempt/dispatch0이다. 실제 호출은 후속 구체 TTL·최대1회·자동 재시도0 승인 뒤에만 가능하다.
+
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 
@@ -1186,6 +1198,13 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 198 | 두 개인 버전의 저장·보고 | 공통 DB의 기존 원자 승인/단건/TTL/취소/복구/보관은 유지하고 확정된 버전별 validator만 선택한다. 새 보고서는 collection provenance 4필드를 필수로 저장하며 구형 보고서는 기존 shape만 허용한다. 구형 binary의 새 row 거부와 rollback 제약을 문서화한다. |
 | 199 | 로컬 검증·새 승인 대기 | 합성 회귀·native fake·정적 검사와 기존 계약/자료 보존을 확인한다. 개인 파일의 제한된 읽기·원본/Git 보존·정확한 body/plan/collection hash·private 권한·DB0 계수를 독립 감사한다. 실제 인증/모델/전송0, 새 계획은 AWAITING_APPROVAL에서 멈추며 의미 정확성과 완전한 호출 흐름은 미검증이다. |
 | 200 | 별도 승인된 개인 수집 v2 실제 단건 | TTL10분·최대1회·자동 재시도0 승인으로 정확한 새 입력을 호출한다. 실제1회는55초 timeout·EOF 미도달로 FAILED이며 유효 보고서/두 응답 hash 없음. 승인/사용/소비/attempt/dispatch/upstream 각1회·재시도0, 원본/view·Git·고정 자료 보존과 controller/guardian/child/PGID 종료·scratch 부재 및 독립 사후 감사21항목 passed를 기록한다. 경계 관찰2490을 frame 초과 종료로 재분류하거나 시간 연장 성공을 가정하지 않는다. |
+| 201 | 공통 실행 예산과 구형 보존 | 새 시간/frame/config/profile/개인 binding을 명시적으로 결합하며 구형 relay-v2·개인 수집 v2의 순수 정책/hash/판정과 민감 검사는 유지한다. 알 수 없는 계약·혼합·임의 예산·기존 승인 승격은 거부한다. |
+| 202 | 후보 비교와 유한 자원 | 90/120초×4096/8192의 논리 시간·합성 corpus·여유 목표를 고정하고 CPU/RSS/취소 기준을 통과한 최소 후보를 선택한다. 실제 공급자 완료 예측·프로세스 전체 메모리 강제 상한과 구분한다. |
+| 203 | 계층별 동일 시간·정리 | service/adapter/collector/broker/native/guardian의 시간과 총 예산을 고정 명세에서 파생한다.55초 초과 native fake·새 timeout·5초 공유 정리·중단/PGID/scratch를 검증하고 임의 IPC 예산을 거부한다. |
+| 204 | 새 frame 검사와 기존 보안 | EOF 후 새 frame 경계/초과·4MiB/frame64KiB/깊이16/최종16KiB·UTF8/JSON·반사·EOF 전 전달0과 구형2048 기본 판정을 검증한다. 기존 숫자 진단11필드와 원시 응답 비보관을 유지한다. |
+| 205 | 개인 계획·보고서·단건 수명 | 새 예산과 기존 collection-v2 proof/hash를 새 개인 계획·입력·보고서에 결합한다. 원본/view 변경·미승인·혼용·race·재사용·취소/복구/보관과 구형 row/report shape를 검증한다. |
+| 206 | 새 검토 자료·승인 대기 | 정적 검사·전체 회귀·독립 감사·원본/Git·구형 자료·코드/빌드 hash·정확한 본문/예산·권한·DB0 계수를 고정한다. 새 개인 계획은 AWAITING_APPROVAL이며 실제 인증/모델/전송0이다. |
+| 207 | 별도 승인된 실행 예산 실제 단건 | TTL10분·최대1회·자동 재시도0 승인 뒤 같은 입력·고정120초/8192-frame 계약으로 실제1회에서84.074초·1,216,800byte EOF·유효 보고서·REPORTED를 확인한다. 승인/사용/소비/attempt/dispatch/upstream 각1회·재시도0, 원본/view·Git·자료/코드 보존과 프로세스 종료·scratch 부재·독립 사후 감사24항목 passed를 기록한다. 의미 정확성·일반 호환성·원격 중지 보증으로 확대하지 않는다. |
 
 ### 최종 검증 묶음
 

@@ -421,7 +421,7 @@ export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
   }
 
   private assertReport(report: AnyPersonalReport, task: PersonalReadonlyTask, payload: AnyPersonalPayload): void {
-    if (!exact(report, ['mode', 'transport', 'responseOrigin', 'investigationId', 'planHash', 'contextHash', 'inputHash', 'requestBodyHash', 'connectionProfileHash', 'requestEnvelopeHash', 'responseHash', 'finalTextHash', 'result', 'createdAt', 'targetUnchanged', 'executionAllowed', 'semanticAccuracyVerified', 'verification', 'contractVerified', 'unverifiedResponseChecks', 'excludedOperationsReason', 'checks', ...(task.plan.policy === 'personal-readonly-investigation-v2' ? ['collection'] : [])])
+    if (!exact(report, ['mode', 'transport', 'responseOrigin', 'investigationId', 'planHash', 'contextHash', 'inputHash', 'requestBodyHash', 'connectionProfileHash', 'requestEnvelopeHash', 'responseHash', 'finalTextHash', 'result', 'createdAt', 'targetUnchanged', 'executionAllowed', 'semanticAccuracyVerified', 'verification', 'contractVerified', 'unverifiedResponseChecks', 'excludedOperationsReason', 'checks', ...(task.plan.policy === 'personal-readonly-investigation-v2' || task.plan.policy === 'personal-readonly-investigation-v3' ? ['collection'] : []), ...(task.plan.policy === 'personal-readonly-investigation-v3' ? ['executionBudget'] : [])])
       || report.mode !== 'live' || report.transport !== 'codex-cli-relay' || report.responseOrigin !== 'model' || report.investigationId !== task.investigationId || report.planHash !== task.plan.planHash
       || report.contextHash !== task.plan.contextHash || report.inputHash !== task.plan.inputHash || report.requestBodyHash !== task.plan.requestBodyHash || report.connectionProfileHash !== task.plan.connectionProfileHash || report.requestEnvelopeHash !== task.plan.requestEnvelopeHash || !digest(report.responseHash) || !digest(report.finalTextHash)
       || !timestamp(report.createdAt) || report.createdAt < task.plan.createdAt || report.createdAt >= task.plan.expiresAt
@@ -436,11 +436,17 @@ export class SqlitePersonalReadonlyStore implements PersonalReadonlyStore {
       || JSON.stringify(report.contractVerified) !== JSON.stringify({ profile: 'passed', envelope: 'passed', cliOutput: 'passed', evidence: 'passed' })
       || !exact(report.unverifiedResponseChecks, Object.keys(READONLY_RELAY_UNVERIFIED_RESPONSE_CHECKS))
       || JSON.stringify(report.unverifiedResponseChecks) !== JSON.stringify(READONLY_RELAY_UNVERIFIED_RESPONSE_CHECKS) || report.excludedOperationsReason !== 'readonly-relay-only') throw invalid();
-    if (task.plan.policy === 'personal-readonly-investigation-v2' && (!('collection' in report)
+    if ((task.plan.policy === 'personal-readonly-investigation-v2' || task.plan.policy === 'personal-readonly-investigation-v3') && (!('collection' in report)
       || !exact(report.collection, ['policy', 'profileHash', 'sourceViewsHash', 'evidenceOrigin'])
       || report.collection.policy !== 'personal-readonly-collection-v2'
       || report.collection.profileHash !== task.plan.collectionProfileHash || report.collection.sourceViewsHash !== task.plan.sourceViewsHash
       || report.collection.evidenceOrigin !== 'line-preserving-derived-view')) throw invalid();
+    if (task.plan.policy === 'personal-readonly-investigation-v3' && (!('executionBudget' in report)
+      || !exact(report.executionBudget, ['policy', 'profileHash', 'workTimeoutMs', 'frames'])
+      || report.executionBudget.policy !== task.plan.executionBudget.policy
+      || report.executionBudget.profileHash !== task.plan.executionBudgetHash
+      || report.executionBudget.workTimeoutMs !== task.plan.executionBudget.workTimeoutMs
+      || report.executionBudget.frames !== task.plan.executionBudget.frames)) throw invalid();
     const live = report.verification.transport === 'live' ? 'passed' : 'not_run';
     if (JSON.stringify(report.checks) !== JSON.stringify({ sourceUnchanged: 'passed', targetCodeExecution: 'not_run', realModel: live,
       externalTransmission: live, credentialAccess: report.verification.credentialAccess, providerCompatibility: live,
