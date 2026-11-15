@@ -588,6 +588,12 @@ v1/v2는 같은 개인 DB의 lifecycle을 공유하며 계약별로 검증합니
 
 [4-C-13 보고서 검토](docs/stage-4c13-result.md)에서는 기존 안전 발췌로 사실 11개와 추가 질문 2개를 대조했습니다. 사실 7개는 직접 근거가 있고, 4개는 인용 또는 표현 범위를 보완했습니다. 별도 비공개 정정 초안과 같은 계약·한도의 후속 2파일/5범위 계획을 준비했으며, 후속 계획은 실제 호출 0회·`AWAITING_APPROVAL`입니다. 원래 성공 보고서와 소비 승인은 보존합니다.
 
+## 회사 환경 이전용 오프라인 점검
+
+`pnpm harness migration-check --config /absolute/path/to/private-migration/migration-check.json`으로 실행 환경과 기존 계약의 정적 준비 상태를 확인합니다. [설정 템플릿](config/migration-check.example.json)과 [실행 가이드](docs/migration-guide.md)에 경로·권한·설치 준비 및 결과 해석을 설명합니다.
+
+이 명령은 명시한 비활성 진단 설정과 고정 native 파일만 제한적으로 읽고, 저장 디렉터리와 `sandbox-exec`는 메타데이터만 확인합니다. 회사 저장소 등록·인증 접근·네트워크·바이너리 실행·DB 생성은 하지 않습니다. 진단 자체는 파일을 쓰지 않으며 `pnpm harness`의 선행 TypeScript 빌드는 `dist`를 씁니다. 현재 지원은 macOS ARM64이고, pnpm 버전 관찰은 실행기가 제공한 미검증 메타데이터입니다. `passed`여도 `liveReady=false`·`executionAllowed=false`·`approvalCreated=false`이며 회사 승인이나 실제 호출 권한이 되지 않습니다. 구현과 검증 결과는 [4-C-14 결과](docs/stage-4c14-result.md)를 따릅니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.

@@ -331,6 +331,12 @@ reader는 원본 Git blob과 worktree를 대조한 뒤 원문 전체 검사를 �
 
 개인 DB는 구형 수명 규칙을 공유하되 버전별 plan/payload/report를 검증한다. 새 보고서는 수집 v2 collection provenance와 추가 executionBudget provenance를 필수로 포함한다. 승인·인증·전송·완료·복구에서 원본/view를 재생성하며 같은 view가 되는 원본 변경도 차단한다. 로컬 후보 비교와 pinned native fake는 실제 공급자 완료·개인 조사 의미 검증과 구분한다. [준비 결과](stage-4c12-result.md)를 따른다.
 
+### 단계 4-C-14의 오프라인 이전 준비 점검
+
+`migration-check`는 기존 조사·승인·실행 흐름과 분리한 Nest application context 진단이다. 비공개 진단 JSON을 엄격히 검증한 뒤 순수 service와 읽기 전용 환경 port로 OS/CPU·Node·실행기 pnpm 선언·소유자·경로 분리·sandbox 실행 파일 metadata·고정 native hash·런타임 디렉터리 metadata를 관찰한다. 기존 relay-v2/v3 설정은 `enabled:false`인 경우만 입력으로 수용하며 기존 profile·실행 예산·수집 profile/hash를 그대로 보고한다.
+
+새 명령은 기본 data directory나 SQLite lease/store를 만들지 않는다. 호스트 사전 조건 실패는 파일 probe를 건너뛰고 `blocked`로 끝난다. 실제 바이너리 실행·sandbox 실증·인증·회사 자료·네트워크·회사 승인·쓰기 성공은 `not_run`이다. stdout의 정해진 상태·이유·hash는 권한 토큰이 아니며 `liveReady`, `executionAllowed`, `approvalCreated`는 항상 false다. pnpm 실행기가 제공한 버전 문자열은 설치 파일 identity의 증명이 아니다. [이전 가이드](migration-guide.md)와 [검증 결과](stage-4c14-result.md)를 따른다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.

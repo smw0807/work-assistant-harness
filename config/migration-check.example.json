@@ -1,0 +1,14 @@
+{
+  "version": "offline-migration-check-v1",
+  "relay": {
+    "enabled": false,
+    "policyVersion": "readonly-relay-codex-v3",
+    "codexPath": "/absolute/path/to/codex",
+    "codexSha256": "4f85982624b3898c8991cb80c0981b2aa71070e3537046c9a95950318a95afcc",
+    "model": "gpt-6.1-sol",
+    "authMode": "chatgpt",
+    "timeoutMs": 125000,
+    "maxResponseBytes": 16384
+  },
+  "runtimeDirectory": "/absolute/path/to/private-runtime"
+}
