@@ -544,6 +544,28 @@ v2의 `call-report.json.reception`에는 수신/보관/계수 관찰 바이트·
 
 Codex가 응답 의미를 해석하고 하네스는 단일 완료 turn·최종 조사 JSON16KiB·전달 근거/줄·비밀/실행 필드를 검증합니다. 보고서의 `responseHash`는 원시 바이트, `finalTextHash`는 최종 text를 식별합니다. `contractVerified.cliOutput`과 `unverifiedResponseChecks`를 분리하며 private metadata·공급자 sequence/tool_usage·원시 전체 민감정보 검사·부모 text 비교를 통과했다고 표시하지 않습니다. `tools=[]`·OS 격리·CLI 도구 결과 거부는 유지하지만 공급자 도구 활동0을 보증하지 않습니다. operation55초와 공유 정리 대기5초를 적용하고 종료 불확실은 `BLOCKED`로 남깁니다. 하네스 DB·일반 로그에 원시/부분/거부 응답을 저장하지 않습니다. native 임시 영역은 종료 확인 후 제거하며 정리 불확실 시 잔류 내용의 제거를 보증하지 않습니다. 내용24h·terminal 감사30d·DB 수명 소비 marker를 유지합니다.
 
+## 단계 4-C-10 개인 시험 저장소 읽기 전용 조사
+
+`personal-readonly-*`는 개인 시험 저장소 한 개의 고정 commit·질문·선택 파일을 조사하는 별도 경로입니다. [등록 예시](config/personal-readonly.example.json)를 저장소 밖 현재 OS 사용자 소유0600 파일로 복사해 정확한 root·commit·질문·읽기 줄과 전송할 파일을 지정합니다. 모델 입력과 승인 snapshot에는 로컬 root나 inode 명세를 넣지 않습니다. 실제 자료·입력·계획·승인은 기존 합성 경로와 분리하며 `personal-readonly.sqlite`를 사용합니다.
+
+```sh
+pnpm harness personal-readonly-plan --registration /private/path/registration.json --config /private/path/relay-v2.json --data-dir /private/path/personal-data
+pnpm harness personal-readonly-inspect --task <uuid> --data-dir /private/path/personal-data
+# 정확한 질문·전송 본문·범위·planHash를 검토하고 별도로 승인한 뒤에만 사용
+pnpm harness personal-readonly-approve --task <uuid> --plan-hash <sha256> --expires-in-minutes 10 --config /private/path/relay-v2.json --data-dir /private/path/personal-data
+pnpm harness personal-readonly-run --task <uuid> --plan-hash <sha256> --config /private/path/relay-v2.json --data-dir /private/path/personal-data
+pnpm harness personal-readonly-cancel --task <uuid> --data-dir /private/path/personal-data
+pnpm harness personal-readonly-invalidate --task <uuid> --data-dir /private/path/personal-data
+pnpm harness personal-readonly-recover --task <uuid> --data-dir /private/path/personal-data
+pnpm harness personal-readonly-prune --data-dir /private/path/personal-data
+```
+
+별도 패키지 스크립트 없이 기존 `pnpm harness`에서 위 명령을 사용합니다. plan은 `--registration`과 `--config`, approve/run은 `--config`가 필수입니다. 설정은 기존 `readonly-relay-codex-v2`만 받고 profile·모델·목적지·4MiB/최종16KiB·단건/EOF/반사/종료 한도는 유지합니다. plan24h·승인TTL1~60분·inspect의 `--approval-offset`과24h/30d 보관도 유지합니다. run은 `REPORTED`일 때만 종료 코드0입니다. 변경된 등록이나 전송 범위에는 새 계획과 승인이 필요합니다.
+
+reader는 대상 프로그램·Git CLI·설정·hooks를 실행하거나 import하지 않고 필요한 Git 객체와 선택 파일을 읽습니다. 일반 `.git`·SHA1 저장소와 제한된 pack만 지원하며 linked worktree·submodule·thin pack·한도 초과는 거부합니다. 선택 파일이 기준 commit과 index에 일치하는지, HEAD/index/ref·파일·부모 identity가 바뀌지 않았는지 확인합니다. 관찰 범위 밖 파일의 내용이나 전체 작업 트리 clean 상태는 검증하지 않습니다. 파일32KiB·근거64KiB·입력128KiB·8파일/16범위/범위당200줄 한도를 유지하며 선택 파일 전체의 비밀·binary 검사는 부분 줄 선택으로 우회할 수 없습니다. 대상 root와 runtime/data 경로는 겹칠 수 없습니다.
+
+이번 준비는 로컬 수집·가짜 전송/합성 native 검증·새 검토 자료까지이며 실제 개인 자료의 인증·모델·외부 전송은 승인 대기입니다. 대상 코드의 설치·테스트·빌드·스크립트·수정·거래 API 호출·자동 답장·Git 변경은 제공하지 않습니다. 구체 결과와 누락 근거는 [4-C-10 결과](docs/stage-4c10-result.md)를 따릅니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.

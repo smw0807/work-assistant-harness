@@ -13,9 +13,13 @@ import { loadCodexCredential } from './codex-credentials.js';
 import { probeCodexIsolation, runSandboxedCodex, verifyCodexBinary } from './codex-isolation.js';
 import { createReadonlyRelayLifecycle, readonlyRelayCleanupConfirmed, readonlyRelayScratchIdentity, removeReadonlyRelayScratch, type ReadonlyRelayScratchIdentity } from './readonly-relay-lifecycle.js';
 import { runReadonlyRelayProcess } from './readonly-relay-runner.js';
-import { sendReadonlyRelayRequest, startReadonlyRelayBroker, type ReadonlyRelayBroker, type ReadonlyRelayCredential, type ReadonlyRelayTransport } from './readonly-relay-broker.js';
+import { sendReadonlyRelayRequest, startReadonlyRelayBroker, type ReadonlyRelayBroker, type ReadonlyRelayCredential, type ReadonlyRelayTransport, type ReadonlyRelayDispatchValidator } from './readonly-relay-broker.js';
 
-interface SyntheticConnection { credential: ReadonlyRelayCredential; transport: ReadonlyRelayTransport }
+export interface SyntheticConnection { credential: ReadonlyRelayCredential; transport: ReadonlyRelayTransport }
+export interface ReadonlyRelayInputContract {
+  policy: 'personal-readonly-investigation-v1';
+  assertDispatch: ReadonlyRelayDispatchValidator;
+}
 const fail = (suffix: string): never => { throw new HarnessError(`READONLY_RELAY_${suffix}`); };
 
 /** Only the relay gets the longer idle wait: it first buffers bounded upstream EOF. */
@@ -28,7 +32,8 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
   readonly mode = 'live' as const;
   readonly transport = 'codex-cli-relay' as const;
   constructor(private readonly config: ReadonlyRelayConfig, private readonly dataDirectory: string,
-    private readonly investigationId: string, private readonly synthetic?: SyntheticConnection) {}
+    private readonly investigationId: string, private readonly synthetic?: SyntheticConnection,
+    private readonly inputContract?: ReadonlyRelayInputContract) {}
 
   async verifyReady(): Promise<void> {
     const config = parseReadonlyRelayConfig(this.config);
@@ -44,7 +49,13 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
     beforeCredentialAccess: () => void): Promise<ReadonlyRelayTransmissionResult> {
     const config = parseReadonlyRelayConfig(this.config);
     if (!config.enabled) fail('DISABLED');
-    assertReadonlyRelayDispatch(dispatch, config);
+    // Only a separately constructed trusted harness adapter selects a personal input policy.
+    if (this.inputContract && (!Object.isFrozen(this.inputContract)
+      || Object.keys(this.inputContract).sort().join(',') !== 'assertDispatch,policy'
+      || this.inputContract.policy !== 'personal-readonly-investigation-v1'
+      || typeof this.inputContract.assertDispatch !== 'function')) fail('INVALID_TRANSPORT');
+    const validateDispatch = this.inputContract?.assertDispatch ?? assertReadonlyRelayDispatch;
+    validateDispatch(dispatch, config);
     if (signal.aborted) fail('CANCELLED');
     if (typeof beforeTransmission !== 'function' || typeof beforeCredentialAccess !== 'function') fail('INVALID_TRANSPORT');
     if (this.synthetic !== undefined && (!this.synthetic || typeof this.synthetic.transport !== 'function'
@@ -107,7 +118,7 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
       }, () => {
         if (!isolation || controller.signal.aborted || performance.now() >= deadline) fail('TIMEOUT');
         beforeCredentialAccess();
-      }).then((startedBroker) => { connection.broker = startedBroker; return startedBroker; }));
+      }, validateDispatch).then((startedBroker) => { connection.broker = startedBroker; return startedBroker; }));
       const activeBroker = connection.broker;
       if (!activeBroker) return fail('BROKER_FAILED');
       await operation(probeCodexIsolation(lifecycle.directory, workspace, activeBroker.port, controller.signal));
@@ -151,7 +162,7 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
         if (!cleanupConfirmed) fail('LIFECYCLE_UNSAFE');
       } finally {
         clearTimeout(timer); signal.removeEventListener('abort', abort);
-        await writeFile(join(lifecycle.directory, 'call-report.json'), JSON.stringify({ policy: 'synthetic-readonly-relay-v1',
+        await writeFile(join(lifecycle.directory, 'call-report.json'), JSON.stringify({ policy: this.inputContract?.policy ?? 'synthetic-readonly-relay-v1',
           model: config.model, authMode: config.authMode, binaryHash: config.codexSha256, phase,
           requestBodyHash: dispatch.requestBodyHash, requestEnvelopeHash: dispatch.requestEnvelopeHash,
           connectionProfileHash: dispatch.requestEnvelope.connectionProfileHash, responseValidation: 'codex-native-output-v1',

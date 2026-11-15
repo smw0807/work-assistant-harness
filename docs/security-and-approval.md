@@ -415,6 +415,14 @@ v2 수신 진단은 정확한 own data의 비음수 정수 계수8개와 EOF·�
 
 각 새 검토 본문·hash를 `AWAITING_APPROVAL`로 고정한 뒤 사용자의 별도 TTL10분·1회·retry0 승인으로 실행했다. relay-v1 실제1회의256KiB 초과 실패와 소비 기록을 보존한다. 후속4MiB v2의 새 계획은 로컬1125개 회귀·독립 감사 후 별도 승인됐고 승인·사용·소비·attempt·dispatch·upstream 각1회, HTTP200·362,095byte EOF·유효 보고서·`REPORTED`를 확인했다. 원본/Git·코드/고정 자료 보존과 controller/guardian/child/PGID 종료를 사후 감사했고 원시 본문은 보관하지 않는다. 구체 단건 성공은 일반 공급자 호환성·의미 정확성·회사 보안 검토 통과가 아니다. 원격 추론 중지 여부는 확인할 수 없으며 승인 복원·재시도·실행 중 한도 변경은 하지 않았다. [예산 보완 실제 결과](stage-4c9-result.md#응답-예산-보완의-승인된-실제-단건-호출)와 [기준 계획](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)을 따른다.
 
+### 개인 시험 저장소의 로컬 준비 경계
+
+`personal-readonly-investigation-v1`은 비회사 개인 시험 저장소 한 개를 private 등록으로 지정하는 별도 입력·계획·승인 정책이다. 모델 입력에는 선택된 상대경로/줄·commit·질문만 넣고 절대 sourceRoot·Git/부모 inode와 전체 등록은 private payload에 한정한다. 등록 hash와 identity hash를 승인 snapshot에 결합하며 기존 합성 승인을 재사용하지 않는다. 명시적인 개인 저장소 지정은 회사 자료 처리 승인이나 외부 모델 전송 승인이 아니다.
+
+reader의 FS는 필요한 Git 객체와 선택 파일의 bounded read만 제공한다. Git CLI·target import/스크립트·설치/검사·거래 API·네트워크·쓰기·Git config/hooks·alternate object store는 제공하지 않는다. leaf와 부모 identity·canonical path·단일 link·소유자를 확인하고 static symlink/hardlink·경로 탈출·선택 파일 dirty·index/HEAD/ref 변화를 거부한다. 단일 OS 사용자의 신뢰하는 하네스 코드와 파일 시스템을 전제로 하며 악성 동시 사용자에 대한 OS 격리를 주장하지 않는다. 감시 범위는 선택 파일과 실제 사용한 Git identity이며 전체 저장소가 clean이거나 검토됐다고 표시하지 않는다.
+
+개인 adapter는 하네스에 고정된 입력 validator만 공통 relay-v2에 주입한다. 외부 등록·모델 출력에는 validator/함수·임의 endpoint·명령 옵션이 없다. native와 broker의 부모 인증·단건·4MiB/최종16KiB·EOF/반사 검사·종료 규칙은 유지하며 원시 응답/인증 비보관과 미검증5항목도 같다. 실제 개인 자료를 사용한 작업은 이번 준비에서 `AWAITING_APPROVAL`과 승인/소비/attempt/dispatch0을 유지한다. 가짜 전송·합성 native 검증의 성공을 실제 개인 조사나 의미 정확성 검증으로 바꾸지 않는다. [준비 결과](stage-4c10-result.md)를 참조한다.
+
 ## 7. 회사 자료와 비밀정보
 
 회사 계정·저장소 연결 전에 AI 제공자, 모델, 실행 위치, 전송 가능 자료, 보관 기간과 감사 요구를 회사 정책에 따라 확인한다. 회사 승인이 없으면 합성 데이터로 계속 개발한다.

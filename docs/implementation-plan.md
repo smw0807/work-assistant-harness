@@ -741,6 +741,17 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 
 #### 후속 단계의 별도 범위
 
+##### 단계 4-C-10 개인 시험 저장소의 읽기 전용 조사 준비
+
+사용자가 지정한 비회사 개인 저장소 한 개와 질문 한 개를 로컬에서 등록하고, 실제 모델 호출은 새 검토 자료의 `AWAITING_APPROVAL`에서 멈춘다. 이번 요청은 하네스 구현·로컬 검증·비공개 검토 자료 생성까지 허용하며 대상의 설치·테스트·빌드·스크립트·수정·Git 변경과 실제 인증/모델/외부 전송은 포함하지 않는다.
+
+- 기존 relay-v2의 profile/config/hash·모델·고정 endpoint·4MiB/최종16KiB·EOF/반사·단건/종료 계약을 유지한다. 새로운 개인 저장소 입력/근거/계획/승인은 `personal-readonly-investigation-v1`, 별도 `personal-readonly.sqlite`와 명령 namespace로 분리하고 기존 합성 승인과 섞지 않는다. 공통 전송기에 주입하는 입력 검증기는 하네스의 고정 코드이며 등록 JSON·대상 코드·모델이 선택하거나 변경하지 못한다.
+- 비공개 등록은 repoId·canonical root·기준 commit·질문·허용 파일/줄·전송할 파일을 고정한다. 등록 전체의 hash와 저장소 identity hash를 계획에 묶고 로컬 절대경로·Git/부모 inode 명세는 모델 입력과 승인 snapshot에 넣지 않는다. 개인 저장소용 지시문은 실제 자료를 합성 fixture라고 설명하지 않는다.
+- reader는 일반 `.git`의 선택 파일과 기준 commit의 blob을 읽기 전용으로 대조한다. target import/exec·Git CLI·네트워크·쓰기 API 없이 제한된 FS에서 필요한 Git 객체만 읽는다. `.git/config`·hooks·비밀 파일은 열지 않는다. symlink/hardlink·경로 탈출·바이너리·크기 초과·선택 파일의 미저장 변경과 HEAD/index/ref 교체는 거부한다. 첫 범위의 관찰은 선택 파일과 Git identity이며 전체 작업 트리 clean 판정으로 확대하지 않는다. linked worktree·submodule 등 지원하지 않는 저장 형태는 명시적으로 거부한다.
+- 기존8파일·16범위·범위당200줄·파일32KiB·근거64KiB·입력128KiB 한도를 유지하고 로컬 읽기와 외부 전송 선택을 구분한다. plan24h·명시 TTL1~60분·원자 소비/dispatch·인증 전/전송 전 동기 원본 guard·재시작/취소/무효화/복구·보관을 새 namespace에서 검사한다.
+- 로컬 가짜 전송과 고정 native의 합성 자료 검증으로 승인 전 호출0, 승인 혼용·변조·만료·재사용 거부, 허구 인용/줄·잘못된 JSON·악성 지시·민감/추가 실행 필드 거부, source 변경 시 인증/전송0, 취소·종료·복구를 확인한다. 실제 개인 저장소 내용은 로컬 수집과 검토 자료에만 사용하며 가짜 테스트에서 네트워크로 보내지 않는다.
+- 검토 자료에는 정확한 선택 근거·질문·입력·wire body·profile/설정과 각 hash·유효기간·원본/코드 보존 manifest, passed/failed/not_run을 분리한 결과를 저장한다. 마지막 상태는 승인/사용/소비/attempt/dispatch0의 `AWAITING_APPROVAL`이며 이후 구체 별도 승인 전 실제 호출0을 유지한다.
+
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 
@@ -1151,6 +1162,14 @@ Slack 대상 ID와 허용 채널, 저장소 연결 규칙, AI 사용 가능 범�
 | 184 | 큰 SSE native·근거 결과 | 새 profile에서256KiB 초과 합성 SSE의 pinned CLI→최종 schema/근거·raw/final hash·단건/원본 보존/종료 확인. 구형은 동일 큰 입력을 계속 거부, tool/reflection/초과/불완전 거부 유지. |
 | 185 | 회귀·새 검토 자료 | lint/typecheck/build·전체 회귀와 원형 차등 비교, 새 예산/진단/profile/본문·hash·만료·원본/코드 고정. 새 작업 AWAITING_APPROVAL/승인·소비·전송0을 독립 감사. |
 | 186 | 예산 보완 실제 검증 gate | 로컬 준비의 실제 인증/모델/외부 전송0을 고정하고 새 정확한 계획에 별도 TTL10분 승인. 후속 실제1회·362,095byte EOF·유효 보고서·원본 보존·로컬 종료 확인. 기존 소비 승인 재사용/자동 재시도0. |
+| 187 | 개인 저장소 등록·입력 분리 | 고정 repoId/root/commit/질문/읽기·전송 경로를 private 등록으로 받고 hash를 새 계획에 결합. sourceRoot/부모/FS manifest는 모델 입력·승인 snapshot0. 실제 자료를 합성이라고 설명하지 않음. |
+| 188 | 개인 저장소의 제한된 Git reader | Git CLI/설정/hooks/실행/쓰기/네트워크0, 필요한 object/pack만 제한 FS로 읽고 OID·pack/index checksum·inflate/delta/횟수/바이트 한도 확인. symlink/hardlink·escaping·미지원 Git 형태·선택 파일 dirty/index 불일치 거부. |
+| 189 | 개인 근거·전송 예산 | 기존8파일/16범위/200줄/파일32KiB/근거64KiB/입력128KiB를 유지하고 비밀·binary는 전체 선택 파일에서 거부. 전송 선택은 읽기 범위의 부분집합이며 허구 근거/줄·추가 실행 필드·악성 지시로 확대 불가. |
+| 190 | 개인 source/runtime 분리 | 등록 root와 dataDirectory의 동일·부모·자식 관계는 계획 저장 전에 거부. CLI는 target 아래 DB/lease 경로를 만들기 전에 거부하고 하네스 root도 대상과 분리. |
+| 191 | 개인 승인·단건·재시작 | 별도 DB/policy·명시TTL·미승인 preflight0·source 변경 시 승인0 또는 인증/전송0. claim/dispatch 원자성·경합·재사용·취소/무효화·복구·24h/30d 보관 검증. |
+| 192 | relay-v2 보존과 개인 adapter | 구형 profile/config/body/hash·기본 판정을 유지하고 개인 입력 validator만 고정 하네스 코드로 주입. 개인 입력을 구형 synthetic broker에서 거부, 새 native 합성 검증의 EOF/두hash/최종 근거·단건·정리 확인. |
+| 193 | 개인 범위 문서·검토 자료 | 선택 파일+Git identity 관찰과 전체 clean 미판정을 구분. 누락/거부 파일·불충분한 호출 흐름을 명시하고 정확한 input/body/profile/hash·원본·코드·검사 결과를 private 자료로 고정. |
+| 194 | 개인 실제 호출 승인 대기 | 새 개인 계획은 AWAITING_APPROVAL, 승인/사용/소비/attempt/dispatch0·실제 인증/모델/외부 전송0. 기존 승인 재사용·자동 호출·push0. |
 
 ### 최종 검증 묶음
 

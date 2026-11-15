@@ -14,6 +14,8 @@ export type ReadonlyRelayCredential = Extract<CodexCredential, { kind: 'chatgpt'
 export interface ReadonlyRelayHttpObservation { status: number; headerCount: number; headerBytes: number }
 export type ReadonlyRelayTransport = (dispatch: ReadonlyRelayDispatch, credential: ReadonlyRelayCredential, signal: AbortSignal,
   observeHeaders: (value: ReadonlyRelayHttpObservation) => void) => Promise<Response>;
+/** A trusted harness input policy; never supplied by configuration, target files or model output. */
+export type ReadonlyRelayDispatchValidator = (dispatch: ReadonlyRelayDispatch, config: ReadonlyRelayConfig) => void;
 const fail = (suffix: string): never => { throw new HarnessError(`READONLY_RELAY_${suffix}`); };
 
 /** Cookies are counted and discarded; no upstream header is relayed to the child. */
@@ -64,8 +66,10 @@ export interface ReadonlyRelayBroker {
 export const startReadonlyRelayBroker = async (
   config: ReadonlyRelayConfig, dispatch: ReadonlyRelayDispatch, loadCredential: () => Promise<ReadonlyRelayCredential>,
   signal: AbortSignal, transport: ReadonlyRelayTransport, beforeTransmission: () => void, beforeCredentialAccess: () => void,
+  validateDispatch: ReadonlyRelayDispatchValidator = assertReadonlyRelayDispatch,
 ): Promise<ReadonlyRelayBroker> => {
-  assertReadonlyRelayDispatch(dispatch, config);
+  if (typeof validateDispatch !== 'function') fail('INVALID_TRANSPORT');
+  validateDispatch(dispatch, config);
   if (![loadCredential, transport, beforeTransmission, beforeCredentialAccess].every((value) => typeof value === 'function')) fail('INVALID_TRANSPORT');
   if (signal.aborted) fail('CANCELLED');
   const approved = structuredClone(dispatch);
@@ -106,7 +110,7 @@ export const startReadonlyRelayBroker = async (
       catch { deny(response, 400); return; }
       if (!child || typeof child !== 'object' || Array.isArray(child) || (child as { model?: unknown }).model !== config.model
         || (child as { stream?: unknown }).stream !== true || controller.signal.aborted) { deny(response, 403); return; }
-      assertReadonlyRelayDispatch(approved, config);
+      validateDispatch(approved, config);
       beforeCredentialAccess();
       const loaded = await loadCredential();
       if (controller.signal.aborted) fail('CANCELLED');

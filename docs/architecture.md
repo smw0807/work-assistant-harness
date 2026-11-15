@@ -307,6 +307,14 @@ collector는 상한 크기의 단일 초기화 버퍼에 복사하고 실제 수
 
 Codex가 해석한 최종 text는 단일 turn·조사 schema·근거/줄·민감정보 검증을 거친다. 원문 hash와 최종 text hash를 구분하고 `contractVerified.cliOutput`·`unverifiedResponseChecks`에 검증 책임을 명시한다. 부모의 비공개 metadata/sequence/tool_usage 검사와 부모/CLI text 비교는 수행하지 않는다. relay-v1의256KiB 실제 실패를 보존하고, 이후 새4MiB v2 계획을 로컬1125개 회귀·독립 감사 뒤 TTL10분으로 별도 승인한 실제1회에서 HTTP200·362,095byte EOF와 유효 보고서·`REPORTED`를 확인했다. 원본/Git·코드/검토 자료·로컬 프로세스 종료를 사후 감사했으며 자동 재시도/승인 복원은0이다. 구체 단건의 성공과 일반 공급자 호환성·의미 정확성·회사 도입 검증을 구분한다. [구현 순서와 책임 변경](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환), [실제 결과와 검토 이력](stage-4c9-result.md)을 구분한다.
 
+### 단계 4-C-10의 개인 저장소 읽기 전용 조사
+
+`personal-readonly-plan`은 private 등록의 고정 저장소·commit·질문·파일/줄을 제한된 FS reader로 수집하고, 개인 자료용 입력 정책과 기존 relay-v2 전송 profile을 결합한다. 개인 계획·승인·payload는 `personal-readonly.sqlite`와 `personal_readonly_*`로 분리하며 구형 합성 계약과 섞지 않는다. 모델과 승인 snapshot에는 로컬 sourceRoot·Git/부모 파일 identity 대신 지정한 근거와 hash만 전달한다.
+
+reader는 Git CLI·대상 코드 실행 없이 commit/tree/blob과 선택 파일을 대조한다. 압축 객체는 크기·checksum·delta/호출 한도를 검사하고 `.git/config`·hooks·외부 object 대체 경로·네트워크·쓰기 포트를 열지 않는다. source/runtime 중첩은 거부하고, 승인 전과 인증/전송 직전 및 종료 뒤에 선택 파일·HEAD/index/ref·부모 identity를 다시 확인한다. 이 관찰은 전체 작업 트리 clean 판정이 아니다.
+
+공통 native/broker는 기본 synthetic validator를 유지하고, 별도 개인 adapter의 고정 validator만 새 개인 입력을 허용한다. 등록·대상 코드·모델은 validator·목적지·권한을 선택할 수 없다. 기존 relay-v2 profile/config/명세의 형식·수신/출력 한도와 보증 범위는 유지한다. 이번 실제 개인 계획은 로컬 검증 뒤 `AWAITING_APPROVAL`에서 멈추며 구체 자료의 외부 전송은 후속 별도 승인이다. [준비 결과](stage-4c10-result.md)를 따른다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.

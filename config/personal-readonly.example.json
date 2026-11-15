@@ -1,0 +1,9 @@
+{
+  "version": "personal-readonly-registration-v1",
+  "repoId": "personal-example",
+  "sourceRoot": "/absolute/path/to/personal-repository",
+  "baseCommit": "0000000000000000000000000000000000000000",
+  "question": "Explain the selected entry point and its checks before submitting a request. Cite only the supplied lines and identify missing evidence.",
+  "readRanges": [{ "path": "src/main.ts", "startLine": 1, "endLine": 20 }],
+  "transferPaths": ["src/main.ts"]
+}
