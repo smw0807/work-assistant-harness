@@ -471,11 +471,15 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 원본 OID를 보존하는 실제 사본에는 선택 원문, commit 본문과 비선택 형제 이름을 포함한 tree metadata가 남는다. 마스킹된 검토 payload로 취급하지 않으며 별도 보관/정리 범위를 적용해야 한다. 회사용 DB의 TTL/prune은 사본을 삭제하지 않는다. 실제 공급/추출 방식은 당시 미구현 후속안이었으며 현재 사본 생성기 개발은 중단하고 아래 원본 직접 읽기 설계로 전환했다.
 
-### 회사 Git 선택 읽기의 제안 경계 — 미구현
+### 회사 Git 선택 읽기의 경계 — 핵심 코드만 구현
 
 사본 생성기 개발을 중단하고 원본의 직접 읽기를 위한 [새 회사 전용 계약](company-git-range-reader-design.md)을 설계했다. 큰 pack의 물리적 크기와 실제 구간 읽기량은 별도 상한이며 작은 index 전체와 필요한 객체/의존 base를 검증한다. 전체 pack checksum·미조회 객체는 `not_checked`다. CRC와 index/trailer 값의 일치를 전체 무결성이나 출처 인증으로 설명하지 않는다. 비선택/과거 delta base도 복원 과정에서 읽힐 수 있으나 raw 내용은 디스크/근거/로그에 저장하지 않는다.
 
-기존 v1의 전체 Git hash 대신 새 구간 proof·profile·계획 버전을 요구한다. 자동 fallback·계획/DB 재사용·한도 자동 상향은 없고 기본 비활성·전송/실행 false를 유지한다. 최초 조회/최종 guard의 공통 예산, FD/경로/부모 대조와 부모 supervisor가 필요하다. 관리 buffer·V8 old-space·RSS 측정 목표는 서로 다르며 OS 메모리 격리로 표시하지 않는다. 이번에는 설계만 수행했고 실제 판독기·회사 적용은 미실행이다.
+기존 v1의 전체 Git hash 대신 새 구간 proof·profile·계획 버전을 요구한다. 자동 fallback·계획/DB 재사용·한도 자동 상향은 없고 기본 비활성·전송/실행 false를 유지한다. 최초 조회/최종 guard의 공통 예산, FD/경로/부모 대조와 부모 supervisor가 필요하다. 관리 buffer·V8 old-space·RSS 측정 목표는 서로 다르며 OS 메모리 격리로 표시하지 않는다.
+
+1차 구현은 메모리 기반 byte codec과 공통 논리 예산에 한정한다. 호출자는 모든 I/O·할당·cache 소유권을 등록하고 단조 시간을 공급해야 하며, 출력 buffer나 view를 보유하는 동안 memory lease를 유지해야 한다. 이미 전달된 입력의 할당과 등록하지 않은 JavaScript/native 내부 메모리까지 통제하지 않는다. 새 byte proof는 허용된 metadata 구조·hash·의존 관계의 정합성을 검사할 뿐 실제 파일 관찰·회사 승인·출처를 인증하지 않는다. 두 pass에서 같은 proofHash가 나와도 누적 예산 snapshot은 별도이며, 최종 repository proof에 함께 결합하는 단계는 미구현이다.
+
+실제 파일 판독기·경로/FD 검증·supervisor·기존 명령과의 연결·회사 적용은 미실행이다. 합성 검증 통과는 그 후속 경계를 충족한 것으로 취급하지 않는다. 구현과 검증 범위는 [4-C-17 1차 결과](stage-4c17-codec-result.md)를 따른다.
 
 ## 7. 회사 자료와 비밀정보
 
