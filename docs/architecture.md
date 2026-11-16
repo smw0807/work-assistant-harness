@@ -349,6 +349,10 @@ pnpm은 설치된 실행기의 정상 선언을 확인하고 관찰 버전을 �
 
 CLI는 private 설정·경로 분리 확인 후 최소 환경의 Node 권한 worker를 실행한다. worker는 전용 DB 밖 쓰기·네트워크·추가 자식 실행을 거부한다. 기존 수집기의 모든 부모 metadata 재검증을 보존하기 위해 읽기 권한은 전체로 열고 실제 읽기 범위는 수집기의 선택 파일·Git 객체 allowlist와 바이트 제한으로 강제한다. 대상 코드·hooks·Git CLI를 실행하지 않으며 파일 읽기 OS 격리나 악성 코드 격리를 주장하지 않는다. 실제 회사 자료·회사 정책 충족·제공자 연결은 별도 미검증 범위다.
 
+### 단계 4-C-16의 검토용 Git 사본 실험
+
+이 단계는 기존 회사 source port를 바꾸지 않고, 같은 commit·선택 경로의 원본 tree/blob을 가진 작은 사본을 검증하는 test-only 실험이다. fixture가 생성한 합성 객체만 사용하며 실제 exporter나 새 명령은 없다. 사본의 `sourceRoot`·파일/Git identity를 관찰하며 원본의 현재 상태와 구분한다. 원본 tree metadata·선택 원문 보관과 실제 추출의 남은 범위는 [사본 설계](company-evidence-copy-design.md), 검증 집계는 [4-C-16 결과](stage-4c16-result.md)를 따른다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.
