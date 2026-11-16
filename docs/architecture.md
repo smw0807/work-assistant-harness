@@ -341,6 +341,14 @@ pnpm은 설치된 실행기의 정상 선언을 확인하고 관찰 버전을 �
 
 별도 `offline-migration-partial-check-v1` 입력은 `enabled:false`·런타임 경로만 받으며 같은 CLI에서 부분 service로 연결한다. 부분 port는 호스트 관찰·경로 분리·런타임 메타데이터만 노출하고 native/sandbox 파일 검사는 제공하지 않는다. 보고서의 `scope:partial`, `partialStatus`는 부분 조건의 결과를 나타내며 전체 `status:blocked`와 종료 코드 1은 유지한다. `remainingChecks`·`nextActions`는 안내만 제공하며 전체 진단·승인으로 자동 전환하지 않는다. 기존 전체 v1 입력·보고서와 relay·수집·예산 hash는 보존한다.
 
+### 단계 4-C-15의 회사 읽기 전용 준비
+
+`company-readonly-plan`은 회사 읽기·보관 정책 선언을 먼저 확인하고, 확인된 경우에만 별도 회사 등록을 읽는다. Nest application context의 준비 service는 회사 source port의 inspect/collect/assertUnchanged를 통해 기존 수집 v2 reader와 view 변환을 재사용한다. 회사 출처·등록·정책·원본/view·검토 입력은 새 준비 hash에 결합하며 개인용 service·실제 relay·인증 어댑터는 구성하지 않는다.
+
+`company-readonly.sqlite`에는 별도 회사 준비 계획과 기한이 있는 private payload만 저장한다. 상태는 `AWAITING_APPROVAL/CANCELLED/EXPIRED`이고 승인·attempt·dispatch 테이블과 실행 명령은 없다. inspect는 요약만 출력하며 cancel은 payload를 제거하고 prune은 명시한 보관 기한을 적용한다. 이 승인 대기 표시는 검토 자료의 상태이지 실제 전송을 승인할 수 있는 live 계획이 아니다.
+
+CLI는 private 설정·경로 분리 확인 후 최소 환경의 Node 권한 worker를 실행한다. worker는 전용 DB 밖 쓰기·네트워크·추가 자식 실행을 거부한다. 기존 수집기의 모든 부모 metadata 재검증을 보존하기 위해 읽기 권한은 전체로 열고 실제 읽기 범위는 수집기의 선택 파일·Git 객체 allowlist와 바이트 제한으로 강제한다. 대상 코드·hooks·Git CLI를 실행하지 않으며 파일 읽기 OS 격리나 악성 코드 격리를 주장하지 않는다. 실제 회사 자료·회사 정책 충족·제공자 연결은 별도 미검증 범위다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.

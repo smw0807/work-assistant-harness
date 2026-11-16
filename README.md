@@ -598,6 +598,28 @@ native Codex 실행 파일을 지정하지 않을 때는 [부분 진단 템플�
 
 이 명령의 전체 진단은 명시한 비활성 진단 설정과 고정 native 파일만 제한적으로 읽고, 저장 디렉터리와 `sandbox-exec`는 메타데이터만 확인합니다. 회사 저장소 등록·인증 접근·네트워크·바이너리 실행·DB 생성은 하지 않습니다. 진단 자체는 파일을 쓰지 않으며 `pnpm harness`의 선행 TypeScript 빌드는 `dist`를 씁니다. 현재 지원은 macOS ARM64이고, pnpm 버전 관찰은 실행기가 제공한 미검증 메타데이터입니다. `passed`여도 `liveReady=false`·`executionAllowed=false`·`approvalCreated=false`이며 회사 승인이나 실제 호출 권한이 되지 않습니다. 전체 진단의 초기 구현·검증 기록은 [4-C-14 결과](docs/stage-4c14-result.md)를 따릅니다.
 
+## 회사 저장소의 오프라인 읽기 전용 준비
+
+`company-readonly-*`는 회사 정책에 따라 선택한 파일의 로컬 검토 자료를 준비하는 별도 경로입니다. 현재 단계에서는 합성 저장소로만 검증하며, 실제 회사 자료를 읽기 전 회사의 읽기·보관 허용 범위를 확인해야 합니다. 기존 개인용 승인이나 오프라인 장비 진단 통과로 이를 대신하지 않습니다. 검증 집계와 남은 범위는 [4-C-15 결과](docs/stage-4c15-result.md)를 따릅니다.
+
+[정책 예제](config/company-readonly-policy.example.json)는 `unconfirmed`와 미정 보관 기간으로 차단된 상태입니다. 정책 파일을 저장소 밖의 소유자 전용 `0700` 디렉터리에 `company-readonly-policy.json`이라는 이름의 `0600` 파일로 준비합니다. 회사의 실제 결정에 맞춰 읽기·보관 확인, 비밀값 없는 정책 참조 식별자, 본문 보관 시간(1~24시간)·감사 보관 기간(1~30일)을 기록합니다. `enabled:false`는 계속 유지하며 실제 전송을 활성화하는 옵션이 아닙니다. 이 설정은 운영자가 확인한 정책의 선언이며 하네스가 회사 승인을 인증했다는 뜻은 아닙니다. 미확인 조건은 등록 파일이나 대상 경로를 읽기 전에 거부합니다.
+
+[등록 예제](config/company-readonly-registration.example.json)는 `company-readonly-registration.json`이라는 별도 `0600` 파일로 준비합니다. 저장소 하나의 절대 경로·기준 commit·질문·읽을 파일/줄과 로컬 검토에 포함할 `reviewPaths`를 명시합니다. 실제 회사 경로·코드·정책 참조를 Git에 넣지 않습니다. 데이터 디렉터리는 하네스·대상과 겹치지 않는 전용 위치이고 그 부모도 소유자 전용 `0700`이어야 합니다. 설정·대상·보관 경로는 정규화된 POSIX 절대 경로이며 현재 경로 구성에는 영문·숫자·공백·`_-.`만 허용하고 인증/비밀 경로와 링크는 거부합니다.
+
+```sh
+pnpm harness company-readonly-plan --policy /private/review/company-readonly-policy.json --registration /private/review/company-readonly-registration.json --data-dir /private/review/company-runtime
+pnpm harness company-readonly-inspect --task <uuid> --data-dir /private/review/company-runtime
+pnpm harness company-readonly-cancel --task <uuid> --data-dir /private/review/company-runtime
+pnpm harness company-readonly-prune --data-dir /private/review/company-runtime
+pnpm test:company
+```
+
+준비는 기존 수집 v2의 Git·경로·민감정보 검사와 원본64KiB/안전 view64KiB/발췌32KiB·8파일/16범위·범위당200줄·근거64KiB/입력128KiB 한도를 재사용합니다. 회사 출처와 새 준비 hash를 별도로 기록하며 기존 개인·relay·실행 예산 계약을 변경하지 않습니다. 원문 전체·비밀 매치는 저장하지 않고 선택한 안전 근거와 원본/view hash를 비공개 `company-readonly.sqlite`에 보관합니다. CLI는 내용·경로 없이 상태·식별자·hash·보관 기한만 출력합니다.
+
+준비 결과는 `AWAITING_APPROVAL`이며 승인 생성·전송·실행 권한은 모두 `false`입니다. 회사용 `approve`·`run` 명령은 없습니다. 이 로컬 자료는 모델·목적지·실제 전송 본문이 확정된 실행 승인 계획이 아니므로 후속 전송에 그대로 사용할 수 없습니다. 같은 등록·정책·원본·검토 내용의 재준비는 기존 기록을 반환하며 취소·만료를 되돌리지 않습니다. 취소 시 본문을 제거하고 보관 기한에 따라 inspect/prune 등에서 만료 본문·감사 기록을 정리합니다. 실행 중인 보관 스케줄러나 디스크의 물리적 완전 삭제를 보장하지 않습니다.
+
+수집은 인증 환경을 물려받지 않는 Node 권한 worker에서 수행하고 대상 쓰기·추가 프로세스·네트워크를 허용하지 않습니다. 기존 수집기의 모든 부모 경로 재검증을 유지하기 위해 worker의 파일 읽기 권한은 전체로 열고, 실제 읽을 파일과 크기는 수집기 코드로 제한합니다. 따라서 파일 읽기의 OS 격리나 악성 코드 실행 격리를 제공하지 않습니다. 대상 설치·테스트·빌드·스크립트·Git 명령, native Codex, 실제 인증·모델과 Slack 연결은 이 경로에 포함되지 않습니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.

@@ -1,0 +1,9 @@
+{
+  "version": "company-readonly-policy-v1",
+  "enabled": false,
+  "readPermission": "unconfirmed",
+  "storagePermission": "unconfirmed",
+  "policyReference": null,
+  "payloadRetentionHours": null,
+  "auditRetentionDays": null
+}
