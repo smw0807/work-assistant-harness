@@ -592,9 +592,11 @@ v1/v2는 같은 개인 DB의 lifecycle을 공유하며 계약별로 검증합니
 
 `pnpm harness migration-check --config /absolute/path/to/private-migration/migration-check.json`으로 실행 환경과 기존 계약의 정적 준비 상태를 확인합니다. [설정 템플릿](config/migration-check.example.json)과 [실행 가이드](docs/migration-guide.md)에 경로·권한·설치 준비 및 결과 해석을 설명합니다.
 
+native Codex 실행 파일을 지정하지 않을 때는 [부분 진단 템플릿](config/migration-check.partial.example.json)을 새 비공개 위치의 `migration-check.json`으로 복사하고 `runtimeDirectory`만 지정한 뒤 같은 명령을 사용합니다. 별도 입력 `offline-migration-partial-check-v1`은 `enabled:false`와 런타임 경로만 받습니다. 정상 시 7개 확인 항목은 `passed`, native·sandbox 파일 검사와 범위 밖 8개는 `not_run`입니다. `scope:partial`과 `partialStatus:passed`여도 전체 `status:blocked` 및 종료 코드 1을 유지하며, `remainingChecks`와 `nextActions`에 남은 정적 점검을 표시합니다. native·sandbox 파일 경로를 조회하지 않고 기존 전체 진단 입력의 필수 필드를 생략하는 방식으로 전환하지 않습니다.
+
 회사 장비의 새 대화에서 이어갈 때는 [오프라인 검증 인수인계](docs/company-offline-handoff.md)를 사용합니다. 현재 구현·개인 검증 상태, 회사에서 확인할 조건, 실행 범위와 순서, 짧은 시작 문구를 포함합니다.
 
-이 명령은 명시한 비활성 진단 설정과 고정 native 파일만 제한적으로 읽고, 저장 디렉터리와 `sandbox-exec`는 메타데이터만 확인합니다. 회사 저장소 등록·인증 접근·네트워크·바이너리 실행·DB 생성은 하지 않습니다. 진단 자체는 파일을 쓰지 않으며 `pnpm harness`의 선행 TypeScript 빌드는 `dist`를 씁니다. 현재 지원은 macOS ARM64이고, pnpm 버전 관찰은 실행기가 제공한 미검증 메타데이터입니다. `passed`여도 `liveReady=false`·`executionAllowed=false`·`approvalCreated=false`이며 회사 승인이나 실제 호출 권한이 되지 않습니다. 구현과 검증 결과는 [4-C-14 결과](docs/stage-4c14-result.md)를 따릅니다.
+이 명령의 전체 진단은 명시한 비활성 진단 설정과 고정 native 파일만 제한적으로 읽고, 저장 디렉터리와 `sandbox-exec`는 메타데이터만 확인합니다. 회사 저장소 등록·인증 접근·네트워크·바이너리 실행·DB 생성은 하지 않습니다. 진단 자체는 파일을 쓰지 않으며 `pnpm harness`의 선행 TypeScript 빌드는 `dist`를 씁니다. 현재 지원은 macOS ARM64이고, pnpm 버전 관찰은 실행기가 제공한 미검증 메타데이터입니다. `passed`여도 `liveReady=false`·`executionAllowed=false`·`approvalCreated=false`이며 회사 승인이나 실제 호출 권한이 되지 않습니다. 전체 진단의 초기 구현·검증 기록은 [4-C-14 결과](docs/stage-4c14-result.md)를 따릅니다.
 
 ## 모의 입력과 오류 재현
 

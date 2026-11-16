@@ -339,6 +339,8 @@ reader는 원본 Git blob과 worktree를 대조한 뒤 원문 전체 검사를 �
 
 pnpm은 설치된 실행기의 정상 선언을 확인하고 관찰 버전을 기록하며 특정 버전 일치는 요구하지 않는다. 누락·잘못된 선언의 후속 접근 차단은 유지한다. 디렉터리 identity는 장치·inode·유형/권한·소유자/그룹으로 비교하며, 하위 디렉터리 수에 따라 달라지는 `nlink`는 경로 교체 판정에 사용하지 않는다. 일반 파일의 단일 링크와 읽기 전후 링크 수 검사는 계속 적용한다.
 
+별도 `offline-migration-partial-check-v1` 입력은 `enabled:false`·런타임 경로만 받으며 같은 CLI에서 부분 service로 연결한다. 부분 port는 호스트 관찰·경로 분리·런타임 메타데이터만 노출하고 native/sandbox 파일 검사는 제공하지 않는다. 보고서의 `scope:partial`, `partialStatus`는 부분 조건의 결과를 나타내며 전체 `status:blocked`와 종료 코드 1은 유지한다. `remainingChecks`·`nextActions`는 안내만 제공하며 전체 진단·승인으로 자동 전환하지 않는다. 기존 전체 v1 입력·보고서와 relay·수집·예산 hash는 보존한다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.

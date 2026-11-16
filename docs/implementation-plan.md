@@ -789,6 +789,7 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - 정해진 검사 상태·이유·기존 계약 hash만 stdout에 반환한다. 통과해도 liveReady/executionAllowed/approvalCreated는 false다. 회사 자료·인증·모델·네트워크·sandbox 실행·실제 쓰기와 회사 승인 확인은 not_run으로 남긴다.
 - 합성 환경 port와 임시 파일로 정상/미지원/잘못된 pin·설정·경로·symlink/hardlink·과대 파일·교체·원시 오류 비노출과 CLI 권한 경계를 검증한다. 회사 자료나 개인 대상 저장소를 검사 fixture로 사용하지 않는다. 설정 템플릿·이전 가이드·로컬 검증 근거를 준비하고 실제 모델 호출 없이 마친다.
 - 디렉터리 하위 항목 생성에 따른 `nlink` 변화와 실제 경로 교체를 결정적으로 구분해 검증한다. 부모·런타임의 장치/inode/유형·권한·소유 검증, 일반 파일의 단일 링크·읽기 전후 보존 검사는 유지한다. 과거 간헐 실패의 정확한 사유가 남지 않았다면 재현한 경로와 그 과거 실행의 인과를 단정하지 않는다.
+- native 없는 부분 진단은 별도 `offline-migration-partial-check-v1`의 정확한 세 필드(version·enabled:false·runtimeDirectory)로 선택한다. 전체 입력/보고서/해시를 보존하며 부분 포트는 호스트·경로·런타임 metadata만 제공한다. 정상 7 passed/10 not_run, `scope:partial`·`partialStatus:passed`와 전체 `status:blocked`·종료 코드 1·권한 false를 구분한다. native/sandbox metadata·인증·회사 자료·DB·쓰기·프로세스·통신 접근 0, 기존 입력의 누락/혼용 거부, 잘못된 경로/권한/존재·관찰값·호스트 전제 실패를 합성 port/파일/CLI canary로 검증한다. 새 비공개 설정·runtime의 실제 부분 결과와 전후 보존을 로컬에 기록하며 자동 전체 점검이나 승인으로 전환하지 않는다.
 
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.

@@ -5,17 +5,21 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LocalMigrationCheck, readMigrationCheckConfiguration } from '../adapters/migration-check.js';
 import { MigrationCheckService } from '../application/migration-check.js';
+import { MigrationPartialCheckService } from '../application/migration-partial-check.js';
 import { HarnessError } from '../domain/errors.js';
+import { MIGRATION_PARTIAL_CHECK_VERSION } from '../domain/migration-check.js';
 import { assertMigrationPath } from '../policy/migration-check.js';
-import type { MigrationCheckPort } from '../ports/migration-check.js';
+import type { MigrationCheckPort, MigrationPartialCheckPort } from '../ports/migration-check.js';
 
 export const migrationCheckUsage = 'pnpm harness migration-check --config <absolute-private-migration-check.json>';
 
 @Module({})
 class MigrationCheckModule {
-  static configure(port: MigrationCheckPort): DynamicModule {
+  static configure(port: MigrationCheckPort & MigrationPartialCheckPort, partial: boolean): DynamicModule {
     return { module: MigrationCheckModule,
-      providers: [{ provide: MigrationCheckService, useFactory: () => new MigrationCheckService(port) }] };
+      providers: partial
+        ? [{ provide: MigrationPartialCheckService, useFactory: () => new MigrationPartialCheckService(port) }]
+        : [{ provide: MigrationCheckService, useFactory: () => new MigrationCheckService(port) }] };
   }
 }
 
@@ -24,10 +28,14 @@ export const runMigrationCheckCommand = async (args: string[]): Promise<void> =>
   if (args.length !== 3 || args[0] !== 'migration-check' || args[1] !== '--config') throw new HarnessError('INVALID_ARGUMENTS');
   const configPath = assertMigrationPath(args[2], 'config');
   const config = await readMigrationCheckConfiguration(configPath);
+  const partial = config !== null && typeof config === 'object'
+    && Object.getOwnPropertyDescriptor(config, 'version')?.value === MIGRATION_PARTIAL_CHECK_VERSION;
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-  const app = await NestFactory.createApplicationContext(MigrationCheckModule.configure(new LocalMigrationCheck(configPath, root)), { logger: false });
+  const app = await NestFactory.createApplicationContext(MigrationCheckModule.configure(new LocalMigrationCheck(configPath, root), partial), { logger: false });
   try {
-    const result = await app.get(MigrationCheckService).check(config);
+    const result = partial
+      ? await app.get(MigrationPartialCheckService).check(config)
+      : await app.get(MigrationCheckService).check(config);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     if (result.status !== 'passed') process.exitCode = 1;
   } finally { await app.close(); }

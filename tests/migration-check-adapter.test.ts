@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { LocalMigrationCheck, readMigrationCheckConfiguration } from '../src/adapters/migration-check.js';
-import { MIGRATION_CODEX_SHA256, type MigrationCheckConfig } from '../src/domain/migration-check.js';
+import { MIGRATION_CODEX_SHA256, MIGRATION_PARTIAL_CHECK_VERSION, type MigrationCheckConfig,
+  type MigrationPartialCheckConfig } from '../src/domain/migration-check.js';
 
 const fixture = () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'migration-adapter-'))); chmodSync(directory, 0o700);
@@ -91,6 +92,36 @@ test('path separation rejects source/runtime/config/native overlaps without touc
       assert.deepEqual(await h.port.inspectPaths({ ...h.config, runtimeDirectory }), { status: 'failed', reason: 'OVERLAP' });
     }
   } finally { h.close(); }
+});
+
+test('partial path separation rejects overlap and unsafe paths without filesystem or native inspection', async context => {
+  const h = fixture();
+  const config: MigrationPartialCheckConfig = { version: MIGRATION_PARTIAL_CHECK_VERSION, enabled: false, runtimeDirectory: h.runtime };
+  let operations = 0;
+  const guards = (['lstat', 'open', 'readdir'] as const).map(name => context.mock.method(fsPromises, name, async () => {
+    operations++; throw new Error('unexpected filesystem access');
+  }));
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual(await h.port.inspectPartialPaths(config), { status: 'passed', reason: 'PATHS_SEPARATE' });
+    for (const runtimeDirectory of [h.directory, h.file, join(h.file, 'runtime'), join(h.directory, 'harness'), join(h.directory, 'harness', 'runtime')]) {
+      assert.deepEqual(await h.port.inspectPartialPaths({ ...config, runtimeDirectory }), { status: 'failed', reason: 'OVERLAP' });
+    }
+    const sourceConfig = new LocalMigrationCheck(join(h.directory, 'harness', 'migration-check.json'), join(h.directory, 'harness'));
+    assert.deepEqual(await sourceConfig.inspectPartialPaths(config), { status: 'failed', reason: 'OVERLAP' });
+    const sourceUnderConfig = new LocalMigrationCheck(h.file, join(h.file, 'harness'));
+    assert.deepEqual(await sourceUnderConfig.inspectPartialPaths(config), { status: 'failed', reason: 'OVERLAP' });
+    for (const runtimeDirectory of ['relative/runtime', '/synthetic/../runtime', '/synthetic/.codex/runtime',
+      '/usr/bin/sandbox-exec', '/usr/bin/sandbox-exec/runtime', '/synthetic/native/codex',
+      '/synthetic/native/codex/runtime', '/synthetic/CODEX/runtime']) {
+      assert.equal((await h.port.inspectPartialPaths({ ...config, runtimeDirectory })).status, 'failed');
+    }
+    for (const port of [new LocalMigrationCheck('/synthetic/.codex/migration-check.json', '/synthetic/harness'),
+      new LocalMigrationCheck(h.file, 'relative/harness')]) {
+      assert.equal((await port.inspectPartialPaths(config)).status, 'failed');
+    }
+    assert.equal(operations, 0);
+  } finally { for (const guard of guards) guard.mock.restore(); syncBuiltinESMExports(); h.close(); }
 });
 
 test('runtime inspection is metadata-only and creates no database or probe files', async context => {

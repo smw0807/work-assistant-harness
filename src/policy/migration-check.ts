@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 import { HarnessError } from '../domain/errors.js';
-import { MIGRATION_CHECK_VERSION, MIGRATION_CODEX_SHA256, type MigrationCheckConfig } from '../domain/migration-check.js';
+import { MIGRATION_CHECK_VERSION, MIGRATION_PARTIAL_CHECK_VERSION, MIGRATION_CODEX_SHA256,
+  type MigrationCheckConfig, type MigrationPartialCheckConfig } from '../domain/migration-check.js';
 import { canonicalReadonlyJson, hashReadonlyValue } from './readonly-investigation-policy.js';
 import { parseAnyReadonlyRelayConfig } from './readonly-relay-budget-policy.js';
 
@@ -47,6 +48,27 @@ export const parseMigrationCheckConfig = (value: unknown): MigrationCheckConfig 
 };
 export const hashMigrationCheckConfig = (value: unknown): string =>
   hashReadonlyValue(canonicalReadonlyJson(parseMigrationCheckConfig(value)));
+
+/** Partial runtime input must not redirect metadata probes to omitted executables or paths beneath them. */
+export const assertMigrationPartialRuntimePath = (value: unknown): string => {
+  const path = assertMigrationPath(value, 'directory');
+  if (path.split('/').some(part => ['codex', 'sandbox-exec'].includes(part.toLowerCase()))) {
+    return reject('MIGRATION_CHECK_UNSAFE_PATH');
+  }
+  return path;
+};
+
+/** Separate input contract: omission from a full configuration never selects a partial check. */
+export const parseMigrationPartialCheckConfig = (value: unknown): MigrationPartialCheckConfig => {
+  try {
+    const fields = snapshot(value, ['version', 'enabled', 'runtimeDirectory']);
+    if (fields.version !== MIGRATION_PARTIAL_CHECK_VERSION || fields.enabled !== false) return reject();
+    const runtimeDirectory = assertMigrationPartialRuntimePath(fields.runtimeDirectory);
+    return Object.freeze({ version: MIGRATION_PARTIAL_CHECK_VERSION, enabled: false, runtimeDirectory });
+  } catch { return reject(); }
+};
+export const hashMigrationPartialCheckConfig = (value: unknown): string =>
+  hashReadonlyValue(canonicalReadonlyJson(parseMigrationPartialCheckConfig(value)));
 
 export const migrationNodeSupported = (version: string): boolean => {
   if (version.length > 32 || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(version)) return false;

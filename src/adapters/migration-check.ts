@@ -3,11 +3,11 @@ import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, sep } from 'node:path';
 import { HarnessError } from '../domain/errors.js';
-import { MIGRATION_CODEX_SHA256, type MigrationCheckConfig, type MigrationHostObservation,
+import { MIGRATION_CODEX_SHA256, type MigrationCheckConfig, type MigrationPartialCheckConfig, type MigrationHostObservation,
   type MigrationProbeObservation, type MigrationProbeReason } from '../domain/migration-check.js';
 import type { ReadonlyRelayConfig } from '../domain/readonly-relay.js';
-import type { MigrationCheckPort } from '../ports/migration-check.js';
-import { assertMigrationPath } from '../policy/migration-check.js';
+import type { MigrationCheckPort, MigrationPartialCheckPort } from '../ports/migration-check.js';
+import { assertMigrationPartialRuntimePath, assertMigrationPath } from '../policy/migration-check.js';
 import { parseReadonlyTransportJson } from '../policy/readonly-transport-protocol.js';
 
 const reject = (reason: MigrationProbeReason): never => { throw new HarnessError(reason); };
@@ -95,7 +95,7 @@ const observation = async (action: () => Promise<MigrationProbeReason>): Promise
 };
 
 /** Reads only the explicit diagnostic configuration and pinned executable; all other probes are metadata-only. */
-export class LocalMigrationCheck implements MigrationCheckPort {
+export class LocalMigrationCheck implements MigrationCheckPort, MigrationPartialCheckPort {
   constructor(private readonly configPath: string, private readonly harnessRoot: string) {}
   observeHost(): MigrationHostObservation {
     return { platform: process.platform, arch: process.arch, nodeVersion: process.versions.node,
@@ -109,6 +109,17 @@ export class LocalMigrationCheck implements MigrationCheckPort {
       if (contains(this.harnessRoot, runtime) || contains(runtime, this.harnessRoot)
         || contains(runtime, input) || contains(runtime, binary) || contains(binary, runtime)
         || contains(input, runtime) || contains(input, binary) || contains(binary, input)) reject('OVERLAP');
+      return 'PATHS_SEPARATE';
+    });
+  }
+  async inspectPartialPaths(config: MigrationPartialCheckConfig): Promise<MigrationProbeObservation> {
+    return observation(async () => {
+      const input = assertMigrationPath(this.configPath, 'config');
+      const runtime = assertMigrationPartialRuntimePath(config.runtimeDirectory);
+      const harness = assertMigrationPath(this.harnessRoot, 'directory');
+      if (contains(harness, runtime) || contains(runtime, harness)
+        || contains(harness, input) || contains(input, harness)
+        || contains(runtime, input) || contains(input, runtime)) reject('OVERLAP');
       return 'PATHS_SEPARATE';
     });
   }

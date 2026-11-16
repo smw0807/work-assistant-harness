@@ -1,0 +1,5 @@
+{
+  "version": "offline-migration-partial-check-v1",
+  "enabled": false,
+  "runtimeDirectory": "/absolute/path/to/private-runtime"
+}

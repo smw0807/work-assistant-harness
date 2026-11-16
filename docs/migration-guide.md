@@ -28,6 +28,26 @@
 
 ## 2. 진단 설정 준비
 
+native Codex 실행 파일이 없는 경우에는 아래 부분 진단을 선택한다. native 파일을 포함한 전체 정적 준비 상태를 확인할 때는 기존 전체 진단 설정을 사용한다. 두 입력은 별도 버전으로 구분하며 전체 입력의 필수 필드를 지운다고 부분 진단으로 바뀌지 않는다.
+
+### native 없는 부분 진단
+
+[부분 템플릿](../config/migration-check.partial.example.json)을 새 비공개 디렉터리의 `migration-check.json`으로 복사하고, 별도로 만든 `0700` 런타임 디렉터리의 절대 경로를 지정한다. 설정은 `0600`, 보관 디렉터리는 `0700`을 유지한다.
+
+```json
+{
+  "version": "offline-migration-partial-check-v1",
+  "enabled": false,
+  "runtimeDirectory": "/absolute/path/to/private-runtime"
+}
+```
+
+정확히 세 필드만 받으며 `relay`, native 파일 경로, 인증·계정·저장소·명령 필드는 받지 않는다. 경로는 아래 전체 진단과 같은 정규화·민감 경로·symlink 제한을 적용하고 설정·런타임·하네스가 겹치지 않아야 한다. 부분 런타임 경로는 `codex`·`sandbox-exec`라는 구성 요소도 대소문자와 무관하게 사전에 거부해 해당 파일이나 하위 경로로 메타데이터 조회를 돌릴 수 없게 한다. 입력은 같은 8KiB·UTF8·중복 키·파일 권한·링크·교체 검사를 거친다.
+
+같은 `pnpm harness migration-check --config <절대 경로>` 명령으로 실행한다. 부분 진단은 설정, OS/CPU, Node, pnpm 선언, UID, 경로 분리, 런타임 메타데이터만 확인한다. runtime 내용을 열거하거나 기존 DB를 읽지 않는다. native·`sandbox-exec` 파일 경로도 조회하지 않으며 승인된 바이너리 준비를 대신하지 않는다.
+
+### native를 포함한 전체 진단
+
 [설정 템플릿](../config/migration-check.example.json)을 하네스와 대상 저장소 밖의 비공개 디렉터리에 `migration-check.json`이라는 이름으로 복사한다. 아래 절대 경로는 새로 사용할 위치로 바꾼다. 준비 명령은 선택한 새 디렉터리·설정 사본만 생성한다.
 
 ```sh
@@ -54,7 +74,7 @@ chmod 600 /absolute/path/to/private-migration/migration-check.json
 pnpm harness migration-check --config /absolute/path/to/private-migration/migration-check.json
 ```
 
-`pnpm harness`는 기존 스크립트대로 먼저 `tsc`를 실행하여 하네스의 `dist`를 빌드한다. 그 뒤 실행되는 진단은 지정한 설정·고정 바이너리를 제한적으로 읽고 필요한 경로 메타데이터만 검사한다. 런타임 디렉터리의 내용을 열거하거나 DB를 열고, 쓰기 시험 파일을 만들거나 기존 권한을 수정하지 않는다.
+`pnpm harness`는 기존 스크립트대로 먼저 `tsc`를 실행하여 하네스의 `dist`를 빌드한다. 그 뒤 실행되는 진단은 지정한 설정을 읽고 필요한 경로 메타데이터만 검사하며, 전체 진단만 지정한 고정 바이너리를 제한적으로 읽는다. 런타임 디렉터리의 내용을 열거하거나 DB를 열고, 쓰기 시험 파일을 만들거나 기존 권한을 수정하지 않는다.
 
 보고서를 파일로 보관하려면 소유한 비공개 디렉터리의 새 파일로 stdout을 저장한다. 다음 예시의 `--silent`는 pnpm의 스크립트 안내 출력을 제거한다. `set -C`는 기존 보고서 덮어쓰기를 막는다. 파일 보관은 호출한 셸의 동작이며 진단기에는 파일 출력 옵션이 없다.
 
@@ -69,7 +89,11 @@ pnpm --silent harness migration-check --config /absolute/path/to/private-migrati
 
 ## 4. 결과 해석과 다음 단계
 
-전체 `status`는 `passed` 또는 `blocked`다. 종료 코드 `0`은 정적 검사 통과이고, `1`은 차단 결과 또는 잘못된 입력이다. 잘못된 인자·설정 등은 보고서 생성 전에 고정 오류 코드로 거부될 수 있으므로 stdout 파일이 생겼다는 사실만으로 성공 처리하지 않는다. 검사별 `passed`는 구현된 정적 조건 통과, `failed`는 조건 불충족, `not_run`은 미실시를 뜻한다. 인증·모델·회사 자료 접근 등 진단 범위 밖 항목은 정상적으로도 `not_run`을 유지한다. 보고서의 검사별 이유를 확인하고 수치나 계약을 임의로 바꿔 우회하지 않는다. 누락된 환경을 준비한 뒤 새 진단을 수행한다.
+부분 보고서는 `version:offline-migration-partial-check-v1`, `scope:partial`로 구분한다. 정상 부분 결과는 확인 항목 **7 passed**, 전체 진단에 남겨 둔 native·sandbox 파일 검사 **2 not_run**, 범위 밖 **8 not_run**이다. 두 파일 검사의 사유는 `NOT_INCLUDED_IN_PARTIAL_CHECK`다. `partialStatus:passed`는 확인한 부분 조건만 통과했다는 뜻이며, 전체 `status`는 항상 `blocked`, 종료 코드는 항상 **1**이다. 부분 조건이 실패하면 `partialStatus:blocked`가 된다. 입력 오류는 보고서 없이 종료 코드 1로 거부될 수 있다.
+
+`remainingChecks`는 `sandboxExecutable`·`nativeBinary`를 표시한다. `nextActions`에는 `RUN_FULL_CHECK_WITH_APPROVED_NATIVE`를 넣고, 부분 조건도 실패했다면 앞에 `FIX_PARTIAL_CHECKS`를 넣는다. 이 값들은 안내이며 자동 실행이나 승인이 아니다. 회사 반입이 승인된 Codex CLI 실행 파일을 지정한 기존 전체 입력으로 별도 정적 검사를 실행하기 전에는 전체 준비 완료가 아니다. 부분 보고서에는 선택하지 않은 relay 설정/profile/예산 hash를 만들지 않고 부분 설정의 `diagnosticConfigHash`만 기록한다. 기존 relay·수집·실행 예산 계약과 한도는 변경하지 않는다.
+
+기존 전체 진단의 `status`는 `passed` 또는 `blocked`다. 종료 코드 `0`은 전체 정적 검사 통과이고, `1`은 차단 결과 또는 잘못된 입력이다. 잘못된 인자·설정 등은 보고서 생성 전에 고정 오류 코드로 거부될 수 있으므로 stdout 파일이 생겼다는 사실만으로 성공 처리하지 않는다. 검사별 `passed`는 구현된 정적 조건 통과, `failed`는 조건 불충족, `not_run`은 미실시를 뜻한다. 인증·모델·회사 자료 접근 등 진단 범위 밖 항목은 정상적으로도 `not_run`을 유지한다. 보고서의 검사별 이유를 확인하고 수치나 계약을 임의로 바꿔 우회하지 않는다. 누락된 환경을 준비한 뒤 새 진단을 수행한다.
 
 쓰기 권한 비트와 소유자 검사는 파일시스템 ACL·용량·쓰기 성공의 증명이 아니다. 파일 메타데이터와 hash 검사는 이후 변경에 대한 영구 보증도 아니다. 실제 호출 시의 원본·승인·바이너리 재검증과 격리 검증은 계속 필요하다.
 

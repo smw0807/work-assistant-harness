@@ -3,6 +3,7 @@ import type { ReadonlyRelayExecutionBudget } from './readonly-relay-budget.js';
 import type { PersonalCollectionProfile } from './personal-readonly-collection.js';
 
 export const MIGRATION_CHECK_VERSION = 'offline-migration-check-v1' as const;
+export const MIGRATION_PARTIAL_CHECK_VERSION = 'offline-migration-partial-check-v1' as const;
 export const MIGRATION_CODEX_VERSION = '0.154.0' as const;
 export const MIGRATION_CODEX_SHA256 = '4f85982624b3898c8991cb80c0981b2aa71070e3537046c9a95950318a95afcc' as const;
 export const MIGRATION_NODE_RANGE = '>=26.12.1 <27' as const;
@@ -11,6 +12,11 @@ export const MIGRATION_PNPM_POLICY = 'installed-pnpm' as const;
 export interface MigrationCheckConfig {
   version: typeof MIGRATION_CHECK_VERSION;
   relay: ReadonlyRelayConfig;
+  runtimeDirectory: string;
+}
+export interface MigrationPartialCheckConfig {
+  version: typeof MIGRATION_PARTIAL_CHECK_VERSION;
+  enabled: false;
   runtimeDirectory: string;
 }
 export interface MigrationHostObservation {
@@ -33,7 +39,8 @@ export type MigrationCheckId = 'configuration' | 'host' | 'node' | 'pnpmLauncher
   | 'nativeVersionExecution' | 'sandboxRuntime' | 'storageWriteProbe';
 export type MigrationCheckReason = MigrationProbeReason | 'CONFIG_VALID_DISABLED' | 'HOST_SUPPORTED' | 'HOST_UNSUPPORTED'
   | 'NODE_SUPPORTED' | 'NODE_UNSUPPORTED' | 'PNPM_DECLARATION_PRESENT' | 'PNPM_DECLARATION_INVALID'
-  | 'PNPM_DECLARATION_UNAVAILABLE' | 'UID_AVAILABLE' | 'UID_UNAVAILABLE' | 'PREREQUISITE_FAILED' | 'OUTSIDE_OFFLINE_SCOPE';
+  | 'PNPM_DECLARATION_UNAVAILABLE' | 'UID_AVAILABLE' | 'UID_UNAVAILABLE' | 'PREREQUISITE_FAILED' | 'OUTSIDE_OFFLINE_SCOPE'
+  | 'NOT_INCLUDED_IN_PARTIAL_CHECK';
 export interface MigrationCheckItem {
   id: MigrationCheckId;
   status: 'passed' | 'failed' | 'not_run';
@@ -67,4 +74,22 @@ export interface MigrationCheckReport {
     collectionProfile: PersonalCollectionProfile;
     collectionProfileHash: string;
   };
+}
+
+/** A partial observation never establishes full static readiness or a live capability. */
+export interface MigrationPartialCheckReport {
+  version: typeof MIGRATION_PARTIAL_CHECK_VERSION;
+  mode: 'offline';
+  scope: 'partial';
+  status: 'blocked';
+  partialStatus: 'passed' | 'blocked';
+  liveReady: false;
+  executionAllowed: false;
+  approvalCreated: false;
+  checks: MigrationCheckItem[];
+  environment: MigrationCheckReport['environment'];
+  expected: Pick<MigrationCheckReport['expected'], 'node' | 'pnpm'>;
+  diagnosticConfigHash: string;
+  remainingChecks: ['sandboxExecutable', 'nativeBinary'];
+  nextActions: ('FIX_PARTIAL_CHECKS' | 'RUN_FULL_CHECK_WITH_APPROVED_NATIVE')[];
 }

@@ -19,6 +19,8 @@
 
 위 표는 기준 커밋 당시의 기록이다. 후속 구현은 pnpm의 특정 버전 고정을 제거하고 디렉터리 하위 항목 수 변화를 경로 교체와 구분한다. 실제 장비에서 실행한 버전·검사 결과·변경 파일과 미실행 항목은 각 실행의 새 비공개 로컬 기록에 남긴다.
 
+native 파일을 지정하지 않을 때는 [부분 진단 템플릿](../config/migration-check.partial.example.json)의 별도 입력을 사용할 수 있다. 부분 진단은 OS·Node·pnpm·경로·런타임 조건만 확인하며 native와 sandbox 파일 경로에 접근하지 않는다. 부분 통과와 전체 준비 미완료 상태를 구분하고, 기존 전체 진단의 조건이나 전송·수집 계약을 낮추지 않는다.
+
 개인 환경의 비공개 검증 자료는 옮기지 않는다. 회사 실행에 필요한 기준은 저장소의 [4-C-14 검증 결과](stage-4c14-result.md)에 있으며, 그 문서에 연결된 개인 장비의 로컬 자료 경로를 열거나 찾을 필요가 없다. 과거 실제 호출·승인·조사 계획도 이번 인수인계의 실행 대상이 아니다.
 
 ## 회사에서 확인할 조건
@@ -56,9 +58,9 @@ OS/CPU와 설치된 개발 도구 같은 기술 조건은 허용된 장비에서
 ## 새 대화에서 수행할 순서
 
 1. 현재 작업 폴더가 하네스인지 확인하고 기존 변경을 보존한다. [AGENTS.md](../AGENTS.md), [구조](architecture.md), [코딩 컨벤션](coding-conventions.md), [보안과 승인](security-and-approval.md), [구현 계획](implementation-plan.md), [이전 가이드](migration-guide.md), [검증 결과](stage-4c14-result.md), [설정 템플릿](../config/migration-check.example.json)을 읽는다. 과거 승인이나 대화의 묵시적 권한을 추정하지 않는다.
-2. 회사의 반입·로컬 테스트 허용 범위와 OS/CPU·설치 도구를 확인한다. 실제 바이너리는 승인된 지정 경로의 메타데이터·헤더·고정 hash로만 확인한다. 누락·불일치를 설치나 pin 변경으로 해소하지 않는다.
+2. 회사의 반입·로컬 테스트 허용 범위와 OS/CPU·설치 도구를 확인한다. native 파일을 지정하지 않으면 부분 진단을 선택하고 native·sandbox 파일 검사는 미실행으로 남긴다. 전체 진단의 실제 바이너리는 승인된 지정 경로의 메타데이터·헤더·고정 hash로만 확인한다. 누락·불일치를 설치나 pin 변경으로 해소하지 않는다.
 3. 가이드에 따라 하네스·회사 제품 저장소 밖의 새로운 비공개 설정/런타임/결과 위치를 준비한다. `enabled:false`, 디렉터리 `0700`, 설정·결과 파일 `0600`을 유지한다. 기존 파일 덮어쓰기, 기존 디렉터리의 재귀적인 권한 변경과 실제 DB 접근은 하지 않는다.
-4. 아래 기존 정적 점검 명령을 실행한다. 예시 경로는 준비한 설정의 절대 경로로 바꾼다. 전체 상태와 종료 코드, 각 항목의 상태를 함께 기록한다. 정상 정적 결과의 9개 통과·범위 밖 8개 미실행, `liveReady=false`, `executionAllowed=false`, `approvalCreated=false`를 확인한다. 입력 오류는 JSON 보고서 생성 전에 거부될 수 있다.
+4. 아래 기존 정적 점검 명령을 실행한다. 예시 경로는 준비한 설정의 절대 경로로 바꾼다. 전체 상태와 종료 코드, 각 항목의 상태를 함께 기록한다. 정상 전체 진단은 9개 통과·범위 밖 8개 미실행이다. 정상 부분 진단은 7개 통과·10개 미실행이고 `partialStatus:passed`여도 `status:blocked`와 종료 코드 1을 유지한다. 남은 native·sandbox 파일 검사는 `remainingChecks`, 필요한 다음 정적 점검은 `nextActions`로 구분한다. 두 모드 모두 `liveReady=false`, `executionAllowed=false`, `approvalCreated=false`를 확인한다. 입력 오류는 JSON 보고서 생성 전에 거부될 수 있다.
 
 ```sh
 pnpm harness migration-check --config /absolute/path/to/private-migration/migration-check.json
