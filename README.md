@@ -602,7 +602,7 @@ native Codex 실행 파일을 지정하지 않을 때는 [부분 진단 템플�
 
 `company-readonly-*`는 회사 정책에 따라 선택한 파일의 로컬 검토 자료를 준비하는 별도 경로입니다. 현재 단계에서는 합성 저장소로만 검증하며, 실제 회사 자료를 읽기 전 회사의 읽기·보관 허용 범위를 확인해야 합니다. 기존 개인용 승인이나 오프라인 장비 진단 통과로 이를 대신하지 않습니다. 검증 집계와 남은 범위는 [4-C-15 결과](docs/stage-4c15-result.md)를 따릅니다.
 
-큰 Git pack의 제한에 걸리는 경우를 위한 [검토용 사본 설계](docs/company-evidence-copy-design.md)와 [4-C-16 합성 검증](docs/stage-4c16-result.md)을 추가했습니다. 같은 commit의 선택 경로를 담은 작은 사본을 기존 판독기로 검증하는 실험이며, 실제 사본 생성 기능·새 CLI는 없습니다. 기존 `pnpm test:company`에 이 실험을 포함합니다.
+큰 Git pack의 제한에 걸리는 경우를 위한 [검토용 사본 설계](docs/company-evidence-copy-design.md)와 [4-C-16 합성 검증](docs/stage-4c16-result.md)을 보존합니다. 같은 commit의 선택 경로를 담은 작은 사본을 검증한 실험이며 `pnpm test:company`에 포함됩니다. 사본 생성 기능은 개발하지 않고, 원본 레포를 직접 조사하는 [회사 Git 선택 읽기 설계](docs/company-git-range-reader-design.md)로 방향을 전환했습니다. 새 판독기·한도·CLI는 아직 구현하지 않았으며 현재 명령의 지원 범위는 그대로입니다.
 
 [정책 예제](config/company-readonly-policy.example.json)는 `unconfirmed`와 미정 보관 기간으로 차단된 상태입니다. 정책 파일을 저장소 밖의 소유자 전용 `0700` 디렉터리에 `company-readonly-policy.json`이라는 이름의 `0600` 파일로 준비합니다. 회사의 실제 결정에 맞춰 읽기·보관 확인, 비밀값 없는 정책 참조 식별자, 본문 보관 시간(1~24시간)·감사 보관 기간(1~30일)을 기록합니다. `enabled:false`는 계속 유지하며 실제 전송을 활성화하는 옵션이 아닙니다. 이 설정은 운영자가 확인한 정책의 선언이며 하네스가 회사 승인을 인증했다는 뜻은 아닙니다. 미확인 조건은 등록 파일이나 대상 경로를 읽기 전에 거부합니다.
 

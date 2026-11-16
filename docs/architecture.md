@@ -353,6 +353,10 @@ CLI는 private 설정·경로 분리 확인 후 최소 환경의 Node 권한 wor
 
 이 단계는 기존 회사 source port를 바꾸지 않고, 같은 commit·선택 경로의 원본 tree/blob을 가진 작은 사본을 검증하는 test-only 실험이다. fixture가 생성한 합성 객체만 사용하며 실제 exporter나 새 명령은 없다. 사본의 `sourceRoot`·파일/Git identity를 관찰하며 원본의 현재 상태와 구분한다. 원본 tree metadata·선택 원문 보관과 실제 추출의 남은 범위는 [사본 설계](company-evidence-copy-design.md), 검증 집계는 [4-C-16 결과](stage-4c16-result.md)를 따른다.
 
+### 단계 4-C-17의 회사 Git 선택 읽기 설계 — 미구현
+
+후속 방향은 원본 레포의 직접 조사이며 사본 생성기는 개발하지 않는다. 새 회사 전용 판독기는 작은 index 전체와 필요한 pack 구간·delta 의존 객체만 읽고, 최초 읽기와 최종 재검증이 하나의 자원 예산을 공유하도록 설계한다. 구형 `inspect/collect/guard`를 겹쳐 호출하지 않고 두 content pass 사이에서 순수 safe-view 변환을 수행한다. 기존 v1은 유지하며 실패 시 자동 전환하지 않는다. 전체 pack checksum을 검증하지 않는 차이, 새 proof/profile과 구체적인 자원 후보·합성 수용 조건은 [선택 읽기 설계](company-git-range-reader-design.md)를 따른다. 이 문서는 새 명령이나 실제 회사 조사 성공을 뜻하지 않는다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.
