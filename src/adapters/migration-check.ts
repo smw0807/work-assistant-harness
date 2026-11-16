@@ -16,9 +16,10 @@ const contains = (root: string, path: string): boolean => {
   return difference === '' || difference !== '..' && !difference.startsWith(`..${sep}`) && !isAbsolute(difference);
 };
 const sameIdentity = (left: BigIntStats, right: BigIntStats): boolean => left.dev === right.dev && left.ino === right.ino
-  && left.mode === right.mode && left.uid === right.uid && left.nlink === right.nlink;
+  && left.mode === right.mode && left.uid === right.uid && left.gid === right.gid;
+// A directory's link count changes with its children; regular-file links must remain unchanged.
 const unchangedFile = (left: BigIntStats, right: BigIntStats): boolean => sameIdentity(left, right)
-  && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+  && left.nlink === right.nlink && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 type DirectoryObservation = { path: string; metadata: BigIntStats };
 
 /** Directory metadata only: never enumerate or open the contents of a prospective runtime directory. */

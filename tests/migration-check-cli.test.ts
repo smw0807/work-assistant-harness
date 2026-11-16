@@ -85,7 +85,7 @@ globalThis.fetch=async()=>{audit.network++;deny();};
 syncBuiltinESMExports();
 process.on('exit',()=>process.stderr.write('${auditPrefix}'+JSON.stringify(audit)+'\\n'));
 `, { mode: 0o600 });
-  const execute = (args: string[], pnpm: string | null = 'pnpm/12.18.0 npm/? node/v26.12.1') => spawnSync(process.execPath, [
+  const execute = (args: string[], pnpm: string | null = 'pnpm/12.16.1 npm/? node/v26.12.1') => spawnSync(process.execPath, [
     '--permission', '--allow-fs-read=*', '--import', preload, resolve('dist/src/cli/main.js'), ...args,
   ], { encoding: 'utf8', timeout: 15_000, maxBuffer: 1024 * 1024,
     env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', TZ: 'UTC', HOME: home,
@@ -123,7 +123,8 @@ test('migration CLI missing pnpm declaration skips all resource probes with no a
   const report = JSON.parse(result.stdout) as MigrationCheckReport;
   assert.equal(report.status, 'blocked'); assert.equal(report.mode, 'offline');
   assert.equal(report.liveReady, false); assert.equal(report.executionAllowed, false); assert.equal(report.approvalCreated, false);
-  assert.equal(report.checks.find(item => item.id === 'pnpmLauncher')?.status, 'not_run');
+  assert.deepEqual(report.checks.find(item => item.id === 'pnpmLauncher'),
+    { id: 'pnpmLauncher', status: 'not_run', reason: 'PNPM_DECLARATION_UNAVAILABLE' });
   for (const id of ['pathSeparation', 'sandboxExecutable', 'nativeBinary', 'runtimeDirectory']) {
     assert.equal(report.checks.find(item => item.id === id)?.status, 'not_run');
   }
@@ -134,6 +135,23 @@ test('migration CLI missing pnpm declaration skips all resource probes with no a
   assert.deepEqual(await snapshot(cli.root), before);
 });
 
+test('migration CLI rejects another package manager declaration before resource access', async t => {
+  const cli = await prepare(t), before = await snapshot(cli.root);
+  const launcher = 'npm/12.16.1 SYNTHETIC_LAUNCHER_INPUT';
+  const result = cli.execute(cli.command, launcher), audit = cli.inspect(result);
+  assert.equal(result.status, 1); assert.deepEqual(audit, { ...expectedIdle, configOpens: 1 });
+  const report = JSON.parse(result.stdout) as MigrationCheckReport;
+  assert.equal(report.status, 'blocked');
+  assert.deepEqual(report.checks.find(item => item.id === 'pnpmLauncher'),
+    { id: 'pnpmLauncher', status: 'failed', reason: 'PNPM_DECLARATION_INVALID' });
+  assert.equal(report.environment.pnpmLauncherVersion, null);
+  assert.equal(result.stdout.includes('SYNTHETIC_LAUNCHER_INPUT'), false);
+  for (const id of ['pathSeparation', 'sandboxExecutable', 'nativeBinary', 'runtimeDirectory']) {
+    assert.deepEqual(report.checks.find(item => item.id === id), { id, status: 'not_run', reason: 'PREREQUISITE_FAILED' });
+  }
+  assert.deepEqual(await snapshot(cli.root), before);
+});
+
 test('migration CLI valid launcher with missing native returns bounded blocked report without creating runtime state', async t => {
   const cli = await prepare(t), before = await snapshot(cli.root);
   const result = cli.execute(cli.command), audit = cli.inspect(result);
@@ -141,11 +159,16 @@ test('migration CLI valid launcher with missing native returns bounded blocked r
   assert.deepEqual({ ...audit, resourceMetadata: 0 }, { ...expectedIdle, configOpens: 1 });
   const report = JSON.parse(result.stdout) as MigrationCheckReport;
   assert.equal(report.status, 'blocked'); assert.equal(report.liveReady, false);
-  assert.equal(report.checks.find(item => item.id === 'pnpmLauncher')?.status, 'passed');
+  assert.deepEqual(report.checks.find(item => item.id === 'pnpmLauncher'),
+    { id: 'pnpmLauncher', status: 'passed', reason: 'PNPM_DECLARATION_PRESENT' });
+  assert.equal(report.environment.pnpmLauncherVersion, '12.16.1');
+  assert.equal(report.environment.pnpmEvidence, 'unverified_launcher_metadata');
+  assert.equal(report.expected.pnpm, 'installed-pnpm');
   if (process.platform === 'darwin' && process.arch === 'arm64' && process.getuid) {
     assert.ok(audit.resourceMetadata > 0);
     assert.deepEqual(report.checks.find(item => item.id === 'nativeBinary'), { id: 'nativeBinary', status: 'failed', reason: 'MISSING' });
-    assert.equal(report.checks.find(item => item.id === 'runtimeDirectory')?.status, 'passed');
+    assert.deepEqual(report.checks.find(item => item.id === 'runtimeDirectory'),
+      { id: 'runtimeDirectory', status: 'passed', reason: 'DIRECTORY_METADATA_PRIVATE' });
   } else {
     assert.equal(audit.resourceMetadata, 0);
     assert.equal(report.checks.find(item => item.id === 'nativeBinary')?.status, 'not_run');

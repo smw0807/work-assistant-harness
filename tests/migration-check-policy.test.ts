@@ -14,7 +14,7 @@ const config: MigrationCheckConfig = { version: MIGRATION_CHECK_VERSION, relay: 
   policyVersion: 'readonly-relay-codex-v3', codexPath: '/synthetic/native/codex', codexSha256: MIGRATION_CODEX_SHA256,
   model: 'gpt-6.1-sol', authMode: 'chatgpt', timeoutMs: 125000, maxResponseBytes: 16384 }, runtimeDirectory: '/synthetic/private-runtime' };
 const host: MigrationHostObservation = { platform: 'darwin', arch: 'arm64', nodeVersion: '26.12.1', uid: 501,
-  pnpmUserAgent: 'pnpm/12.18.0 npm/? node/v26.12.1 darwin arm64' };
+  pnpmUserAgent: 'pnpm/12.16.1 npm/? node/v26.12.1 darwin arm64' };
 const fakePort = (hostValue: MigrationHostObservation = host) => {
   const calls: string[] = [];
   const port: MigrationCheckPort = {
@@ -77,9 +77,42 @@ test('migration runtime comparison has exact semver boundaries and treats pnpm o
   for (const value of ['26.12.0', '26.11.99', '25.99.99', '27.0.0', 'v26.12.1', '26.12.1-rc.1', '026.12.1', '26.12', '26.12.1\n']) {
     assert.equal(migrationNodeSupported(value), false);
   }
-  assert.equal(migrationPnpmDeclaration(host.pnpmUserAgent), '12.18.0');
+  assert.equal(migrationPnpmDeclaration(host.pnpmUserAgent), '12.16.1');
   assert.equal(migrationPnpmDeclaration('pnpm/12.18.1'), '12.18.1');
   for (const value of [null, '', 'npm/12.18.0', 'pnpm/12.18.0\nsynthetic', 'x'.repeat(513)]) assert.equal(migrationPnpmDeclaration(value), null);
+});
+
+test('migration records valid pnpm declarations without a version pin or a compatibility claim', async () => {
+  for (const version of ['12.16.1', '12.18.0', '12.18.1', '10.29.3', '13.0.0']) {
+    const f = fakePort({ ...host, pnpmUserAgent: `pnpm/${version} npm/? node/v26.12.1` });
+    const result = await new MigrationCheckService(f.port).check(config);
+    assert.equal(result.status, 'passed');
+    assert.deepEqual(result.checks.find(item => item.id === 'pnpmLauncher'),
+      { id: 'pnpmLauncher', status: 'passed', reason: 'PNPM_DECLARATION_PRESENT' });
+    assert.equal(result.environment.pnpmLauncherVersion, version);
+    assert.equal(result.environment.pnpmEvidence, 'unverified_launcher_metadata');
+    assert.equal(result.expected.pnpm, 'installed-pnpm');
+    assert.deepEqual(f.calls, ['host', 'paths', 'sandbox', 'binary', 'directory']);
+    assert.deepEqual([result.liveReady, result.executionAllowed, result.approvalCreated], [false, false, false]);
+  }
+});
+
+test('missing and invalid pnpm declarations block resource probes without exposing launcher input', async () => {
+  for (const pnpmUserAgent of [null, '', 'npm/12.16.1', 'yarn/4.0.0', 'pnpm/012.16.1', 'pnpm/12.16',
+    'pnpm/12.16.1-rc.1', 'pnpm/12.16.1\nSYNTHETIC_LAUNCHER_INPUT', 'x'.repeat(513)]) {
+    const f = fakePort({ ...host, pnpmUserAgent });
+    const result = await new MigrationCheckService(f.port).check(config);
+    assert.equal(result.status, 'blocked');
+    assert.deepEqual(result.checks.find(item => item.id === 'pnpmLauncher'), { id: 'pnpmLauncher',
+      status: pnpmUserAgent === null ? 'not_run' : 'failed',
+      reason: pnpmUserAgent === null ? 'PNPM_DECLARATION_UNAVAILABLE' : 'PNPM_DECLARATION_INVALID' });
+    assert.equal(result.environment.pnpmLauncherVersion, null);
+    assert.deepEqual(f.calls, ['host']);
+    for (const id of ['pathSeparation', 'sandboxExecutable', 'nativeBinary', 'runtimeDirectory']) {
+      assert.deepEqual(result.checks.find(item => item.id === id), { id, status: 'not_run', reason: 'PREREQUISITE_FAILED' });
+    }
+    assert.equal(JSON.stringify(result).includes('SYNTHETIC_LAUNCHER_INPUT'), false);
+  }
 });
 
 test('successful migration checks disclose every unrun capability and preserve contract hashes without leaking paths', async () => {
@@ -114,8 +147,7 @@ test('legacy v2 diagnostics retain the previous profile and 55-second/2048-frame
 
 for (const [name, override] of [
   ['unsupported OS', { platform: 'linux' }], ['unsupported CPU', { arch: 'x64' }], ['unsupported Node', { nodeVersion: '27.0.0' }],
-  ['missing owner identity', { uid: null }], ['missing pnpm declaration', { pnpmUserAgent: null }],
-  ['wrong pnpm declaration', { pnpmUserAgent: 'pnpm/12.17.0' }],
+  ['missing owner identity', { uid: null }],
 ] as const) test(`migration skips all filesystem probes for ${name}`, async () => {
   const f = fakePort({ ...host, ...override }); const result = await new MigrationCheckService(f.port).check(config);
   assert.equal(result.status, 'blocked'); assert.deepEqual(f.calls, ['host']);

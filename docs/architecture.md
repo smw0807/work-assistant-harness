@@ -337,6 +337,8 @@ reader는 원본 Git blob과 worktree를 대조한 뒤 원문 전체 검사를 �
 
 새 명령은 기본 data directory나 SQLite lease/store를 만들지 않는다. 호스트 사전 조건 실패는 파일 probe를 건너뛰고 `blocked`로 끝난다. 실제 바이너리 실행·sandbox 실증·인증·회사 자료·네트워크·회사 승인·쓰기 성공은 `not_run`이다. stdout의 정해진 상태·이유·hash는 권한 토큰이 아니며 `liveReady`, `executionAllowed`, `approvalCreated`는 항상 false다. pnpm 실행기가 제공한 버전 문자열은 설치 파일 identity의 증명이 아니다. [이전 가이드](migration-guide.md)와 [검증 결과](stage-4c14-result.md)를 따른다.
 
+pnpm은 설치된 실행기의 정상 선언을 확인하고 관찰 버전을 기록하며 특정 버전 일치는 요구하지 않는다. 누락·잘못된 선언의 후속 접근 차단은 유지한다. 디렉터리 identity는 장치·inode·유형/권한·소유자/그룹으로 비교하며, 하위 디렉터리 수에 따라 달라지는 `nlink`는 경로 교체 판정에 사용하지 않는다. 일반 파일의 단일 링크와 읽기 전후 링크 수 검사는 계속 적용한다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.

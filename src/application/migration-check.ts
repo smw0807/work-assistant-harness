@@ -1,5 +1,5 @@
 import { MIGRATION_CHECK_VERSION, MIGRATION_CODEX_SHA256, MIGRATION_CODEX_VERSION, MIGRATION_NODE_RANGE,
-  MIGRATION_PNPM_VERSION, MIGRATION_PROBE_REASONS, type MigrationCheckConfig, type MigrationCheckId,
+  MIGRATION_PNPM_POLICY, MIGRATION_PROBE_REASONS, type MigrationCheckConfig, type MigrationCheckId,
   type MigrationCheckItem, type MigrationCheckReport, type MigrationHostObservation, type MigrationProbeObservation } from '../domain/migration-check.js';
 import type { MigrationCheckPort } from '../ports/migration-check.js';
 import { hashMigrationCheckConfig, migrationNodeSupported, migrationPnpmDeclaration, parseMigrationCheckConfig } from '../policy/migration-check.js';
@@ -55,11 +55,11 @@ export class MigrationCheckService {
       { id: 'configuration', status: 'passed', reason: 'CONFIG_VALID_DISABLED' },
       { id: 'host', status: hostSupported ? 'passed' : 'failed', reason: hostSupported ? 'HOST_SUPPORTED' : 'HOST_UNSUPPORTED' },
       { id: 'node', status: nodeSupported ? 'passed' : 'failed', reason: nodeSupported ? 'NODE_SUPPORTED' : 'NODE_UNSUPPORTED' },
-      { id: 'pnpmLauncher', status: host.pnpmUserAgent === null ? 'not_run' : pnpm === MIGRATION_PNPM_VERSION ? 'passed' : 'failed',
-        reason: host.pnpmUserAgent === null ? 'PNPM_DECLARATION_UNAVAILABLE' : pnpm === MIGRATION_PNPM_VERSION ? 'PNPM_DECLARATION_MATCH' : 'PNPM_DECLARATION_MISMATCH' },
+      { id: 'pnpmLauncher', status: host.pnpmUserAgent === null ? 'not_run' : pnpm !== null ? 'passed' : 'failed',
+        reason: host.pnpmUserAgent === null ? 'PNPM_DECLARATION_UNAVAILABLE' : pnpm !== null ? 'PNPM_DECLARATION_PRESENT' : 'PNPM_DECLARATION_INVALID' },
       { id: 'owner', status: ownerAvailable ? 'passed' : 'failed', reason: ownerAvailable ? 'UID_AVAILABLE' : 'UID_UNAVAILABLE' },
     ];
-    const prerequisite = hostSupported && nodeSupported && ownerAvailable && pnpm === MIGRATION_PNPM_VERSION;
+    const prerequisite = hostSupported && nodeSupported && ownerAvailable && pnpm !== null;
     const paths = prerequisite ? await probe('pathSeparation', () => this.port.inspectPaths(config), 'PATHS_SEPARATE')
       : { id: 'pathSeparation' as const, status: 'not_run' as const, reason: 'PREREQUISITE_FAILED' as const };
     checks.push(paths);
@@ -79,7 +79,7 @@ export class MigrationCheckService {
       environment: { platform: host.platform === 'darwin' ? 'darwin' : 'unsupported', arch: host.arch === 'arm64' ? 'arm64' : 'unsupported',
         nodeVersion: /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(host.nodeVersion) ? host.nodeVersion : null,
         pnpmLauncherVersion: pnpm, pnpmEvidence: 'unverified_launcher_metadata' },
-      expected: { node: MIGRATION_NODE_RANGE, pnpm: MIGRATION_PNPM_VERSION, codexVersion: MIGRATION_CODEX_VERSION, codexSha256: MIGRATION_CODEX_SHA256 },
+      expected: { node: MIGRATION_NODE_RANGE, pnpm: MIGRATION_PNPM_POLICY, codexVersion: MIGRATION_CODEX_VERSION, codexSha256: MIGRATION_CODEX_SHA256 },
       contracts: { diagnosticConfigHash: hashMigrationCheckConfig(config), relayPolicyVersion: config.relay.policyVersion, profileId,
         relayConfigHash: getAnyReadonlyRelayConfigHash(profileId, config.relay), connectionProfileHash: getAnyReadonlyRelayProfileHash(profileId, config.relay),
         executionBudget: { ...budget }, executionBudgetHash: hashReadonlyValue(canonicalReadonlyJson(budget)),

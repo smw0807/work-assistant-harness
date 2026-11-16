@@ -6,7 +6,7 @@ export const MIGRATION_CHECK_VERSION = 'offline-migration-check-v1' as const;
 export const MIGRATION_CODEX_VERSION = '0.154.0' as const;
 export const MIGRATION_CODEX_SHA256 = '4f85982624b3898c8991cb80c0981b2aa71070e3537046c9a95950318a95afcc' as const;
 export const MIGRATION_NODE_RANGE = '>=26.12.1 <27' as const;
-export const MIGRATION_PNPM_VERSION = '12.18.0' as const;
+export const MIGRATION_PNPM_POLICY = 'installed-pnpm' as const;
 
 export interface MigrationCheckConfig {
   version: typeof MIGRATION_CHECK_VERSION;
@@ -32,7 +32,7 @@ export type MigrationCheckId = 'configuration' | 'host' | 'node' | 'pnpmLauncher
   | 'credentialAccess' | 'modelCall' | 'companyApproval' | 'companySource' | 'network'
   | 'nativeVersionExecution' | 'sandboxRuntime' | 'storageWriteProbe';
 export type MigrationCheckReason = MigrationProbeReason | 'CONFIG_VALID_DISABLED' | 'HOST_SUPPORTED' | 'HOST_UNSUPPORTED'
-  | 'NODE_SUPPORTED' | 'NODE_UNSUPPORTED' | 'PNPM_DECLARATION_MATCH' | 'PNPM_DECLARATION_MISMATCH'
+  | 'NODE_SUPPORTED' | 'NODE_UNSUPPORTED' | 'PNPM_DECLARATION_PRESENT' | 'PNPM_DECLARATION_INVALID'
   | 'PNPM_DECLARATION_UNAVAILABLE' | 'UID_AVAILABLE' | 'UID_UNAVAILABLE' | 'PREREQUISITE_FAILED' | 'OUTSIDE_OFFLINE_SCOPE';
 export interface MigrationCheckItem {
   id: MigrationCheckId;
@@ -54,7 +54,7 @@ export interface MigrationCheckReport {
     pnpmLauncherVersion: string | null;
     pnpmEvidence: 'unverified_launcher_metadata';
   };
-  expected: { node: typeof MIGRATION_NODE_RANGE; pnpm: typeof MIGRATION_PNPM_VERSION;
+  expected: { node: typeof MIGRATION_NODE_RANGE; pnpm: typeof MIGRATION_PNPM_POLICY;
     codexVersion: typeof MIGRATION_CODEX_VERSION; codexSha256: typeof MIGRATION_CODEX_SHA256 };
   contracts: {
     diagnosticConfigHash: string;

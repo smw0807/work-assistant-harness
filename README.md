@@ -34,7 +34,7 @@ metadata 정적 진단은 기존 v9 수용 조건·오류 코드·hash를 유지
 
 ## 설치와 실행
 
-검증 환경은 macOS, Node.js **26.12.1**, pnpm **12.18.0**입니다. `.node-version`, `packageManager`, 직접 의존성 버전과 `pnpm-lock.yaml`을 고정했습니다. 다른 OS는 아직 검증하지 않았습니다.
+런타임은 macOS ARM64, Node.js **>=26.12.1 <27**이며 패키지 매니저는 **이미 설치된 pnpm**을 사용합니다. pnpm의 특정 버전으로 자동 전환하거나 설치하지 않습니다. `.node-version`, 직접 의존성 버전과 의존성 lockfile은 유지하며, `packageManager`·`engines.pnpm`과 lockfile의 pnpm 실행기 고정 항목은 사용하지 않습니다. pnpm 버전별 호환성은 실제 실행한 검증 결과로 판단하며 모든 버전의 호환성을 보장하지 않습니다. 다른 OS는 아직 검증하지 않았습니다.
 
 ```sh
 pnpm install --frozen-lockfile --ignore-scripts
@@ -683,5 +683,7 @@ pnpm build
 ```
 
 `test`는 컴파일 후 Node 내장 test runner로 단위·통합·CLI 수용 테스트를 실행합니다. 합성 저장소는 별도 임시 경로에 준비합니다. 하네스 테스트가 통과해도 실제 Slack 권한·회사 보안·격리 실행기의 검증을 통과한 것은 아닙니다.
+
+`pnpm test:migration`은 컴파일 후 이전 점검의 정책·파일 adapter·CLI 합성 검사만 실행합니다. 실제 native Codex나 `sandbox-exec`를 실행하지 않으며, 지정한 실제 바이너리에 대한 정적 준비 점검을 대신하지 않습니다.
 
 전체 기준은 [구현 계획](docs/implementation-plan.md), [구조](docs/architecture.md), [보안과 승인](docs/security-and-approval.md)에 있고, 구현·검증 경계는 [단계 1](docs/stage-1-result.md), [단계 2](docs/stage-2-result.md), [단계 3-A](docs/stage-3a-result.md), [단계 3-B](docs/stage-3b-result.md), [단계 3-C](docs/stage-3c-result.md), [단계 3-D](docs/stage-3d-result.md), [단계 4-A](docs/stage-4a-result.md), [단계 4-B-1 결과](docs/stage-4b1-result.md), [단계 4-B-2 결과](docs/stage-4b2-result.md), [단계 4-C-1 결과](docs/stage-4c1-result.md), [단계 4-C-2 결과](docs/stage-4c2-result.md), [단계 4-C-3 결과](docs/stage-4c3-result.md)에 정리했습니다. 합성 실행·모의 전송·HTTP 계약 진단·합성 Git 작업, 별도 승인된 실제 Slack 단건 시험과 회사 도입 승인을 구분합니다.

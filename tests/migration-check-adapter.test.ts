@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
-  realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+  realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import { LocalMigrationCheck, readMigrationCheckConfiguration } from '../src/adapters/migration-check.js';
 import { MIGRATION_CODEX_SHA256, type MigrationCheckConfig } from '../src/domain/migration-check.js';
 
@@ -21,6 +21,19 @@ const fixture = () => {
   writeFileSync(binary, Buffer.concat([Buffer.from('cffaedfe0c000001', 'hex'), Buffer.alloc(64, 11)]), { mode: 0o500 });
   const port = new LocalMigrationCheck(file, join(directory, 'harness'));
   return { directory, file, runtime, binary, config, port, close: () => rmSync(directory, { recursive: true, force: true }) };
+};
+
+/** Mutate after capturing the initial metadata, without timers or other test processes. */
+const afterFirstMetadataRead = async (context: TestContext, path: string, mutate: () => void, inspect: () => Promise<void>): Promise<void> => {
+  const original = fsPromises.lstat; let mutated = false;
+  const stat = context.mock.method(fsPromises, 'lstat', async (...args: Parameters<typeof original>) => {
+    const metadata = await original(...args);
+    if (args[0] === path && !mutated) { mutated = true; mutate(); }
+    return metadata;
+  });
+  syncBuiltinESMExports();
+  try { await inspect(); assert.equal(mutated, true); }
+  finally { stat.mock.restore(); syncBuiltinESMExports(); }
 };
 
 test('private diagnostic config read preserves bytes, mode and directory entries', async () => {
@@ -97,6 +110,79 @@ test('runtime inspection is metadata-only and creates no database or probe files
     const alias = join(h.directory, 'alias'); symlinkSync(h.runtime, alias);
     assert.deepEqual(await h.port.inspectRuntimeDirectory(alias), { status: 'failed', reason: 'UNSAFE_DIRECTORY' });
   } finally { open.mock.restore(); syncBuiltinESMExports(); h.close(); }
+});
+
+test('unrelated child-directory creation does not change config, native or runtime identity', async context => {
+  for (const probe of ['config', 'native', 'runtime-parent', 'runtime'] as const) {
+    const h = fixture(), observed = probe === 'runtime' ? h.runtime : h.directory;
+    try {
+      await afterFirstMetadataRead(context, observed, () => mkdirSync(join(observed, 'unrelated-child'), { mode: 0o700 }), async () => {
+        if (probe === 'config') assert.deepEqual(await readMigrationCheckConfiguration(h.file), h.config);
+        else if (probe === 'native') {
+          assert.deepEqual(await h.port.inspectBinary(h.config.relay), { status: 'failed', reason: 'PIN_MISMATCH' });
+        } else assert.deepEqual(await h.port.inspectRuntimeDirectory(h.runtime), { status: 'passed', reason: 'DIRECTORY_METADATA_PRIVATE' });
+      });
+    } finally { h.close(); }
+  }
+});
+
+test('runtime still rejects parent or final directory replacement, symlinks and permission changes during inspection', async context => {
+  for (const target of ['parent', 'runtime'] as const) {
+    for (const mutation of ['replacement', 'symlink', 'permissions'] as const) {
+      const h = fixture(), parent = join(h.directory, 'observed-parent'), runtime = join(parent, 'runtime');
+      mkdirSync(parent, { mode: 0o700 }); mkdirSync(runtime, { mode: 0o700 });
+      const observed = target === 'parent' ? parent : runtime, previous = join(h.directory, 'original-directory');
+      try {
+        await afterFirstMetadataRead(context, observed, () => {
+          if (mutation === 'permissions') { chmodSync(observed, 0o755); return; }
+          renameSync(observed, previous);
+          if (mutation === 'symlink') { symlinkSync(previous, observed); return; }
+          mkdirSync(observed, { mode: 0o700 });
+          if (target === 'parent') renameSync(join(previous, 'runtime'), runtime);
+        }, async () => {
+          assert.deepEqual(await h.port.inspectRuntimeDirectory(runtime), { status: 'failed', reason: 'CHANGED_DURING_READ' });
+        });
+      } finally { h.close(); }
+    }
+  }
+});
+
+test('runtime rejects changed owner or group metadata for parents and the final directory', async context => {
+  for (const target of ['parent', 'runtime'] as const) {
+    for (const field of ['uid', 'gid'] as const) {
+      const h = fixture(), original = fsPromises.lstat, observed = target === 'parent' ? h.directory : h.runtime;
+      let reads = 0;
+      const stat = context.mock.method(fsPromises, 'lstat', async (...args: Parameters<typeof original>) => {
+        const metadata = await original(...args);
+        if (args[0] !== observed || ++reads !== 2) return metadata;
+        return Object.assign(Object.create(Object.getPrototypeOf(metadata)) as typeof metadata, metadata,
+          { [field]: BigInt(metadata[field]) + 1n });
+      });
+      syncBuiltinESMExports();
+      try {
+        assert.deepEqual(await h.port.inspectRuntimeDirectory(h.runtime), { status: 'failed', reason: 'CHANGED_DURING_READ' });
+        assert.equal(reads, 2);
+      } finally { stat.mock.restore(); syncBuiltinESMExports(); h.close(); }
+    }
+  }
+});
+
+test('config and native reads reject a hardlink added after the initial file metadata check', async context => {
+  for (const probe of ['config', 'native'] as const) {
+    const h = fixture(), original = fsPromises.open, file = probe === 'config' ? h.file : h.binary;
+    let linked = false;
+    const open = context.mock.method(fsPromises, 'open', async (...args: Parameters<typeof original>) => {
+      const handle = await original(...args);
+      if (args[0] === file) { linkSync(file, join(h.directory, 'new-hardlink')); linked = true; }
+      return handle;
+    });
+    syncBuiltinESMExports();
+    try {
+      if (probe === 'config') await assert.rejects(readMigrationCheckConfiguration(h.file), { code: 'MIGRATION_CHECK_INVALID_CONFIG_FILE' });
+      else assert.deepEqual(await h.port.inspectBinary(h.config.relay), { status: 'failed', reason: 'IDENTITY_MISMATCH' });
+      assert.equal(linked, true);
+    } finally { open.mock.restore(); syncBuiltinESMExports(); h.close(); }
+  }
 });
 
 test('native probe checks fixed pin, executable metadata, Mach-O format and SHA without executing bytes', async () => {
