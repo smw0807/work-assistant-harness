@@ -33,9 +33,11 @@ native 파일을 지정하지 않을 때는 [부분 진단 템플릿](../config/
 
 후속 [검토용 Git 사본 실험](company-evidence-copy-design.md)은 고정 합성 객체로 같은 commit의 작은 사본을 구성하고 기존 판독기로 검사한다. 실제 회사 사본 생성·추출기나 새 명령은 제공하지 않는다. 큰 pack 때문에 거부되더라도 이 실험을 근거로 한도 상향·원본 repack·회사 Git 명령을 자동 실행하지 않는다. 합성 결과는 [4-C-16 결과](stage-4c16-result.md)를 따른다.
 
-이후 방향은 원본 레포의 직접 읽기이며 사본 생성기 개발은 진행하지 않는다. [회사 Git 선택 읽기 설계](company-git-range-reader-design.md)의 1차는 메모리 내 index/header/객체/delta codec·논리 공유 예산·고정 profile/byte proof와 합성 테스트까지 구현했다. FS positioned reader·commit/tree 본문과 작업 index parser·새 등록/준비 v2·DB·CLI·supervisor는 아직 연결하지 않았다. 실제 검사 집계와 남은 범위는 [4-C-17 codec 결과](stage-4c17-codec-result.md)를 따른다.
+이후 방향은 원본 레포의 직접 읽기이며 사본 생성기 개발은 진행하지 않는다. [회사 Git 선택 읽기 설계](company-git-range-reader-design.md)의 1차 codec·공유 예산·고정 profile/byte proof 기록은 [codec 결과](stage-4c17-codec-result.md)에 보존한다. 2차는 commit/tree·작업 index의 순수 parser, 실제 제한된 위치 지정 파일 읽기와 두 pass의 metadata/hash 재검증까지 구현했다. 합성 저장소만 사용하며 실제 회사 자료를 읽지 않았다. 현재 검사 집계와 남은 범위는 [2차 reader 결과](stage-4c17-reader-result.md)를 따른다.
 
-논리 예산은 호출자가 시각·작업·메모리 소유권을 등록하는 경계이며 실제 I/O·OS RSS·시간 종료를 검증한 결과가 아니다. byte proof도 metadata 일관성 검사이고 원본 파일을 관찰했다는 증명이 아니다. 기존 진단·회사 v1 계약과 한도는 유지한다. 이 구현이나 이전 진단 통과를 근거로 새 상한을 기존 명령에 적용하거나 회사 pack을 추가로 읽지 않는다.
+새 `company-git-range-source-v1` 입력은 내부 API이며 회사 등록·승인이나 실행 명령이 아니다. 회사 정책 gate·등록/준비 v2·안전 발췌·DB·CLI·supervisor는 미연결이고 source 결과는 raw 본문 없는 metadata/hash다. 내부 FS 경로가 포함될 수 있으므로 결과 전체를 공유하지 않고 승인된 로컬 위치에 상세 로그를 보관하며 공유 요약에는 집계만 남긴다.
+
+현재 실제 I/O·할당은 기존 고정 profile 예산에 등록하고 단조 시계를 작업 경계에서 검사한다. 객체 cache는 없고 proof 구간의 중복 제거와 별개로 반복 읽기도 예산에 포함한다. 닫힘이 불확정인 FD는 계수를 유지하며 재시도하지 않는다. 30초 강제 종료·128MiB old-space 적용·RSS 측정과 이런 정리 불확정 상황의 worker 종료는 아직 검증하지 않았다. byte proof 단독은 metadata 일관성 검사이며 전체 pack·미조회 객체·출처의 인증이 아니다. 기존 진단·회사 v1 계약·수집 한도/hash·의존성은 유지한다. 이 합성 결과나 이전 진단 통과를 근거로 새 상한을 기존 명령에 적용하거나 회사 pack을 추가로 읽지 않는다.
 
 새 대화에서 아는 범위만 알려주고, 모르는 항목은 `미확인`으로 둔다. 계정명·토큰·사내 URL·회사 코드·저장소 경로를 이 양식에 넣지 않는다.
 

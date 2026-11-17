@@ -1,8 +1,8 @@
 # 회사 원본 저장소의 Git 선택 읽기 설계
 
-2026-11-16. **1차 순수 codec·공유 예산·profile/byte proof를 구현했으며 파일 판독기는 아직 미구현이다.** 회사 레포를 복사하지 않고 지정한 원본 경로에서 읽기 전용 조사를 준비하는 방향으로 전환한다. [4-C-16 사본 실험](stage-4c16-result.md)은 보존하지만 사본 생성기는 더 개발하지 않는다. 조사에는 작업 브랜치가 필요하지 않다. 대상 코드 변경을 위한 브랜치·수정·검사 실행은 이후 별도 범위다.
+2026-11-17. **1차 순수 codec에 이어 2차 commit/tree·작업 index parser, 제한된 위치 지정 파일 읽기와 두 pass의 원본 hash 재검증을 구현했다. 합성 저장소로만 검증하며 회사 준비 명령에는 연결하지 않았다.** 회사 레포를 복사하지 않고 지정한 원본 경로에서 읽기 전용 조사를 준비하는 방향이다. [4-C-16 사본 실험](stage-4c16-result.md)은 보존하지만 사본 생성기는 더 개발하지 않는다. 조사에는 작업 브랜치가 필요하지 않다. 대상 코드 변경을 위한 브랜치·수정·검사 실행은 이후 별도 범위다.
 
-현재 구현은 전달받은 메모리 바이트의 index·pack header·객체·delta 검증, 논리 예산, 고정 profile과 metadata proof 및 합성 테스트다. FS positioned reader·새 등록/준비 v2·DB·CLI·supervisor는 연결하지 않았다. commit/tree 본문과 작업 파일용 Git index parser도 후속 범위다. 회사 자료 접근, 실제 인증·native·모델 호출은 없다. 아래 수치는 1차 profile의 **고정 구현값**이지만 실제 I/O·시간·메모리 성능 검증 전의 설계 기준이며 해당 회사 레포의 호환성 보증이 아니다. 구현·검증 집계와 미검증 범위는 [4-C-17 codec 결과](stage-4c17-codec-result.md)를 따른다.
+현재 순수 parser와 `company-git-range-files.ts`/`company-git-range-source.ts`가 실제 positioned I/O·경로/FD 검사·공유 예산을 연결한다. 내부 source는 metadata와 hash만 반환하며 raw source body나 안전 발췌를 반환하지 않는다. 새 등록/준비 v2·회사 승인 gate·safe-view·DB·CLI·supervisor는 미연결이다. 회사 자료 접근, 실제 인증·native·모델 호출은 없다. 아래 수치는 1차의 **고정 profile을 그대로 적용**하며 해당 회사 레포의 호환성이나 OS 자원 격리를 보증하지 않는다. 1차 기록은 [codec 결과](stage-4c17-codec-result.md), 현재 구현·검증과 미검증 범위는 [2차 reader 결과](stage-4c17-reader-result.md)를 따른다.
 
 ## 1. 바꿔야 하는 이유와 계약
 
@@ -16,27 +16,27 @@
 | pack 객체 수 | 전체 검사 대상 4,096개 이하 | 큰 index의 metadata를 검사하고 필요한 객체·의존 그래프만 복원 |
 | 내용 무결성 | 읽은 pack 전체 checksum과 모든 객체 구조 검사 | 전체 index checksum, 선택 구간 CRC·SHA-256, 선택 객체·의존 객체의 복원 OID 검사 |
 | 미조회 영역 | 읽은 pack 전체를 검사 | pack 전체 checksum·미조회 객체는 `not_checked` |
-| 원본 감시 | 전체 Git 파일 hash와 선택 작업 파일 | 작은 Git 파일 전체 hash, pack metadata·실제 읽은 구간의 proof와 선택 작업 파일 |
+| 원본 감시 | 전체 Git 파일 hash와 선택 작업 파일 | 작은 Git 파일 전체를 덮는 읽기 구간 hash, pack metadata·선택 구간 proof와 작업 파일 hash |
 | 읽기 예산 | 내부 observation마다 새 계수 | 준비 요청 전체에서 공유하는 계수, 재검증도 포함 |
 
-이것은 기존 검증과 동등한 최적화가 아니다. CRC는 손상 탐지용이고 pack trailer와 index에 적힌 checksum 값의 일치는 전체 pack checksum 계산을 대신하지 않는다. 후속 판독기는 commit→tree→선택 blob의 내용 일치를 확인하도록 설계하지만 전체 pack·저장소의 무결성, 작성자/서명/원격 출처의 진위는 보증하지 않는다. 현재 객체 codec의 type/OID 검증만으로 commit/tree 본문의 경로 연결까지 검사한 것으로 표시하지 않는다.
+이것은 기존 검증과 동등한 최적화가 아니다. CRC는 손상 탐지용이고 pack trailer와 index에 적힌 checksum 값의 일치는 전체 pack checksum 계산을 대신하지 않는다. 현재 source는 commit→tree→선택 blob과 작업 파일/index의 일치를 검사하지만 전체 pack·저장소의 무결성, 작성자/서명/원격 출처의 진위는 보증하지 않는다. 순수 객체 codec 단독의 type/OID 검사와 source의 본문·경로 연결 검사는 구분한다.
 
 ## 2. 접근 범위와 지원 형식
 
-아래는 후속 FS 판독기와 회사 준비 연결이 따라야 할 범위다. 현재 순수 codec은 파일을 열거나 대상 경로를 탐색하지 않고 호출자가 전달한 바이트만 처리한다.
+순수 codec/parser는 전달받은 바이트만 처리하고, 별도 FS/source 모듈이 제한된 경로를 읽는다. 현재 내부 source 입력은 `company-git-range-source-v1`의 version·고정 profile hash·원본 경로·기준 commit·선택 경로다. 이 입력은 회사 등록이나 읽기 승인, 일반 사용자가 실행할 CLI가 아니다. 아래 회사 정책·줄 범위·안전 발췌 연결은 후속 준비 v2가 따라야 할 조건이다.
 
-- 입력은 고정 원본 경로·기준 commit·선택 파일/줄이다. 회사 읽기·보관 선언과 새 버전/고정 profile 확인을 대상 metadata 접근보다 먼저 수행한다. 기존에 확인한 정책은 재확인하지 않고 추가되거나 미확인인 범위만 확인한다.
+- 내부 API는 입력 형식·고정 profile·선택 경로 제한을 대상 metadata 접근 전에 확인한다. 후속 회사 준비 입력은 여기에 선택 줄 범위와 회사 읽기·보관 선언을 결합하고, 회사 정책 gate도 대상 접근 전에 통과해야 한다. 기존에 확인한 정책은 재확인하지 않고 추가되거나 미확인인 범위만 확인한다.
 - 읽을 수 있는 내용은 HEAD/해당 ref/필요한 packed-refs, Git index, 제한된 pack index들, 선택 commit·경로의 tree·선택 blob과 **그 복원에 필요한 delta base**다. base는 선택하지 않은 파일이나 과거 내용일 수 있다. 이 부수 접근을 선택 소스 파일 8개 제한과 같은 의미로 설명하지 않는다.
 - SHA-1 OID, 일반 `.git` 디렉터리, index v2, pack v2/v3와 일반 loose 객체를 첫 지원 대상으로 한다. 작업 파일용 Git index는 기존 v2/v3·선택 항목 검증을 유지한다. OFS_DELTA와 같은 pack 안의 REF_DELTA만 허용한다.
 - offset은 32-bit 표만 지원한다. 후보 pack 최대 512MiB에는 충분하다. 64-bit offset 표, 외부 base/thin pack, alternate object store, 별도 worktree의 `.git` 파일, Git config/hooks·원격·자동 fetch·사용자 filter는 지원하지 않는다. 미지원 형식은 명시적 실패로 끝낸다.
 - 원본을 쓰거나 복사/repack하지 않는다. Git CLI·대상 코드 import·설치·테스트·빌드·쉘 실행과 네트워크를 제공하지 않는다. 경로·소유자·단일 링크·부모 identity·비밀 파일 제한은 계속 적용한다.
-- tree와 commit은 검증 중 원문 metadata를 메모리에서 읽으며 delta base에도 민감 내용이 있을 수 있다. raw 객체·pack 구간·전체 index를 보고서/DB/임시 파일에 보관하지 않는다. 선택된 안전 발췌만 기존 수집 정책으로 처리한다.
+- tree와 commit은 검증 중 원문 metadata를 메모리에서 읽으며 delta base에도 민감 내용이 있을 수 있다. raw 객체·pack 구간·전체 index를 보고서/DB/임시 파일에 보관하지 않는다. 현재 source는 선택 파일도 hash·크기·mode·OID만 반환한다. 안전 발췌를 기존 수집 정책으로 처리하는 연결은 후속 범위다.
 
-인증 환경·키체인·명시적인 인증 파일을 열거나 로그인/refresh하는 기능은 없다. 다만 Git 객체에 내장된 민감값을 메모리에서도 전혀 읽지 않는다는 보증은 할 수 없다. 실제 적용 전 이 의존 객체 접근 범위를 기존 회사 자료 허용/인증정보 제외 범위와 대조해야 하며, 이번 문서 설계만으로 새로운 부수 접근을 허용한 것으로 해석하지 않는다.
+인증 환경·키체인·명시적인 인증 파일을 열거나 로그인/refresh하는 기능은 없다. 다만 Git 객체에 내장된 민감값을 메모리에서도 전혀 읽지 않는다는 보증은 할 수 없다. 실제 적용 전 이 의존 객체 접근 범위를 기존 회사 자료 허용/인증정보 제외 범위와 대조해야 하며, 이번 합성 구현만으로 새로운 부수 접근을 허용한 것으로 해석하지 않는다.
 
 ## 3. 고정 자원 profile과 후속 실환경 검증
 
-MiB/KiB는 각각 1,048,576/1,024바이트다. 아래 값은 깊게 불변인 `company-git-range-reader-v1` profile과 hash로 구현했다. 논리 계수와 메모리 내 형식 검증에 적용하며 실제 파일의 크기·I/O, OS 자원과 supervisor 종료 동작을 이미 강제한다는 뜻은 아니다. 후속 판독기는 파일에 적힌 크기를 믿고 먼저 할당하지 않고 모든 제한을 함께 적용해야 한다. 한 항목의 최대값을 허용한다고 다른 항목까지 동시에 최대값으로 처리할 수 있다는 뜻은 아니다.
+MiB/KiB는 각각 1,048,576/1,024바이트다. 아래 값은 깊게 불변인 `company-git-range-reader-v1` profile과 hash다. 2차 판독기는 실제 파일 크기와 I/O 요청·할당을 이 예산에 등록하고, 크기 검사와 예약 뒤 읽는다. OS 자원 상한과 supervisor 종료까지 강제하는 기능은 아니다. 한 항목의 최대값을 허용한다고 다른 항목까지 동시에 최대값으로 처리할 수 있다는 뜻은 아니다.
 
 | 항목 | 1차 profile 상한 | 계수/의미 |
 | --- | ---: | --- |
@@ -56,17 +56,17 @@ MiB/KiB는 각각 1,048,576/1,024바이트다. 아래 값은 깊게 불변인 `c
 | 준비 요청 전체 예약 읽기량 | 64MiB | 최초 조회와 최종 재검증, probe·짧은 읽기·반복 읽기 포함 |
 | 판독기의 읽기 API 요청 | 4,096회 | `fs.read` 등에 대한 판독기 호출 수. OS syscall 수가 아님 |
 | metadata API 요청 | 8,192회 | `lstat/fstat/open/realpath/readdir` 등 명시 목록의 호출 수. `close`는 예산 소진 후에도 수행 |
-| 열린 파일 descriptor | 동시에 32개 | 실패·취소 시 모두 닫음 |
+| 열린 파일 descriptor | 동시에 32개 | 종료 시 닫기를 시도. close 결과가 불확정이면 계수를 유지하고 실패 처리 |
 | 판독기 관리 메모리 | 살아 있는 buffer/typed array 32MiB | 압축/해제 버퍼·index·정렬용 배열·객체 cache 포함 |
-| 복원 객체 cache | 8MiB | 관리 메모리 32MiB 안에 포함, 별도 추가 허용량이 아님 |
-| worker V8 old-space | 128MiB | 전체 JS heap/Buffer/native 메모리/RSS 강제 상한이 아님 |
-| worker RSS | 256MiB 이하를 합성 측정 목표로 사용 | OS 강제 격리/상한을 제공한다고 표시하지 않음 |
-| 준비 wall-clock | 30초 | 부모 supervisor 종료 정책. deadline을 단계마다 연장하지 않음 |
-| 종료 유예 | 250ms | deadline 후 종료 요청, 미종료면 강제 종료하고 종료 확인 전 성공 처리 금지 |
+| 복원 객체 cache | 8MiB | 관리 메모리 안의 상한. 현재 source는 cache를 사용하지 않음 |
+| worker V8 old-space | 128MiB | 후속 worker 설정. 이번 reader의 설정·측정 검증은 미실행 |
+| worker RSS | 256MiB 이하를 합성 측정 목표로 사용 | 이번 RSS 실험은 미실행. OS 강제 격리/상한이 아님 |
+| 준비 wall-clock | 30초 | 현재 실제 단조 시계를 작업 경계에서 검사. 강제 종료 supervisor는 미연결 |
+| 종료 유예 | 250ms | 후속 supervisor 조건. deadline 후 종료·강제 종료 확인은 미검증 |
 
 읽기 요청 전에 요청 길이 전부를 예산에서 차감한다. 짧게 읽거나 실패해도 차감액을 환급하지 않고 실제 반환 바이트도 별도 집계한다. 첫 pass는 32MiB 안에서 끝나야 하며 final pass에 새 64MiB를 주지 않는다. 메모리·출력·횟수도 부수 작업과 재검증에서 공유한다. 관리 메모리 계수는 참조된 backing buffer를 중복 계산하지 않되 cache/view가 참조하면 해제됐다고 계산하지 않는다. GC·zlib 내부 메모리·Node 런타임까지 이 계수로 강제했다고 주장하지 않는다.
 
-현재 `CompanyGitRangeBudget`은 호출자가 제공한 단조 논리 시각과 등록한 작업을 검증한다. 실제 시계를 읽거나 파일 descriptor를 열고 닫지 않는다. 호출자는 모든 I/O·할당을 등록하고, 실제 backing buffer에 맞는 `memoryLease`를 유지하며, 살아 있는 view/cache의 소유권을 정확히 분류해야 한다. 입력 버퍼 자체의 선행 할당도 후속 판독기의 책임이다. codec 내부 복사·반환 버퍼의 예약/해제와 외래·중복 토큰 거부는 미등록 JavaScript 작업이나 OS RSS를 통제하는 기능이 아니다. pass 전환에는 cache lease의 모든 참조 해제를 요구하되 비교에 필요한 일반 출력 버퍼는 유지할 수 있다.
+`CompanyGitRangeBudget` 자체는 호출자가 제공한 단조 시각과 등록한 작업만 검증한다. 현재 source는 기본 `performance.now()`를 I/O·codec 등 작업 경계에서 샘플링하고 files 모듈은 실제 I/O·할당·descriptor를 등록한다. 동기 작업 도중 강제 선점하거나 30초에 프로세스를 종료하지는 않는다. backing buffer의 `memoryLease`를 유지하고 codec 내부 복사·반환 버퍼를 예약/해제하지만, 미등록 JavaScript 작업·GC·zlib 내부 메모리·OS RSS까지 통제하는 기능은 아니다. cache는 사용하지 않으며 매번 객체를 다시 읽고 해제한다. 공유 예산은 반복 읽기와 반복 해제를 모두 계수한다.
 
 index당 131,072개는 32-bit offset 형식에서 `1,072 + 28 × 131,072 = 3,671,088`바이트다. 구조 검증과 파일당/전체 바이트 상한을 모두 검사한다. index 합계 8MiB와 작업 index 8MiB를 두 번 읽으면 32MiB가 들고, 나머지 파일·구간 읽기도 같은 64MiB 예산을 사용한다. delta chain이 32노드 미만이어도 누적 해제 16MiB를 넘으면 거부한다.
 
@@ -74,23 +74,23 @@ index당 131,072개는 32-bit offset 형식에서 `1,072 + 28 × 131,072 = 3,671
 
 ## 4. 최초 읽기와 최종 재검증
 
-기존 회사 v1의 `inspect/collect/assertUnchanged`를 겹쳐 호출하면 내부 guard마다 재읽기와 계수가 중복된다. 새 회사 전용 source session은 정확히 **두 번의 content pass**와 그 사이의 순수 변환으로 구성한다. 현재 예산 상태 전이는 `inspect → verify` 순서만 허용하지만 아래 실제 파일 읽기·재검증·저장 흐름은 아직 연결하지 않았다. 기존 개인 수집기에서는 경로/민감 검사·안전 view 변환과 한도만 재사용하고, 구형 source guard를 새 session 안에 숨겨 호출하지 않는다.
+기존 회사 v1의 `inspect/collect/assertUnchanged`를 겹쳐 호출하면 내부 guard마다 재읽기와 계수가 중복된다. 현재 새 source는 `inspect → verify` 순서의 **두 content pass**를 같은 예산으로 수행하고 관찰 proof hash를 비교한다. v1 source guard를 중첩 호출하지 않는다. 아래 표에서 두 pass의 파일 검증까지 구현했고, 그 사이의 안전 view 변환과 마지막 회사 준비 저장은 후속 연결이다. 기존 수집기의 경로/민감 검사와 한도는 재사용하지만 현재 API에 collect나 raw source body 반환은 없다.
 
 | 단계 | 내용 읽기 | 검증 책임 |
 | --- | --- | --- |
-| 입력 gate | 없음 | 정책 선언·버전/profile·소유자·경로 분리·등록/범위를 고정 |
-| pass 1: inspect | 작은 Git 파일, 모든 후보 index, pack header/trailer, 필요한 객체 구간, 선택 작업 파일 | 아래 형식·내용 검증 후 첫 proof와 source bytes를 메모리에서 고정 |
-| collect | 추가 파일 읽기 없음 | 고정 source bytes로 기존 안전 view/발췌·입력 구성. 외부 callback·실행 없음 |
-| pass 2: final guard | pass 1에서 사용한 작은 파일·index·header/trailer·객체 구간·작업 파일을 새로 읽음 | 새 metadata·CRC/OID·raw hash·source view를 재검증하고 최초 proof와 비교 |
-| 저장 | 추가 원본 내용 읽기 없음 | final guard 완료 후 외부 작업을 끼우지 않고 새 계획/payload를 원자 저장. 저장 확정과 부모에게 결과 전달을 구분 |
+| 내부 입력 gate — 구현 | 없음 | source 입력·고정 profile·선택 경로 검사. 회사 정책/등록/보관 경로 분리는 후속 준비 gate |
+| pass 1: inspect — 구현 | 작은 Git 파일, 모든 후보 index, pack header/trailer, 필요한 객체 구간, 선택 작업 파일 | 형식·내용/실행 비트·작업 index 검증 후 metadata/hash proof만 반환 |
+| collect — 미연결 | 연결 시 추가 파일 읽기 없음 | 안전 view/발췌·입력의 순수 변환을 별도 연결. 현재 source는 원문을 반환/보존하지 않음 |
+| pass 2: verify — 구현 | 작은 파일·index·header/trailer·객체 구간·작업 파일을 새로 읽음 | metadata·CRC/OID·선택 원문 hash를 재검증하고 최초 proof hash와 비교. 안전 view 비교는 미연결 |
+| 저장 — 미연결 | 연결 시 추가 원본 내용 읽기 없음 | final guard 뒤 새 계획/payload 원자 저장. 저장 확정과 부모에게 결과 전달을 구분 |
 
-pass 내부 동일 객체의 cache hit는 I/O를 절약할 수 있지만 두 번째 pass의 새 읽기를 대체하지 않는다. 읽기 전후 같은 FD의 `fstat`, 경로 `lstat`, 부모 identity, HEAD/ref와 index를 확인한다. 전체 후보 목록과 pack/index 짝이 바뀌거나 재압축·교체가 관찰되면 내용 OID가 같아도 실패한다. content pass 마지막에는 경로/부모 metadata와 아직 열린 FD를 다시 대조하고 descriptor를 정리한다. 이미 닫은 FD를 계속 감시했다고 표시하지 않는다.
+현재 cache가 없어 같은 객체도 다시 읽는다. 읽기 전후 같은 FD의 `fstat`, 경로 `lstat`, 부모 identity를 비교하고 각 pass에서 HEAD/ref와 index를 검사한다. 후보 목록과 pack/index 짝이 바뀌거나 재압축·교체가 관찰되면 내용 OID가 같아도 실패한다. content pass 마지막에는 경로/부모 metadata와 아직 열린 FD를 다시 대조하고 descriptor를 정리한다. 이미 닫은 FD를 계속 감시했다고 표시하지 않는다. close 실패는 닫힘을 증명하지 못하므로 FD 계수를 유지하고 같은 descriptor 번호로 close를 재시도하지 않는다. 이런 정리 불확정 상태를 해소할 worker 종료는 후속 supervisor 책임이다.
 
 각 파일의 identity 비교는 여러 파일의 원자적 snapshot을 만들지 않는다. 최종 관찰 이후 변경, 미조회 pack 영역, 악성 동시 사용자·침해된 호스트까지 방어한다고 표시하지 않는다. 지원 신뢰 모델은 기존과 같은 단일 OS 사용자와 신뢰하는 하네스 코드다. 30초 종료 정책도 OS 스케줄링/프로세스 종료의 절대 시간 보장은 아니다.
 
 ## 5. 객체와 index 검증 순서
 
-1차 codec은 전달받은 index/header/span/loose 객체·delta의 바이트 구조와 CRC/OID를 검증한다. 아래 순서에 포함된 실제 파일 metadata 검사·후보 탐색·경로 연결은 후속 FS 판독기의 책임이며, 7번의 commit/tree 본문 및 작업 파일용 index 해석은 아직 구현하지 않았다.
+1차 codec은 전달받은 index/header/span/loose 객체·delta의 바이트 구조와 CRC/OID를 검증한다. 2차 source/files는 이를 실제 파일 metadata 검사·후보 탐색·구간 읽기·경로 연결에 사용한다. `company-git-range-payload.ts`는 commit/tree 본문과 작업 파일용 index v2/v3를 순수 메모리에서 검사한다. source 연결에 필요한 delta apply 함수를 공개했고 pack header와 작업 index magic은 ASCII 변환으로 상위 비트를 무시하지 않고 정확한 바이트로 검사한다. 고정 profile·기존 v1 계약/한도/hash는 변경하지 않는다.
 
 1. 후보 index를 크기/소유권/link/경로 검사를 거쳐 읽는다. v2 magic/version, 정확한 길이, 전체 index checksum, fanout의 단조성 및 각 첫 바이트별 실제 개수, OID의 정렬/중복, offset의 중복·범위를 검사한다. 비어 있지 않은 pack의 최초 offset은 header 다음인 12여야 한다. 지원하지 않는 64-bit 표나 잘못된 정수를 읽기 전에 거부한다. index와 pack의 선언 객체 수도 대조한다.
 2. pack 파일은 크기와 고정 header/trailer만 읽는다. format/version·객체 수·index의 pack checksum 값과 trailer 값의 일치를 검사한다. 전체 pack checksum을 계산한 것으로 기록하지 않는다. 파일 이름의 hash도 출처 인증으로 사용하지 않는다.
@@ -100,6 +100,8 @@ pass 내부 동일 객체의 cache hit는 I/O를 절약할 수 있지만 두 번
 6. delta의 source/target 길이, copy offset/길이, insert 길이와 결과 크기를 적용 전에 검사하고 opcode 0을 거부한다. 공통 예산에 부수 base·반복 해제·재구성 출력을 모두 포함한다. 최종 type과 OID를 확인하며 base만 검증하고 결과를 신뢰하지 않는다.
 7. 기준 commit OID부터 각 선택 경로의 원본 tree와 blob을 따라간다. 필요한 tree의 정확한 형식·이름/유형·경로 연결을 검사하고 선택 작업 파일 원문/실행 비트 및 Git index 선택 항목과 대조한다. untracked/staged/dirty 상태를 전체 저장소 단위로 판정하지 않는다.
 
+commit parser는 tree/author/committer의 필수 구조·중복과 parent OID를 검사하고 선택 tree OID만 반환한다. 선택에 쓰지 않는 multiline 서명 metadata는 자료로만 처리한다. tree는 선택 항목 뒤까지 모든 항목의 mode·UTF-8 이름·Git 정렬·중복·경로 안전성을 검사하며 선택된 symlink/gitlink는 source에서 거부한다. 작업 index는 전체 SHA-1·v2/v3 구조·항목 수·이름 바이트 길이·padding·선택 항목의 stage 0/extended flag 부재/OID/mode와 optional extension의 경계를 검사한다. optional extension 본문은 근거로 사용하지 않으며 작성자·서명 인증은 하지 않는다.
+
 loose 객체는 index OID 대신 파생한 파일명 OID와 대조한다. 압축 파일 크기 8MiB 상한, 정확한 `type size\0` header, 선언/실제 내용 길이 1MiB 상한, zlib EOF와 전체 압축 바이트의 정확한 소비량을 검사한다. header에는 별도 128바이트 상한을 두고 해제 출력/메모리 합계에도 포함한다. header와 내용을 재구성한 SHA-1이 파일명 OID와 같아야 하며 전체 압축 파일의 SHA-256과 identity도 proof에 기록한다. 공통 예산을 그대로 사용하고 pack 실패를 loose 재시도로 감추지 않는다.
 
 ## 6. 새 증거 형식과 비활성 연결
@@ -108,24 +110,26 @@ loose 객체는 index OID 대신 파생한 파일명 OID와 대조한다. 압축
 
 후속 연결의 후보 이름은 `company-readonly-registration-v2`, `company-readonly-preparation-v2`다. 현재 등록 parser나 CLI가 이를 수용한다는 뜻은 아니다. 기존 v1 실패 시 새 방식으로 자동 전환하지 않고, 사용자에게 검토 가능한 새 준비 입력/계획에서 명시적으로 선택한다. 기존 승인/계획/DB를 자동 변환하거나 재사용하지 않는다.
 
-후속 repository proof는 작은 파일의 전체 hash와 pack의 부분 관찰을 별도 타입으로 둔다. pack 기록에는 identity/size, index hash, header/trailer 관찰, `(offset, length, sha256)` 구간 목록과 `(type, OID, base dependency)`를 결합한다. 기존 `gitEntries.hash`에 부분 hash를 넣지 않는다. proof에는 `integrityScope: selected-object-chain`, `packChecksum: not_checked`, `unvisitedObjects: not_checked`, profile hash와 실제 자원 계수를 포함한다. 현재 byte proof를 파일 identity와 실제 자원 관찰까지 갖춘 repository proof로 설명하지 않는다. 전체 raw 객체나 전체 tree metadata는 저장하지 않는다.
+현재 내부 source 결과는 `company-git-range-source-observation-v1`이다. 파일/부모 identity와 존재하지 않던 경로·pack 목록·실제 읽은 `(offset, length, sha256)` 구간, pack metadata/byte proof, loose 객체 hash, 선택 파일 hash/크기/mode/OID를 관찰 hash로 결합한다. `integrityScope: selected-object-chain`, `packChecksum: not_checked`, `unvisitedObjects: not_checked`와 profile hash를 명시한다. 실제 자원 계수는 별도 budget snapshot으로 확인한다. 같은 파일의 같은 offset/length는 proof에서 중복 제거하지만 I/O 예산은 반복 호출도 모두 차감한다. 기존 `gitEntries.hash`에 부분 hash를 넣지 않고 전체 raw 객체나 전체 tree 목록을 반환/저장하지 않는다.
+
+이 결과는 회사 준비용 plan/payload proof나 외부 출처 인증이 아니다. 내부 FS metadata에는 경로가 포함되므로 그대로 일반 출력이나 공유 요약으로 내보내지 않는다. byte proof 단독은 여전히 전달된 metadata 일관성만 확인하며, 파일 관찰은 source/files의 별도 책임이다.
 
 등록·profile·proof·안전 view·입력·기간을 새 plan hash에 결합하고 private payload 검증에도 같은 버전을 요구한다. 저장 경로는 기존 v1 DB와 분리하는 것을 첫 구현 기준으로 한다. 기존 정책의 읽기/보관 선언, 기본 비활성, `AWAITING_APPROVAL`, 승인 생성·전송·실행 권한 false, `companyPolicyVerified:false`와 보관 상한은 유지한다. 이 설계로 회사용 approve/run이나 모델 연결을 추가하지 않는다.
 
 실패는 형식/미지원, 자원 초과, 원본 변화, 민감 검사 등 고정 분류와 집계로 남긴다. 원본 경로·파일명·원시 예외·commit/tree/base 본문은 일반 출력에 넣지 않는다. 예산 초과/timeout/원본 변화에는 자동 재시도나 확대 읽기가 없다. 종료 시 descriptor·메모리 cache를 정리하며 raw 디스크 cache는 만들지 않는다.
 
-supervisor는 시작 전에 준비 ID를 정하고 내용 없는 비공개 실행 기록에 남긴다. final guard 이전 실패는 계획/payload를 만들지 않는다. 반면 DB commit 직후 결과 전달 전에 timeout/프로세스 종료가 일어나면 저장이 완료됐을 수 있으므로 결과는 `unknown`으로 기록한다. 이를 성공이나 payload 부재로 단정하거나 새 ID로 재시도하지 않는다. 명시적 상태 확인에서 같은 ID의 소유자·새 버전/profile·plan/payload hash·기한을 검증해 저장된 `AWAITING_APPROVAL/CANCELLED/EXPIRED` 또는 부재/손상을 구분한다. 취소/만료에 따른 payload 부재와 DB 손상을 혼동하지 않는다. 부재 확인도 자동 재실행 권한이 아니다. 유효하게 저장됐어도 전송/실행 권한은 false이며 원본의 현재 상태를 다시 조사한 결과는 아니다.
+아래 supervisor·DB 경쟁 처리는 미구현인 후속 계약이다. supervisor는 시작 전에 준비 ID를 정하고 내용 없는 비공개 실행 기록에 남긴다. final guard 이전 실패는 계획/payload를 만들지 않는다. 반면 DB commit 직후 결과 전달 전에 timeout/프로세스 종료가 일어나면 저장이 완료됐을 수 있으므로 결과는 `unknown`으로 기록한다. 이를 성공이나 payload 부재로 단정하거나 새 ID로 재시도하지 않는다. 명시적 상태 확인에서 같은 ID의 소유자·새 버전/profile·plan/payload hash·기한을 검증해 저장된 `AWAITING_APPROVAL/CANCELLED/EXPIRED` 또는 부재/손상을 구분한다. 취소/만료에 따른 payload 부재와 DB 손상을 혼동하지 않는다. 부재 확인도 자동 재실행 권한이 아니다. 유효하게 저장됐어도 전송/실행 권한은 false이며 원본의 현재 상태를 다시 조사한 결과는 아니다.
 
-실행 환경은 최소 상속 환경과 runtime 밖 쓰기·네트워크·추가 child 거부를 유지한다. 현재 Node 권한 모델의 부모 metadata 재검증 때문에 읽기 권한 자체가 넓게 열려 있다면 실제 경로·구간 제한은 신뢰하는 판독기 코드가 강제한다는 사실을 명시한다. 이를 OS 읽기 격리나 악성 코드 sandbox로 설명하지 않는다.
+후속 준비 worker는 최소 상속 환경과 runtime 밖 쓰기·네트워크·추가 child 거부를 유지해야 한다. 이번 source 검증은 고정 파일 판독기 코드와 합성 I/O의 검증이며 worker 권한 정책을 통합한 검증은 아니다. Node 권한 모델의 부모 metadata 재검증 때문에 읽기 권한 자체가 넓게 열려 있다면 실제 경로·구간 제한은 신뢰하는 판독기 코드가 강제한다는 사실을 명시한다. 이를 OS 읽기 격리나 악성 코드 sandbox로 설명하지 않는다.
 
 ## 7. 구현 순서와 합성 수용 기준
 
-1. **순수 codec와 예산 — 1차 구현:** index/pack header/span/loose/delta 검증, 한 요청의 공유 계수와 새 byte proof/profile 및 합성 테스트를 추가했다. 고정 합성 바이트만 사용하며 대상 파일을 열지 않는다. commit/tree 본문·작업 파일용 index 해석은 다음 구현 범위에 남는다.
-2. **합성 positioned reader — 미구현:** 필요한 본문 parser를 갖춘 뒤 테스트가 만든 큰 pack을 FD의 위치 지정 읽기로 처리하고 실제 읽은 구간/바이트·메모리·시간을 관찰한다. 전체 pack read나 구형 라이브러리 fallback이 없는지 검사한다.
-3. **회사 준비 v2 연결 — 미구현:** source session의 두 pass, 기존 safe-view, 새 계획/전용 보관과 부모 supervisor를 연결한다. 구형 계약과 테스트 결과가 달라지지 않는지 회귀를 수행한다.
+1. **순수 codec와 예산 — 1차 구현:** index/pack header/span/loose/delta 검증, 한 요청의 공유 계수와 byte proof/profile 및 합성 테스트를 추가했다. 고정 합성 바이트만 사용했고 당시에는 대상 파일을 열지 않았다. 당시 검사 결과는 보존한다.
+2. **본문 parser와 합성 positioned reader — 2차 구현:** commit/tree·작업 index parser, 제한된 FD 위치 지정 읽기와 실제 작업 계수, 두 pass의 source proof hash 재검증을 연결했다. 합성 큰 pack에서 필요한 구간만 읽으며 전체 pack 읽기나 구형 라이브러리 fallback은 없다. 실제 회사 접근·OS RSS 실험·강제 시간 종료 검증은 포함하지 않는다.
+3. **회사 준비 v2 연결 — 미구현:** 회사 정책/새 등록 gate, 두 pass 사이의 기존 safe-view, 새 계획/전용 보관·CLI와 부모 supervisor를 연결한다. 구형 계약과 테스트 결과가 달라지지 않는지 회귀를 수행한다.
 4. **원본 읽기 전용 적용 — 미실행:** 합성 검증을 마친 구체 구현·profile과 회사에 이미 확인된 범위를 대조한 후 지정된 원본/질문으로 새 준비를 실행한다. 구현 전 회사 pack을 추가로 읽거나 지원 성공을 추정하지 않는다.
 
-전체 기능의 필수 수용 기준은 다음과 같다. 1차에 해당하는 메모리 내 codec·논리 예산·byte proof의 합성 검사를 추가했으며 실제 결과는 [codec 결과](stage-4c17-codec-result.md)에 구분해 기록한다. FS guard·supervisor·회사 준비 연결을 포함하는 각 항목 전체가 충족됐다는 뜻은 아니다. 기존 4-C-16의 통과 결과도 대신 쓰지 않는다.
+전체 기능의 필수 수용 기준은 다음과 같다. 1차 순수 검사는 [codec 결과](stage-4c17-codec-result.md), 2차 parser·실제 파일 I/O/guard의 합성 검사와 미검증 범위는 [reader 결과](stage-4c17-reader-result.md)에 구분해 기록한다. supervisor·회사 준비 연결을 포함하는 각 항목 전체가 충족됐다는 뜻은 아니다. 기존 4-C-16의 통과 결과도 대신 쓰지 않는다.
 
 | ID | 확인할 내용 |
 | --- | --- |
@@ -134,16 +138,16 @@ supervisor는 시작 전에 준비 ID를 정하고 내용 없는 비공개 실�
 | R3 | index checksum·fanout·OID 순서/중복·offset 중복/범위·개수·길이·미지원64-bit·pack header/trailer 불일치, loose header/길이/파일명 OID·zlib 소비량 불일치 거부 |
 | R4 | 선택 span CRC·OID·zlib 소비량·type/길이·cutoff 변조 거부. 미조회 span 손상은 전체 pack 검증 성공으로 표시하지 않고 선택 영역 검증의 한계를 드러내는 대조 사례 포함 |
 | R5 | 정상 OFS/REF chain, base/결과 OID 위조, 외부 base·cycle·copy 범위·폭탄·깊이/해제량 초과 거부. 비선택 base 본문이 로그/DB/근거에 남지 않음 |
-| R6 | 모든 예산의 경계/경계+1, 짧은 read/실패 차감, collect와 final guard의 계수 공유, cache hit 뒤 final reread, 개별 상한 안이어도 합계 초과 거부 |
+| R6 | 모든 예산의 경계/경계+1, 짧은 read/실패 차감, collect와 final guard의 계수 공유, 개별 상한 안이어도 합계 초과 거부. 현재 cache 없음; 후속 cache 도입 시 hit 뒤에도 final reread 확인 |
 | R7 | HEAD/ref/index/선택 원문·안전 view와 FD/경로/부모·pack/index 목록의 변경, rename·symlink/hardlink·동시 repack 거부. 성공 전후 합성 원본 파일/Git 동일 |
 | R8 | guard 이전 실패의 계획/payload 0, commit 전후·결과 전달 전 종료 경쟁의 `unknown` 처리와 같은 ID 상태 확인, 자동 재실행 0 및 자원 정리. 관리 버퍼 한도와 old-space 설정, RSS 측정 목표·종료 지연 관찰을 각각 기록 |
-| R9 | runtime 밖 쓰기·추가 child·네트워크·인증 환경/키체인/명시적 인증파일 접근·login/refresh/native/model 호출 0. Git 의존 객체의 내장 민감값 부수 접근과 구분. inspect는 집계만 반환하고 raw pack/tree/base 디스크 보관 0 |
+| R9 | runtime 밖 쓰기·추가 child·네트워크·인증 환경/키체인/명시적 인증파일 접근·login/refresh/native/model 호출 0. Git 의존 객체의 내장 민감값 부수 접근과 구분. 내부 source는 metadata/hash만 반환하고 공유 요약은 집계만 제공. raw pack/tree/base 디스크 보관 0 |
 | R10 | 기존 lint/typecheck/회사 집중/전체 회귀 통과. 설치된 pnpm 유지. 미지원 형식과 미조회 전체 pack 보증 부재를 결과/문서에 표시 |
 
-실제 파일 판독기 지원 판단은 고정 profile 아래에서 후속 I/O·자원·통합 합성 테스트를 실행한 뒤 내려야 한다. 한도나 보증 범위 변경이 필요하면 실패 근거와 변경안을 먼저 기록하고 profile 버전을 갱신한다. 숫자만 높여 기존 계획을 통과시키지 않는다.
+회사 적용 판단은 현재 합성 I/O/guard 결과에 더해 회사 준비·자원·supervisor 통합 검증을 마친 뒤 내려야 한다. 한도나 보증 범위 변경이 필요하면 실패 근거와 변경안을 먼저 기록하고 profile 버전을 갱신한다. 숫자만 높여 기존 계획을 통과시키지 않는다.
 
-## 8. 1차 구현과 남은 검증
+## 8. 구현 기록과 남은 검증
 
-설계 기준은 기존 판독기·회사 준비 service/정책·설치된 `isomorphic-git` 1.44.12 구현이다. 1차에는 별도 domain/policy codec과 합성 테스트를 추가하고 기존 판독기·등록·CLI·DB·수집 profile/hash·상한·의존성·lockfile은 유지한다. 실제 검사 결과와 미실행 사유는 [4-C-17 codec 결과](stage-4c17-codec-result.md)에 기록하고 상세 로그는 허용된 비공개 로컬 위치에 보관한다.
+설계 기준은 기존 판독기·회사 준비 service/정책·설치된 `isomorphic-git` 1.44.12 구현이다. 1차 domain/policy codec의 기록은 [4-C-17 codec 결과](stage-4c17-codec-result.md)에 보존한다. 2차는 별도 payload parser·files/source 모듈과 합성 테스트를 추가하며 기존 판독기·등록·CLI·DB·수집 profile/hash·상한·의존성·lockfile은 유지한다. 실제 검사 결과와 미실행 사유는 [4-C-17 reader 결과](stage-4c17-reader-result.md)에 기록하고 상세 로그는 허용된 비공개 로컬 위치에 보관한다.
 
-실제 positioned I/O, FS provenance와 두 pass의 원본 재검증, OS RSS/실시간 enforcement, supervisor와 저장 경쟁, 회사 준비 v2·회사 적용은 아직 검증하지 않았다. 다음 최소 구현은 commit/tree 본문·작업 파일용 index parser와 합성 positioned reader이며 실제 회사 자료 접근은 포함하지 않는다. 메모리 내 codec 검사를 원본 회사 저장소의 기존 호환성 문제 해결이나 조사 성공으로 표시하지 않는다.
+실제 positioned I/O와 두 pass의 재검증은 합성 저장소에 한해 구현했다. 다음 최소 구현은 회사 정책/등록 v2 gate와 safe-view·계획/전용 보관·CLI를 이 source 경계에 연결하고 supervisor를 갖추는 작업이다. 30초 강제 종료, 128MiB old-space 적용, RSS 측정·저장 경쟁과 회사 적용은 아직 검증하지 않았다. 현재 합성 결과를 원본 회사 저장소의 호환성 문제 해결이나 조사 성공으로 표시하지 않는다.

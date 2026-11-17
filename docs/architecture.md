@@ -353,13 +353,15 @@ CLI는 private 설정·경로 분리 확인 후 최소 환경의 Node 권한 wor
 
 이 단계는 기존 회사 source port를 바꾸지 않고, 같은 commit·선택 경로의 원본 tree/blob을 가진 작은 사본을 검증하는 test-only 실험이다. fixture가 생성한 합성 객체만 사용하며 실제 exporter나 새 명령은 없다. 사본의 `sourceRoot`·파일/Git identity를 관찰하며 원본의 현재 상태와 구분한다. 원본 tree metadata·선택 원문 보관과 실제 추출의 남은 범위는 [사본 설계](company-evidence-copy-design.md), 검증 집계는 [4-C-16 결과](stage-4c16-result.md)를 따른다.
 
-### 단계 4-C-17의 회사 Git 선택 읽기 — 메모리 기반 핵심 구현
+### 단계 4-C-17의 회사 Git 선택 읽기 — 합성 파일 판독기까지 구현
 
 후속 방향은 원본 레포의 직접 조사이며 사본 생성기는 개발하지 않는다. 새 회사 전용 판독기는 작은 index 전체와 필요한 pack 구간·delta 의존 객체만 읽고, 최초 읽기와 최종 재검증이 하나의 자원 예산을 공유하도록 설계한다. 구형 `inspect/collect/guard`를 겹쳐 호출하지 않고 두 content pass 사이에서 순수 safe-view 변환을 수행한다. 기존 v1은 유지하며 실패 시 자동 전환하지 않는다. 전체 pack checksum을 검증하지 않는 차이, 새 proof/profile과 구체적인 자원 한도·합성 수용 조건은 [선택 읽기 설계](company-git-range-reader-design.md)를 따른다.
 
 1차 구현은 `company-git-range` domain과 policy의 budget·index·object-codec·proof 모듈이다. 파일 경로 대신 호출자가 전달한 바이트를 받아 index v2, pack header/trailer, 선택 객체 CRC/OID, loose 객체와 같은 pack의 delta 의존 관계를 검증한다. 공통 budget은 두 pass의 읽기 예약·압축 해제·복원·관리 buffer를 논리적으로 계수한다. Byte proof parser는 metadata 정합성만 검사하며 파일 관찰이나 출처를 인증하지 않는다. [합성 검증 결과와 한계](stage-4c17-codec-result.md)를 따른다.
 
-실제 positioned read, 경로/FD guard, commit/tree payload와 working index 해석, 새 등록/준비 v2, DB와 CLI 연결, 부모 supervisor는 후속 범위다. 현재 source port와 application 흐름은 새 모듈을 호출하지 않는다. 관리 buffer 계수는 호출자의 소유권 등록을 전제하며 프로세스 RSS 제한이나 실제 경과 시간 강제를 대신하지 않는다.
+2차는 `company-git-range-payload`의 commit/tree/작업 index 해석, `company-git-range-files`의 위치 지정 읽기와 경로/FD/부모 검증, `company-git-range-source`의 두 content pass를 연결했다. 내부 `company-git-range-source-v1` 요청은 선택 경로·기준 commit·고정 profile을 받으며 기존 등록 형식과 구분한다. 선택 파일을 commit→tree→blob 및 작업 index와 대조하고, 새 읽기로 관찰한 파일 identity·구간 hash·객체 proof가 처음과 같아야 완료한다. 원문 본문 대신 metadata/hash만 반환하고 cache는 사용하지 않는다. [2차 합성 검증](stage-4c17-reader-result.md)에 실제 I/O 집계와 보증 범위를 기록한다.
+
+새 회사 정책 gate·등록/준비 v2, safe-view 수집, DB·CLI와 부모 supervisor는 후속 범위다. 현재 source port와 application 흐름은 새 모듈을 호출하지 않는다. 관리 buffer 계수는 호출자의 소유권 등록을 전제하며 프로세스 RSS 제한을 대신하지 않는다. 작업 경계에서 실제 단조 시각을 검사하지만 동기 I/O나 압축 해제를 강제 중단하지 않는다. close 성공을 확인하지 못한 FD는 계수를 유지하고 준비를 실패시키며, 같은 번호로 자동 close 재시도하지 않는다.
 
 ## 3. 구성 요소와 책임
 

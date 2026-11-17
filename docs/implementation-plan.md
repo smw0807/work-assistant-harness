@@ -810,12 +810,13 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - 원본 tree metadata와 선택 원문은 사본에 남는다. 사본 sourceRoot와 원본 출처를 구분하고 원본 현재 상태·서명/작성자 진위·전체 이력 보증으로 확대하지 않는다. runtime DB TTL/prune은 사본을 삭제하지 않는다.
 - `pnpm test:company`와 lint·typecheck·기존 회귀를 실행하고 [4-C-16 결과](stage-4c16-result.md)에 실제 집계와 미검증 범위를 남긴다. 이 실험은 완료했으며 후속 사용자 결정에 따라 사본 생성기 개발은 진행하지 않고 4-C-17의 원본 직접 읽기 설계로 전환한다.
 
-##### 단계 4-C-17 회사 원본 Git 선택 읽기 — 1차 순수 codec 구현
+##### 단계 4-C-17 회사 원본 Git 선택 읽기 — 2차 합성 reader/guard 구현
 
-- [선택 읽기 설계](company-git-range-reader-design.md)에 구형 대비 변경 규칙·고정 profile·새 proof·구현 순서와 전체 수용 R1~R10을 둔다. 1차에는 별도 domain/policy의 메모리 내 index/pack header/객체/loose/delta codec, 공유 예산·byte proof와 합성 테스트를 구현했다. 기존 판독기·등록·CLI·DB·계약/상수·의존성·lockfile은 유지한다.
-- 새 회사 전용 판독기의 위치 지정 I/O와 준비 흐름은 아직 연결하지 않았다. 현재 codec은 입력 바이트의 형식·선택 객체/의존 base OID를 검사하며 전체 pack checksum·미조회 객체 검증과 동등하지 않다. commit/tree 본문·작업 파일용 Git index parser, FS source session과 새 등록/준비 v2·보관·supervisor는 후속 범위다. 회사 v1과 개인 경로는 보존하며 자동 fallback하지 않는다.
-- 논리 예산은 `inspect → verify` 두 pass, 전체 읽기 64MiB·해제/재구성 출력 16MiB·관리 buffer32MiB·논리 deadline30초 등의 고정 profile을 공유한다. 호출자가 모든 작업·메모리 소유권·단조 시각을 등록하는 것을 신뢰하며 실제 파일 읽기·OS RSS·실시간 종료를 이미 통제하는 기능이 아니다. byte proof는 metadata 일관성 검사이며 FS provenance 인증이 아니다.
-- 현재 구현에 대한 검사 결과는 [4-C-17 codec 결과](stage-4c17-codec-result.md)에 기록한다. 다음 최소 구현은 commit/tree 본문·작업 index parser와 합성 positioned reader이며 이후 새 회사 준비/보관·supervisor, 지정 원본 적용을 각각 연결한다. R1~R10 전체와 구형 회귀는 해당 단계에서 검증하며 기존 4-C-16 통과나 순수 codec 검사로 실제 회사 호환성 해결을 주장하지 않는다.
+- [선택 읽기 설계](company-git-range-reader-design.md)에 구형 대비 변경 규칙·고정 profile·새 proof·구현 순서와 전체 수용 R1~R10을 둔다. 1차 메모리 내 index/pack header/객체/loose/delta codec·공유 예산·byte proof의 기록은 [codec 결과](stage-4c17-codec-result.md)에 보존한다. 2차에는 commit/tree·작업 Git index v2/v3의 순수 payload parser와 실제 bounded positioned I/O를 수행하는 files/source 모듈 및 합성 검증을 추가했다.
+- source는 기준 commit의 tree/blob과 선택 작업 파일의 내용·실행 비트·index 항목을 대조하고, `inspect → verify` 두 pass에서 파일/부모/FD·후보 pack 목록과 읽은 구간의 proof hash를 재검증한다. 결과는 metadata/hash만 반환하며 raw source body·commit/tree/base 본문은 반환하거나 보관하지 않는다. 전체 pack checksum·미조회 객체 검사는 `not_checked`이고 파일 출처·작성자/서명 인증을 주장하지 않는다.
+- `company-git-range-source-v1`은 version/profile/원본 경로/기준 commit/선택 경로를 검사하는 내부 API다. 회사 승인 gate·등록/준비 v2·safe-view·DB·CLI·supervisor는 미연결이다. 기존 회사/개인 v1은 자동 전환하지 않고 계약·한도·hash·수집 profile·의존성·lockfile을 유지한다. 2차에서는 기존 range codec의 pack magic을 strict byte로 검사하도록 보완하고 delta apply API를 source에서 사용할 수 있게 공개했으며, 새 작업 index parser도 strict byte magic을 검사한다.
+- 두 pass는 기존 고정 profile의 전체 읽기 64MiB·해제/재구성 출력 16MiB·관리 buffer32MiB 등을 공유한다. 실제 I/O 요청과 할당을 등록하고 기본 실제 단조 시계를 작업 경계에서 확인한다. source는 cache를 사용하지 않는다. proof는 같은 offset/length를 중복 제거하지만 예산은 반복 I/O 호출도 모두 차감한다. close가 실패해 닫힘을 확인하지 못하면 FD 계수를 유지하고 같은 descriptor 번호로 재시도하지 않으며, 해소를 위한 worker 종료는 후속 supervisor 책임이다.
+- 실제 검사 집계와 미실행 범위는 [2차 reader 결과](stage-4c17-reader-result.md)를 따른다. 30초 강제 종료·128MiB old-space 적용·RSS 실험·저장 경쟁은 미검증이다. 다음 최소 구현은 회사 정책/등록 gate와 safe-view·새 준비/보관·CLI·supervisor 연결이다. R1~R10 전체의 완료나 실제 회사 호환성 해결을 현재 합성 결과로 주장하지 않는다.
 - 회사 레포 사본·대상 Git CLI·브랜치 생성·수정/검사 실행·실제 인증/native/model·외부 전송은 이 설계에 포함하지 않는다. 실제 기능 변경용 작업 브랜치는 읽기 조사와 다른 후속 범위다.
 
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.

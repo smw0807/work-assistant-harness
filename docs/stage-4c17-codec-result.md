@@ -53,4 +53,4 @@
 
 Byte proof는 metadata 정합성 검사다. 실제 파일 관찰·회사 승인·출처를 인증하지 않으며 전체 pack checksum과 미조회 객체는 `not_checked`다. 내용 proofHash와 누적 예산 snapshot은 분리돼 있고, 향후 repository proof가 파일 identity·관찰값·예산을 함께 결합해야 한다. 같은 OID 검증도 작성자 진위나 회사 출처의 인증은 아니다.
 
-다음 최소 작업은 합성 파일만 대상으로 한 positioned reader와 경로·FD·부모 identity guard다. 이후 commit/tree payload·working index 해석, 최종 재검증과 TOCTOU 방어, 부모 supervisor, 별도 등록/준비 v2·DB·CLI 연결이 남아 있다. 기존 회사 입력에 새 profile을 사용할 수 없으며 실제 회사 적용 시점은 이 후속 검증 이후다. 설계의 전체 수용 조건 R1~R10을 이번 순수 모듈 테스트로 충족했다고 표시하지 않는다.
+이 1차 결과 시점의 후속 범위는 commit/tree payload·working index 해석과 합성 positioned reader·경로/FD/부모 guard·최종 재검증이었다. 해당 작업의 이후 구현·검증은 [2차 결과](stage-4c17-reader-result.md)를 따른다. 부모 supervisor와 별도 등록/준비 v2·DB·CLI 연결은 계속 남아 있다. 기존 회사 입력에 새 profile을 사용할 수 없으며 실제 회사 적용 시점은 후속 통합 검증 이후다. 설계의 전체 수용 조건 R1~R10을 이번 순수 모듈 테스트로 충족했다고 표시하지 않는다.

@@ -274,6 +274,11 @@ const applyDelta = (value: CompanyGitDecodedObject, baseValue: CompanyGitVerifie
   } finally { if (!transferred) budget.releaseMemory(content.memoryLease); }
 };
 
+/** The positioned reader resolves a same-pack base before applying an issued, still-owned delta. */
+export const applyCompanyGitPackedDelta = (delta: unknown, base: unknown, budget: CompanyGitRangeBudget,
+  nowMs: number): CompanyGitVerifiedObject => run(budget, nowMs, () =>
+  applyDelta(ownedObject(delta, budget, false), ownedObject(base, budget, true) as CompanyGitVerifiedObject, budget));
+
 /**
  * Resolve a bounded in-memory dependency set declared to belong to one pack. No file or callback is consulted.
  * packIdentity must come from the trusted index/reader; neither this value nor these records prove filesystem provenance.

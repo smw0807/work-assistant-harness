@@ -471,7 +471,7 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 원본 OID를 보존하는 실제 사본에는 선택 원문, commit 본문과 비선택 형제 이름을 포함한 tree metadata가 남는다. 마스킹된 검토 payload로 취급하지 않으며 별도 보관/정리 범위를 적용해야 한다. 회사용 DB의 TTL/prune은 사본을 삭제하지 않는다. 실제 공급/추출 방식은 당시 미구현 후속안이었으며 현재 사본 생성기 개발은 중단하고 아래 원본 직접 읽기 설계로 전환했다.
 
-### 회사 Git 선택 읽기의 경계 — 핵심 코드만 구현
+### 회사 Git 선택 읽기의 경계 — 합성 파일 판독기까지 구현
 
 사본 생성기 개발을 중단하고 원본의 직접 읽기를 위한 [새 회사 전용 계약](company-git-range-reader-design.md)을 설계했다. 큰 pack의 물리적 크기와 실제 구간 읽기량은 별도 상한이며 작은 index 전체와 필요한 객체/의존 base를 검증한다. 전체 pack checksum·미조회 객체는 `not_checked`다. CRC와 index/trailer 값의 일치를 전체 무결성이나 출처 인증으로 설명하지 않는다. 비선택/과거 delta base도 복원 과정에서 읽힐 수 있으나 raw 내용은 디스크/근거/로그에 저장하지 않는다.
 
@@ -479,7 +479,11 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 1차 구현은 메모리 기반 byte codec과 공통 논리 예산에 한정한다. 호출자는 모든 I/O·할당·cache 소유권을 등록하고 단조 시간을 공급해야 하며, 출력 buffer나 view를 보유하는 동안 memory lease를 유지해야 한다. 이미 전달된 입력의 할당과 등록하지 않은 JavaScript/native 내부 메모리까지 통제하지 않는다. 새 byte proof는 허용된 metadata 구조·hash·의존 관계의 정합성을 검사할 뿐 실제 파일 관찰·회사 승인·출처를 인증하지 않는다. 두 pass에서 같은 proofHash가 나와도 누적 예산 snapshot은 별도이며, 최종 repository proof에 함께 결합하는 단계는 미구현이다.
 
-실제 파일 판독기·경로/FD 검증·supervisor·기존 명령과의 연결·회사 적용은 미실행이다. 합성 검증 통과는 그 후속 경계를 충족한 것으로 취급하지 않는다. 구현과 검증 범위는 [4-C-17 1차 결과](stage-4c17-codec-result.md)를 따른다.
+1차 기록은 [codec 결과](stage-4c17-codec-result.md)를 따른다. [2차 파일 판독기](stage-4c17-reader-result.md)는 합성 저장소에서 실제 위치 지정 읽기, 경로·FD·부모·부재·pack 목록 대조, commit/tree/작업 index 해석과 두 pass의 새 읽기·proof 비교를 검증했다. symlink·hardlink·비정규 파일·작업 중 교체를 관찰하면 거부하며, pack 전체 읽기나 실패 후 다른 공급원으로의 자동 재시도는 없다. 명시적인 인증·설정 경로는 내용 읽기 전에 차단하고 alternate object store 참조 파일은 metadata로 존재를 확인해 거부한다.
+
+내부 source API의 입력 검증은 회사 승인 gate가 아니다. 기존 회사 명령·등록 v1은 이 판독기를 호출하지 않으며 회사용 v2 등록/준비·safe-view·DB/CLI 연결도 아직 없다. 성공 반환에는 raw commit/tree/base/source 본문이 없고 metadata/hash만 있다. 관찰 결과는 파일 시스템의 원자적 snapshot이나 OS 읽기 격리가 아니며 최종 관찰 후 변경까지 보증하지 않는다. byte proof 단독 parser와 신뢰하는 판독기가 실제 읽기에서 만든 관찰을 구분한다.
+
+공통 예산은 실제 I/O와 buffer 소유권에 연결했다. 구간 proof는 동일 읽기 구간을 중복 제거하지만 예산은 반복 호출을 모두 차감한다. 실제 단조 시각을 작업 경계마다 검사하며 동기 작업을 선점하는 supervisor는 아직 없다. close 오류는 닫힘을 확정할 수 없으므로 FD 계수를 유지하고 실패하며 같은 FD 번호를 다시 닫지 않는다. 불확정 자원 정리는 후속 worker 종료 확인이 필요하다. 강제 30초 종료·128MiB old-space·256MiB RSS 측정 목표·회사 적용은 미검증이다.
 
 ## 7. 회사 자료와 비밀정보
 

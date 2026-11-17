@@ -151,7 +151,7 @@ export const validateCompanyGitRangePackHeader = (header: Uint8Array, trailer: U
     if (!state || state.budget !== budget || state.released) return reject('INVALID_INDEX_HANDLE');
     const first = snapshot(header, 12, budget); leases.push(first.lease);
     const last = snapshot(trailer, 20, budget); leases.push(last.lease);
-    if (first.bytes.length !== 12 || last.bytes.length !== 20 || first.bytes.toString('ascii', 0, 4) !== 'PACK') reject('INVALID_PACK_HEADER');
+    if (first.bytes.length !== 12 || last.bytes.length !== 20 || first.bytes.readUInt32BE(0) !== 0x5041434b) reject('INVALID_PACK_HEADER');
     const version = first.bytes.readUInt32BE(4);
     if (![2, 3].includes(version) || first.bytes.readUInt32BE(8) !== state.summary.objectCount
       || last.bytes.toString('hex') !== state.summary.declaredPackChecksum) reject('INVALID_PACK_HEADER');

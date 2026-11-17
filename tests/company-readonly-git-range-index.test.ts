@@ -97,9 +97,10 @@ test('an oversized unvisited span is not inspected, and selecting it is refused 
 });
 
 test('pack metadata checks header/count/trailer identity without claiming a whole-pack checksum', () => {
-  for (const kind of ['magic', 'version', 'count', 'trailer', 'short', 'cross-budget', 'forged']) {
+  for (const kind of ['magic', 'high-bit-magic', 'version', 'count', 'trailer', 'short', 'cross-budget', 'forged']) {
     const source = fixture(), budget = active(), index = parseCompanyGitRangeIndex(source.bytes, source.packBytes, budget, 1);
     if (kind === 'magic') source.header.write('BACK');
+    if (kind === 'high-bit-magic') source.header[0] = 0xd0;
     if (kind === 'version') source.header.writeUInt32BE(4, 4);
     if (kind === 'count') source.header.writeUInt32BE(4, 8);
     if (kind === 'trailer') source.trailer[0] = source.trailer[0]! ^ 1;
