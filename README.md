@@ -602,7 +602,7 @@ native Codex 실행 파일을 지정하지 않을 때는 [부분 진단 템플�
 
 `company-readonly-*`는 회사 정책에 따라 선택한 파일의 로컬 검토 자료를 준비하는 별도 경로입니다. 현재 단계에서는 합성 저장소로만 검증하며, 실제 회사 자료를 읽기 전 회사의 읽기·보관 허용 범위를 확인해야 합니다. 기존 개인용 승인이나 오프라인 장비 진단 통과로 이를 대신하지 않습니다. 검증 집계와 남은 범위는 [4-C-15 결과](docs/stage-4c15-result.md)를 따릅니다.
 
-큰 Git pack의 제한에 걸리는 경우를 위한 [검토용 사본 설계](docs/company-evidence-copy-design.md)와 [4-C-16 합성 검증](docs/stage-4c16-result.md)을 보존합니다. 사본 생성 기능은 개발하지 않고, 원본 레포를 직접 조사하는 [회사 Git 선택 읽기 설계](docs/company-git-range-reader-design.md)로 방향을 전환했습니다. [1차 핵심 코드](docs/stage-4c17-codec-result.md)에 이어 [2차 파일 판독기](docs/stage-4c17-reader-result.md)는 합성 저장소의 필요한 Git 구간만 읽고, 선택 파일의 기준 commit 일치와 두 번의 관찰 사이 변경을 검증합니다. `pnpm test:company`에 합성 검사가 포함됩니다. 새 판독기는 내부 API이며 회사 정책 gate·새 등록·CLI·보관 흐름과 아직 연결하지 않았습니다. 현재 명령의 지원 범위와 기존 한도는 그대로입니다.
+큰 Git pack의 제한에 걸리는 경우를 위한 [검토용 사본 설계](docs/company-evidence-copy-design.md)와 [4-C-16 합성 검증](docs/stage-4c16-result.md)을 보존합니다. 사본 생성 기능은 개발하지 않고, 원본 레포를 직접 조사하는 [회사 Git 선택 읽기 설계](docs/company-git-range-reader-design.md)로 방향을 전환했습니다. [1차 핵심 코드](docs/stage-4c17-codec-result.md)와 [2차 파일 판독기](docs/stage-4c17-reader-result.md)의 기록은 보존하며, 3차는 별도 회사 준비 v2에 정책 gate·안전 발췌·보관·CLI·부모 supervisor를 연결합니다. [3차 통합 결과](docs/stage-4c17-integration-result.md)에 검사와 미검증 범위를 구분하고 `pnpm test:company`에 합성 검사를 포함합니다. 아래 기존 v1 명령과 한도는 유지하며 실패 시 v2로 자동 전환하지 않습니다.
 
 [정책 예제](config/company-readonly-policy.example.json)는 `unconfirmed`와 미정 보관 기간으로 차단된 상태입니다. 정책 파일을 저장소 밖의 소유자 전용 `0700` 디렉터리에 `company-readonly-policy.json`이라는 이름의 `0600` 파일로 준비합니다. 회사의 실제 결정에 맞춰 읽기·보관 확인, 비밀값 없는 정책 참조 식별자, 본문 보관 시간(1~24시간)·감사 보관 기간(1~30일)을 기록합니다. `enabled:false`는 계속 유지하며 실제 전송을 활성화하는 옵션이 아닙니다. 이 설정은 운영자가 확인한 정책의 선언이며 하네스가 회사 승인을 인증했다는 뜻은 아닙니다. 미확인 조건은 등록 파일이나 대상 경로를 읽기 전에 거부합니다.
 
@@ -621,6 +621,25 @@ pnpm test:company
 준비 결과는 `AWAITING_APPROVAL`이며 승인 생성·전송·실행 권한은 모두 `false`입니다. 회사용 `approve`·`run` 명령은 없습니다. 이 로컬 자료는 모델·목적지·실제 전송 본문이 확정된 실행 승인 계획이 아니므로 후속 전송에 그대로 사용할 수 없습니다. 같은 등록·정책·원본·검토 내용의 재준비는 기존 기록을 반환하며 취소·만료를 되돌리지 않습니다. 취소 시 본문을 제거하고 보관 기한에 따라 inspect/prune 등에서 만료 본문·감사 기록을 정리합니다. 실행 중인 보관 스케줄러나 디스크의 물리적 완전 삭제를 보장하지 않습니다.
 
 수집은 인증 환경을 물려받지 않는 Node 권한 worker에서 수행하고 대상 쓰기·추가 프로세스·네트워크를 허용하지 않습니다. 기존 수집기의 모든 부모 경로 재검증을 유지하기 위해 worker의 파일 읽기 권한은 전체로 열고, 실제 읽을 파일과 크기는 수집기 코드로 제한합니다. 따라서 파일 읽기의 OS 격리나 악성 코드 실행 격리를 제공하지 않습니다. 대상 설치·테스트·빌드·스크립트·Git 명령, native Codex, 실제 인증·모델과 Slack 연결은 이 경로에 포함되지 않습니다.
+
+### 구간 판독기를 사용하는 회사 준비 v2
+
+v2는 아래 별도 명령과 [새 등록 예제](config/company-readonly-registration-v2.example.json)를 사용합니다. 등록 파일 이름은 `company-readonly-registration-v2.json`, `version`은 `company-readonly-registration-v2`이며 `gitProfileHash`가 현재 고정 Git profile hash와 정확히 일치해야 합니다. 나머지는 `repoId`, `sourceRoot`, `baseCommit`, `question`, `readRanges`, `reviewPaths`입니다. 기존 정책 파일의 읽기·보관 선언, 기간과 `enabled:false`는 그대로 사용합니다. 미확인 정책은 등록 파일·대상 metadata보다 먼저 차단하며, 이미 확인한 사항을 반복 승인받지 않습니다. 실제 적용 전에는 선택 파일과 그 복원에 필요한 비선택·과거 delta base 접근이 기존 허용 범위에 포함되는지 추가·미확인 범위만 대조합니다.
+
+```sh
+pnpm harness company-readonly-v2-plan --policy /private/review/company-readonly-policy.json --registration /private/review/company-readonly-registration-v2.json --data-dir /private/review/company-runtime-v2
+pnpm harness company-readonly-v2-inspect --task <uuid> --data-dir /private/review/company-runtime-v2
+pnpm harness company-readonly-v2-cancel --task <uuid> --data-dir /private/review/company-runtime-v2
+pnpm harness company-readonly-v2-prune --data-dir /private/review/company-runtime-v2
+```
+
+설정 파일은 소유자 전용 `0600`, 설정의 부모·runtime과 그 부모는 `0700`이어야 합니다. runtime은 하네스·원본·설정·v1 보관 위치와 분리합니다. v2는 `store/company-readonly-v2.sqlite`에 안전 발췌·검증 metadata를, `runs/`에 본문 없는 시작·결과 기록을 둡니다. 두 하위 디렉터리는 `0700`, 파일은 `0600`이며 worker의 쓰기 권한은 `store/`에만 부여합니다. 시작 기록도 runtime 위치 hash에 결합하므로 DB 생성 전 실패한 기록을 이동·복사한 경우에도 조작을 거부합니다. 대상 원문·전체 안전 view·commit/tree/base 본문은 디스크에 보관하지 않습니다. 같은 공유 예산 안에서 두 번 읽으며 첫 읽기의 선택 원문은 내부 메모리에서만 안전 발췌로 변환한 후 해제합니다. 최종 읽기는 원문 hash와 안전 view를 다시 비교하며 추가 collect 읽기는 없습니다. `AWAITING_APPROVAL`, 승인 생성·전송·실행 false와 기존 수집 한도는 유지합니다.
+
+`plan`은 시작 전에 새 ID를 정하고 `runs/run-<uuid>.json` 및 디렉터리 항목을 fsync한 뒤 worker를 시작합니다. 결과는 별도 `result-<uuid>.json`에 한 번 기록하며 시작 기록을 덮어쓰지 않습니다. 저장 직후 응답 유실·timeout·부모 종료 등으로 결과를 확정하지 못하면 `unknown`입니다. 시작 기록만 있고 결과 기록이 없어도 같은 ID로 `inspect`해 저장된 상태·hash·기한 또는 부재를 확인합니다. 이 조회는 원래 worker의 종료 확인을 대신하지 않습니다. 자동 재시도는 없으며 새로 명시한 `plan`은 새 ID의 작업입니다. 취소·만료된 자료는 재사용으로 되살리지 않습니다.
+
+부모 supervisor는 원래 시작 시각의 30초 기한에 `SIGTERM`, 250ms 뒤에도 종료되지 않으면 `SIGKILL`을 요청하고, child의 `close`를 관찰해야 `exitConfirmed:true`로 표시합니다. 유효 응답만으로 성공 처리하지 않습니다. 이 종료 정책은 부모 생존과 OS 신호 처리에 의존하며, 부모 자체의 강제 종료를 견디는 독립 guardian이나 고아 프로세스 방지를 제공하지 않습니다. worker에는 V8 old-space 128MiB를 설정하지만 관리 Buffer 32MiB 계수 및 RSS 256MiB 합성 측정 목표와는 다릅니다. RSS의 OS 강제 상한을 제공하지 않습니다. 읽기 권한은 부모 metadata 검증 때문에 전체로 열고 실제 읽기는 고정 판독기로 제한하므로 OS 읽기 격리로 설명하지 않습니다.
+
+전체 pack checksum·미조회 객체는 계속 `not_checked`이고, 선택 객체 OID가 맞아도 작성자·서명·회사 출처를 인증하지 않습니다. 3차 구현·검증에는 실제 회사 자료·실제 인증·native·모델·외부 서비스 접근이 없으며 실제 회사 원본 적용과 호환성은 미검증입니다.
 
 ## 모의 입력과 오류 재현
 

@@ -2,7 +2,9 @@ import { resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { types } from 'node:util';
 import { HarnessError } from '../domain/errors.js';
-import type { CompanyGitRangeBudgetSnapshot } from '../domain/company-git-range.js';
+import type { CompanyGitRangeBudgetSnapshot, CompanyGitRangeMemoryLease } from '../domain/company-git-range.js';
+import type { PersonalCollectionEvidence, PersonalSourceView, PersonalSourceViewProof } from '../domain/personal-readonly-collection.js';
+import type { ReadonlyEvidence, ReadonlyRange } from '../domain/readonly-investigation.js';
 import { CompanyGitRangeBudget, getCompanyGitRangeProfile, getCompanyGitRangeProfileHash } from '../policy/company-git-range-budget.js';
 import { parseCompanyGitRangeIndex, validateCompanyGitRangePackHeader,
   type CompanyGitRangeIndex, type CompanyGitRangeIndexEntry, type CompanyGitRangePackMetadata } from '../policy/company-git-range-index.js';
@@ -10,9 +12,9 @@ import { applyCompanyGitPackedDelta, decodeCompanyGitLooseObject, decodeCompanyG
   type CompanyGitDecodedObject, type CompanyGitVerifiedObject } from '../policy/company-git-range-object-codec.js';
 import { assertCompanyGitWorkingIndex, findCompanyGitTreeEntry, parseCompanyGitCommitTree } from '../policy/company-git-range-payload.js';
 import { createCompanyGitRangeByteProof, type CompanyGitRangeByteProof, type CompanyGitRangeObjectProof } from '../policy/company-git-range-proof.js';
-import { getPersonalCollectionProfile } from '../policy/personal-readonly-collection.js';
+import { derivePersonalSourceView, extractPersonalCollectionEvidence, getPersonalCollectionProfile } from '../policy/personal-readonly-collection.js';
 import { assertMigrationPartialRuntimePath } from '../policy/migration-check.js';
-import { canonicalReadonlyJson, hashReadonlyValue } from '../policy/readonly-investigation-policy.js';
+import { canonicalReadonlyJson, hashReadonlyValue, normalizeReadonlyRanges } from '../policy/readonly-investigation-policy.js';
 import { assertCompanyGitRangeSourcePath, createCompanyGitRangeFiles } from './company-git-range-files.js';
 
 const limits = getCompanyGitRangeProfile().limits;
@@ -60,6 +62,15 @@ export interface CompanyGitRangeSource {
   snapshot(): CompanyGitRangeBudgetSnapshot;
   close(): void;
 }
+export interface CompanyGitRangeCollectionSource {
+  inspect(): { observation: CompanyGitRangeSourceObservation; collected: PersonalCollectionEvidence };
+  verify(): { observation: CompanyGitRangeSourceObservation; budget: CompanyGitRangeBudgetSnapshot };
+  snapshot(): CompanyGitRangeBudgetSnapshot;
+  close(): void;
+}
+interface CollectionSelection { readonly repoId: string; readonly readRanges: readonly ReadonlyRange[] }
+interface RetainedSource { readonly bytes: Buffer; readonly memoryLease: CompanyGitRangeMemoryLease }
+interface PassResult { observation: CompanyGitRangeSourceObservation; collected?: PersonalCollectionEvidence }
 
 /** Snapshot data properties before any path observation. No getters or model-supplied capabilities are accepted. */
 const parseRequest = (value: unknown): CompanyGitRangeSourceRequest => {
@@ -89,6 +100,78 @@ const parseRequest = (value: unknown): CompanyGitRangeSourceRequest => {
   } catch { return fail('INVALID_SOURCE_INPUT'); }
 };
 
+const parseCollectionSelection = (value: unknown, request: CompanyGitRangeSourceRequest): CollectionSelection => {
+  const data = (input: unknown, keys: readonly string[]): Record<string, unknown> => {
+    if (!input || typeof input !== 'object' || types.isProxy(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))
+      || Reflect.ownKeys(input).length !== keys.length) return fail('INVALID_SOURCE_INPUT');
+    return Object.fromEntries(keys.map(key => {
+      const property = Object.getOwnPropertyDescriptor(input, key);
+      if (!property?.enumerable || !Object.hasOwn(property, 'value')) return fail('INVALID_SOURCE_INPUT');
+      return [key, property.value];
+    }));
+  };
+  try {
+    const fields = data(value, ['repoId', 'readRanges']), inputRanges = fields.readRanges;
+    if (typeof fields.repoId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/u.test(fields.repoId)
+      || !Array.isArray(inputRanges) || types.isProxy(inputRanges) || Object.getPrototypeOf(inputRanges) !== Array.prototype
+      || inputRanges.length < 1 || inputRanges.length > 1024 || Reflect.ownKeys(inputRanges).length !== inputRanges.length + 1) return fail('INVALID_SOURCE_INPUT');
+    const ranges = Array.from({ length: inputRanges.length }, (_, position) => {
+      const property = Object.getOwnPropertyDescriptor(inputRanges, String(position));
+      if (!property?.enumerable || !Object.hasOwn(property, 'value')) return fail('INVALID_SOURCE_INPUT');
+      const range = data(property.value, ['path', 'startLine', 'endLine']);
+      return { path: assertCompanyGitRangeSourcePath(range.path), startLine: range.startLine as number, endLine: range.endLine as number };
+    });
+    const readRanges = normalizeReadonlyRanges(ranges, [...request.selectedPaths]);
+    if (canonicalReadonlyJson([...new Set(readRanges.map(range => range.path))].sort()) !== canonicalReadonlyJson(request.selectedPaths)) {
+      return fail('INVALID_SOURCE_INPUT');
+    }
+    return Object.freeze({ repoId: fields.repoId, readRanges: Object.freeze(readRanges.map(range => Object.freeze(range))) });
+  } catch { return fail('INVALID_SOURCE_INPUT'); }
+};
+
+const viewProof = (view: PersonalSourceView): PersonalSourceViewProof => Object.freeze({ path: view.path,
+  sourceHash: view.sourceHash, sourceBytes: view.sourceBytes, sourceLines: view.sourceLines, viewHash: view.viewHash,
+  viewBytes: view.viewBytes, viewLines: view.viewLines, rawSensitiveCheck: view.rawSensitiveCheck,
+  viewSensitiveCheck: view.viewSensitiveCheck, maskCount: view.maskCount, maskedLines: view.maskedLines });
+
+/**
+ * Only these fixed pure transforms see retained source bytes. Reserve conservative backing space for the
+ * collector's source/view/extraction Buffer copies, including a possible pool backing and redaction expansion.
+ * Returned excerpts/proofs are bounded JS data, not managed Buffer leases; JS strings/native scratch are not RSS limits.
+ */
+const collectSources = (request: CompanyGitRangeSourceRequest, selection: CollectionSelection,
+  sources: Map<string, RetainedSource>, budget: CompanyGitRangeBudget, now: () => number): PersonalCollectionEvidence => {
+  const evidence = new Array<ReadonlyEvidence>(selection.readRanges.length), sourceViews: PersonalSourceViewProof[] = [];
+  let evidenceBytes = 0;
+  for (const path of request.selectedPaths) {
+    budget.checkActive(now());
+    const source = sources.get(path);
+    if (!source) return fail();
+    budget.assertMemory(source.memoryLease, source.bytes.buffer.byteLength);
+    const poolBytes = Buffer.poolSize;
+    if (!Number.isSafeInteger(poolBytes) || poolBytes < 0) return fail('INVALID_SOURCE');
+    const copies = Math.max(source.bytes.length, poolBytes)
+      // A multiline sensitive span can expand once per nonempty line before the fixed view-size check rejects it.
+      + Math.max(source.bytes.length * '[REDACTED]'.length, poolBytes)
+      + Math.max(collectionLimits.fullViewBytes, poolBytes);
+    const temporary = budget.reserveMemory(copies);
+    try {
+      const view = derivePersonalSourceView(path, source.bytes);
+      sourceViews.push(viewProof(view));
+      for (const [position, range] of selection.readRanges.entries()) {
+        if (range.path !== path) continue;
+        const item = extractPersonalCollectionEvidence(selection.repoId, request.baseCommit, range, view);
+        evidenceBytes += Buffer.byteLength(item.excerpt);
+        if (evidenceBytes > collectionLimits.evidenceBytes) return fail('LIMIT');
+        evidence[position] = Object.freeze(item);
+      }
+      budget.checkActive(now());
+    } finally { budget.releaseMemory(temporary); }
+  }
+  return Object.freeze({ evidence: Object.freeze(evidence) as unknown as ReadonlyEvidence[],
+    sourceViews: Object.freeze(sourceViews) as unknown as PersonalSourceViewProof[] });
+};
+
 interface Pack {
   path: string;
   file: File;
@@ -113,12 +196,12 @@ const readBytes = (file: File, offset: number, length: number, budget: CompanyGi
   } catch (error) { budget.releaseMemory(memoryLease); throw error; }
 };
 const withFileBytes = <T>(files: Files, budget: CompanyGitRangeBudget, path: string, maximum: number,
-  action: (bytes: Buffer, mode: number) => T, optional = false): T | undefined => {
+  action: (bytes: Buffer, mode: number, memoryLease: CompanyGitRangeMemoryLease) => T, optional = false): T | undefined => {
   const file = files.open(path, maximum, optional);
   if (!file) return undefined;
   try {
     const read = readBytes(file, 0, file.size, budget);
-    try { file.close(); return action(read.bytes, file.mode); }
+    try { file.close(); return action(read.bytes, file.mode, read.memoryLease); }
     finally { budget.releaseMemory(read.memoryLease); }
   } finally { file.close(); }
 };
@@ -209,11 +292,11 @@ const loadPacked = (pack: Pack, entry: CompanyGitRangeIndexEntry, budget: Compan
  * Experimental internal reader. Only synthetic fixtures exercise it; no existing source port/CLI selects it.
  * The trusted clock is sampled at I/O/codec boundaries; a synchronous operation is not forcibly preempted here.
  */
-export const createCompanyGitRangeSource = (input: unknown, clock: () => number = () => performance.now()): CompanyGitRangeSource => {
+const createSource = (request: CompanyGitRangeSourceRequest, clock: () => number, collection?: CollectionSelection) => {
   const now = (): number => { try { return clock(); } catch { return fail(); } };
-  const request = parseRequest(input), budget = new CompanyGitRangeBudget(now());
-  let firstProof: string | undefined;
-  const runPass = (pass: 'inspect' | 'verify'): CompanyGitRangeSourceObservation => {
+  const budget = new CompanyGitRangeBudget(now());
+  let firstProof: string | undefined, firstCollectionHash: string | undefined;
+  const runPass = (pass: 'inspect' | 'verify', sources: Map<string, RetainedSource>): CompanyGitRangeSourceObservation => {
     let files: Files | undefined;
     const packs: Pack[] = [];
     try {
@@ -259,9 +342,10 @@ export const createCompanyGitRangeSource = (input: unknown, clock: () => number 
         consume(currentOid, 'blob', object => {
           if (!mode || object.bytes.length > collectionLimits.sourceFileBytes) return fail();
           const selectedMode = mode;
-          withFileBytes(files!, budget, path, collectionLimits.sourceFileBytes, (bytes, fileMode) => {
+          withFileBytes(files!, budget, path, collectionLimits.sourceFileBytes, (bytes, fileMode, memoryLease) => {
             if (!bytes.equals(object.bytes) || Boolean(fileMode & 0o111) !== (selectedMode === '100755')) return fail('SOURCE_CHANGED');
             selectedFiles.push(Object.freeze({ path, oid: currentOid, mode: selectedMode, sha256: hashReadonlyValue(bytes), bytes: bytes.length }));
+            if (collection) sources.set(path, { bytes, memoryLease: budget.retainMemory(memoryLease) });
           });
         });
       }
@@ -286,19 +370,47 @@ export const createCompanyGitRangeSource = (input: unknown, clock: () => number 
       files?.close();
     }
   };
-  const execute = (pass: 'inspect' | 'verify'): CompanyGitRangeSourceObservation => {
+  const execute = (pass: 'inspect' | 'verify'): PassResult => {
+    const sources = new Map<string, RetainedSource>();
     try {
-      const result = runPass(pass);
+      const result = runPass(pass, sources);
       if (pass === 'verify' && result.proofHash !== firstProof) return fail('SOURCE_CHANGED');
-      budget.endPass(now());
-      if (pass === 'inspect') firstProof = result.proofHash;
-      return result;
+      // Ordinary owned source buffers may survive endPass; no cache or file descriptor survives this boundary.
+      if (pass === 'inspect') budget.endPass(now());
+      const collected = collection ? collectSources(request, collection, sources, budget, now) : undefined;
+      if (pass === 'verify' && collected && digest(collected) !== firstCollectionHash) return fail('SOURCE_CHANGED');
+      if (pass === 'verify') budget.endPass(now());
+      if (pass === 'inspect') { firstProof = result.proofHash; firstCollectionHash = collected ? digest(collected) : undefined; }
+      return collected ? { observation: result, collected } : { observation: result };
     } catch (error) {
       budget.abort();
       if (error instanceof HarnessError && /^COMPANY_GIT_RANGE_[A-Z_]+$/u.test(error.code)) throw error;
       return fail();
+    } finally {
+      for (const source of sources.values()) budget.releaseMemory(source.memoryLease);
+      sources.clear();
     }
   };
   return Object.freeze({ inspect: () => execute('inspect'), verify: () => execute('verify'), snapshot: () => budget.snapshot(),
-    close: () => { firstProof = undefined; if (budget.snapshot().phase !== 'complete') budget.abort(); } });
+    close: () => { firstProof = undefined; firstCollectionHash = undefined; if (budget.snapshot().phase !== 'complete') budget.abort(); } });
+};
+
+/** Existing metadata-only reader: it never retains selected source buffers for collection. */
+export const createCompanyGitRangeSource = (input: unknown, clock: () => number = () => performance.now()): CompanyGitRangeSource => {
+  const source = createSource(parseRequest(input), clock);
+  return Object.freeze({ inspect: () => source.inspect().observation, verify: () => source.verify().observation,
+    snapshot: source.snapshot, close: source.close });
+};
+
+/** Fixed safe collection only; no caller callback, raw-buffer return, transport or extra source read is exposed. */
+export const createCompanyGitRangeCollectionSource = (input: unknown, selection: unknown,
+  clock: () => number = () => performance.now()): CompanyGitRangeCollectionSource => {
+  const request = parseRequest(input), collection = parseCollectionSelection(selection, request);
+  const source = createSource(request, clock, collection);
+  return Object.freeze({ inspect: () => {
+    const result = source.inspect();
+    if (!result.collected) return fail();
+    return Object.freeze({ observation: result.observation, collected: result.collected });
+  }, verify: () => Object.freeze({ observation: source.verify().observation, budget: source.snapshot() }),
+  snapshot: source.snapshot, close: source.close });
 };

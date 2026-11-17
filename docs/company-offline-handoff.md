@@ -33,11 +33,15 @@ native 파일을 지정하지 않을 때는 [부분 진단 템플릿](../config/
 
 후속 [검토용 Git 사본 실험](company-evidence-copy-design.md)은 고정 합성 객체로 같은 commit의 작은 사본을 구성하고 기존 판독기로 검사한다. 실제 회사 사본 생성·추출기나 새 명령은 제공하지 않는다. 큰 pack 때문에 거부되더라도 이 실험을 근거로 한도 상향·원본 repack·회사 Git 명령을 자동 실행하지 않는다. 합성 결과는 [4-C-16 결과](stage-4c16-result.md)를 따른다.
 
-이후 방향은 원본 레포의 직접 읽기이며 사본 생성기 개발은 진행하지 않는다. [회사 Git 선택 읽기 설계](company-git-range-reader-design.md)의 1차 codec·공유 예산·고정 profile/byte proof 기록은 [codec 결과](stage-4c17-codec-result.md)에 보존한다. 2차는 commit/tree·작업 index의 순수 parser, 실제 제한된 위치 지정 파일 읽기와 두 pass의 metadata/hash 재검증까지 구현했다. 합성 저장소만 사용하며 실제 회사 자료를 읽지 않았다. 현재 검사 집계와 남은 범위는 [2차 reader 결과](stage-4c17-reader-result.md)를 따른다.
+이후 방향은 원본 레포의 직접 읽기이며 사본 생성기 개발은 진행하지 않는다. [회사 Git 선택 읽기 설계](company-git-range-reader-design.md)의 1차 codec·공유 예산·고정 profile/byte proof 기록은 [codec 결과](stage-4c17-codec-result.md)에, 2차 commit/tree·작업 index parser와 위치 지정 읽기·두 pass 재검증은 [reader 결과](stage-4c17-reader-result.md)에 보존한다. 3차는 별도 회사 준비 v2의 정책/등록 gate·안전 발췌·전용 보관·CLI·supervisor를 연결한다. 합성 자료만 사용하며 3차에서 회사 자료·실제 인증·native·실제 모델·외부 서비스에 접근하지 않는다. 실제 검사와 미검증 항목은 [3차 통합 결과](stage-4c17-integration-result.md)에 기록한다.
 
-새 `company-git-range-source-v1` 입력은 내부 API이며 회사 등록·승인이나 실행 명령이 아니다. 회사 정책 gate·등록/준비 v2·안전 발췌·DB·CLI·supervisor는 미연결이고 source 결과는 raw 본문 없는 metadata/hash다. 내부 FS 경로가 포함될 수 있으므로 결과 전체를 공유하지 않고 승인된 로컬 위치에 상세 로그를 보관하며 공유 요약에는 집계만 남긴다.
+`company-git-range-source-v1`은 계속 metadata/hash만 반환하는 내부 API다. v2 준비는 별도 `company-readonly-registration-v2`와 고정 `gitProfileHash`를 요구하고 `company-readonly-v2-plan/inspect/cancel/prune` 명령을 사용한다. [README의 v2 사용법](../README.md#구간-판독기를-사용하는-회사-준비-v2)에 정확한 설정·명령을 둔다. 기본 미확인 정책은 등록·대상 접근 전에 거부하고 기존 v1 명령·DB·계약은 자동 전환하지 않는다. 선택 원문은 내부 메모리에서 안전 발췌로 바꾼 뒤 해제하며, 최종 pass에서 원문 hash와 발췌를 다시 확인한다. raw 본문이나 내부 FS 경로를 일반 출력에 내보내지 않고 허용된 로컬 위치에 상세 자료를 보관하며 공유 요약에는 집계만 남긴다.
 
-현재 실제 I/O·할당은 기존 고정 profile 예산에 등록하고 단조 시계를 작업 경계에서 검사한다. 객체 cache는 없고 proof 구간의 중복 제거와 별개로 반복 읽기도 예산에 포함한다. 닫힘이 불확정인 FD는 계수를 유지하며 재시도하지 않는다. 30초 강제 종료·128MiB old-space 적용·RSS 측정과 이런 정리 불확정 상황의 worker 종료는 아직 검증하지 않았다. byte proof 단독은 metadata 일관성 검사이며 전체 pack·미조회 객체·출처의 인증이 아니다. 기존 진단·회사 v1 계약·수집 한도/hash·의존성은 유지한다. 이 합성 결과나 이전 진단 통과를 근거로 새 상한을 기존 명령에 적용하거나 회사 pack을 추가로 읽지 않는다.
+실제 I/O·할당은 기존 고정 profile 예산을 공유하며 두 pass의 반복 읽기·해제도 계수한다. v2 부모 supervisor는 30초 기한에 `SIGTERM`, 250ms 유예 뒤 `SIGKILL`을 요청하며 child의 `close`만 종료 확인으로 인정한다. 부모 생존·OS 신호 처리에 의존하고 부모 자체가 강제 종료되면 독립 guardian이나 고아 프로세스 방지는 제공하지 않는다. 닫힘 불확정 FD는 계수를 유지하며 같은 번호로 재시도하지 않는다. worker의 V8 old-space 128MiB 설정, 관리 Buffer 계수와 RSS 256MiB 합성 측정 목표는 서로 다르며 OS RSS 강제 상한이 아니다.
+
+소유자 전용 runtime은 `store/`와 `runs/`로 나누며 부모/디렉터리 `0700`, 파일 `0600`을 요구한다. worker는 `store/`만 쓸 수 있다. 시작 전에 ID와 hash를 별도 시작 기록에 fsync하고 결과를 다른 파일에 한 번 기록한다. 저장 후 응답을 잃거나 부모 종료로 결과 파일이 없으면 `unknown`이며 같은 ID의 `inspect`로 보관 상태·hash·기간을 확인한다. 이 조회는 원래 worker의 종료를 증명하지 않으며 자동 재시도하지 않는다. 새 명시적 `plan`만 새 ID를 만든다.
+
+byte proof 단독은 metadata 일관성 검사이며 전체 pack checksum·미조회 객체는 계속 `not_checked`다. 선택 경로 복원에는 비선택·과거 delta base의 부수 읽기가 있을 수 있다. 실제 회사 적용 전 기존 읽기·보관 승인과 추가·미확인 범위만 대조하며 이미 확인한 정책을 다시 묻지 않는다. 기존 진단·회사 v1·수집 한도/hash·의존성은 유지한다. 이번 합성 통합이나 이전 진단 통과는 실제 회사 원본 적용·호환성 성공 또는 새 자료 접근의 허가가 아니다.
 
 새 대화에서 아는 범위만 알려주고, 모르는 항목은 `미확인`으로 둔다. 계정명·토큰·사내 URL·회사 코드·저장소 경로를 이 양식에 넣지 않는다.
 
