@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { HarnessError } from '../domain/errors.js';
-import { CompanyGitRangeBudget, getCompanyGitRangeProfile } from './company-git-range-budget.js';
+import { getCompanyGitRangeProfile } from './company-git-range-budget.js';
+import type { CompanyGitRangeBudgetOperations } from '../domain/company-git-range-budget-operations.js';
 
 const limits = getCompanyGitRangeProfile().limits;
-type Lease = ReturnType<CompanyGitRangeBudget['reserveMemory']>;
+type Lease = ReturnType<CompanyGitRangeBudgetOperations['reserveMemory']>;
 export interface CompanyGitRangeIndexEntry { readonly oid: string; readonly offset: number; readonly length: number; readonly crc32: number }
 export interface CompanyGitRangeIndexSummary {
   readonly indexSha256: string;
@@ -23,16 +24,16 @@ export interface CompanyGitRangePackMetadata extends CompanyGitRangeIndexSummary
   readonly packChecksum: 'not_checked';
   readonly unvisitedObjects: 'not_checked';
 }
-interface IndexState { budget: CompanyGitRangeBudget; released: boolean; summary: CompanyGitRangeIndexSummary }
+interface IndexState { budget: CompanyGitRangeBudgetOperations; released: boolean; summary: CompanyGitRangeIndexSummary }
 const indexStates = new WeakMap<CompanyGitRangeIndex, IndexState>();
-const candidateCounts = new WeakMap<CompanyGitRangeBudget, number>();
+const candidateCounts = new WeakMap<CompanyGitRangeBudgetOperations, number>();
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
 const nativeGetter = (key: string) => Object.getOwnPropertyDescriptor(typedArrayPrototype, key)!.get!;
 const byteLength = nativeGetter('byteLength'), byteOffset = nativeGetter('byteOffset'), arrayBuffer = nativeGetter('buffer');
 const backingLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')!.get!;
 const resizable = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable')?.get;
 const reject = (code = 'INVALID_INDEX'): never => { throw new HarnessError(`COMPANY_GIT_RANGE_${code}`); };
-const fail = (budget: CompanyGitRangeBudget, error: unknown, code: string): never => {
+const fail = (budget: CompanyGitRangeBudgetOperations, error: unknown, code: string): never => {
   budget.abort();
   if (error instanceof HarnessError && error.code.startsWith('COMPANY_GIT_RANGE_')) throw error;
   return reject(code);
@@ -41,7 +42,7 @@ const integer = (value: unknown, minimum: number, maximum: number): value is num
   Number.isSafeInteger(value) && (value as number) >= minimum && (value as number) <= maximum;
 
 /** Caller-owned input is not an allocation by this codec; the immutable working copy is reserved first. */
-const snapshot = (input: Uint8Array, maximum: number, budget: CompanyGitRangeBudget): { bytes: Buffer; lease: Lease } => {
+const snapshot = (input: Uint8Array, maximum: number, budget: CompanyGitRangeBudgetOperations): { bytes: Buffer; lease: Lease } => {
   if (!ArrayBuffer.isView(input) || ![Uint8Array.prototype, Buffer.prototype].includes(Object.getPrototypeOf(input))) reject('INVALID_BYTES');
   const length = Reflect.apply(byteLength, input, []) as number, offset = Reflect.apply(byteOffset, input, []) as number;
   const backing = Reflect.apply(arrayBuffer, input, []) as ArrayBuffer;
@@ -57,7 +58,7 @@ const snapshot = (input: Uint8Array, maximum: number, budget: CompanyGitRangeBud
 
 /** Pure index-v2 parsing. It never receives a path, opens a file, or validates a whole pack checksum. */
 export const parseCompanyGitRangeIndex = (input: Uint8Array, packBytes: number,
-  budget: CompanyGitRangeBudget, nowMs: number): CompanyGitRangeIndex => {
+  budget: CompanyGitRangeBudgetOperations, nowMs: number): CompanyGitRangeIndex => {
   let inputLease: Lease | undefined, orderLease: Lease | undefined, rankLease: Lease | undefined;
   try {
     budget.setStage('pack_index');
@@ -144,7 +145,7 @@ export const parseCompanyGitRangeIndex = (input: Uint8Array, packBytes: number,
 };
 
 export const validateCompanyGitRangePackHeader = (header: Uint8Array, trailer: Uint8Array, index: CompanyGitRangeIndex,
-  budget: CompanyGitRangeBudget, nowMs: number): CompanyGitRangePackMetadata => {
+  budget: CompanyGitRangeBudgetOperations, nowMs: number): CompanyGitRangePackMetadata => {
   const leases: Lease[] = [];
   try {
     budget.setStage('pack_header');

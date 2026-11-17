@@ -361,7 +361,9 @@ CLI는 private 설정·경로 분리 확인 후 최소 환경의 Node 권한 wor
 
 2차는 `company-git-range-payload`의 commit/tree/작업 index 해석, `company-git-range-files`의 위치 지정 읽기와 경로/FD/부모 검증, `company-git-range-source`의 두 content pass를 연결했다. 내부 `company-git-range-source-v1` 요청은 선택 경로·기준 commit·고정 profile을 받으며 기존 등록 형식과 구분한다. 선택 파일을 commit→tree→blob 및 작업 index와 대조하고, 새 읽기로 관찰한 파일 identity·구간 hash·객체 proof가 처음과 같아야 완료한다. 원문 본문 대신 metadata/hash만 반환하고 cache는 사용하지 않는다. [2차 합성 검증](stage-4c17-reader-result.md)에 실제 I/O 집계와 보증 범위를 기록한다.
 
-새 회사 정책 gate·등록/준비 v2, safe-view 수집, DB·CLI와 부모 supervisor는 후속 범위다. 현재 source port와 application 흐름은 새 모듈을 호출하지 않는다. 관리 buffer 계수는 호출자의 소유권 등록을 전제하며 프로세스 RSS 제한을 대신하지 않는다. 작업 경계에서 실제 단조 시각을 검사하지만 동기 I/O나 압축 해제를 강제 중단하지 않는다. close 성공을 확인하지 못한 FD는 계수를 유지하고 준비를 실패시키며, 같은 번호로 자동 close 재시도하지 않는다.
+2차 이후 회사 정책 gate·등록/준비 v2, safe-view 수집, DB·CLI와 부모 supervisor를 연결했으며 [3차 통합 결과](stage-4c17-integration-result.md)를 따른다. 이 회사 준비 v2는 계속 판독 계약 `company-git-range-reader-v1`을 사용한다. 관리 buffer 계수는 호출자의 소유권 등록을 전제하며 프로세스 RSS 제한을 대신하지 않는다. 내부 판독기의 작업 경계 시간 검사는 동기 I/O나 압축 해제를 선점하지 않는다. close 성공을 확인하지 못한 FD는 계수를 유지하고 준비를 실패시키며, 같은 번호로 자동 close 재시도하지 않는다.
+
+이후 [읽기 단위 설계](company-git-range-read-unit-design.md)의 독립 `company-git-range-reader-v2`를 합성 자료에 연결했다. 새 guard/profile/budget·byte proof·source 버전은 기존 수치 한도를 유지하되 전체 부모 검사 시점을 단위 경계로 바꾼다. chunk별 leaf/FD, 전체 단위 결과의 끝 guard, pack 목록/부재/최종 검사와 두 pass의 원문·safe-view 대조를 유지한다. 일시적인 조상 변경 후 복원을 놓칠 수 있는 차이를 명시하며 기존 v1 동등성을 주장하지 않는다. 새 source는 내부 API이고 회사 명령/정책/DB/worker에는 연결하지 않았다. 실제 검사와 다음 범위는 [읽기 단위 구현 결과](stage-4c17-read-unit-result.md)를 따른다.
 
 ## 3. 구성 요소와 책임
 

@@ -645,6 +645,8 @@ pnpm harness company-readonly-v2-prune --data-dir /private/review/company-runtim
 
 전체 pack checksum·미조회 객체는 계속 `not_checked`이고, 선택 객체 OID가 맞아도 작성자·서명·회사 출처를 인증하지 않습니다. 3차 합성 통합 후 별도로 허용된 회사 읽기 준비 1회는 `COMPANY_GIT_RANGE_LIMIT`로 중단됐고 저장된 계획은 없었습니다. 당시 어떤 동적 한도가 원인인지는 미확인입니다. 이번 진단 보완은 합성 검증만 수행하며 회사 준비를 다시 실행하지 않습니다. 실제 인증·native·모델 연결과 회사 조사 성공은 미검증입니다.
 
+읽기 단위 계약의 후속 내부 판독기 `company-git-range-reader-v2`는 [별도 설계](docs/company-git-range-read-unit-design.md)에 따라 합성 테스트에서만 사용합니다. 회사 준비 명령의 `v2`와 판독 계약의 `v2`는 서로 다른 버전입니다. 위 회사 명령은 계속 `company-git-range-reader-v1`을 사용하며 새 profile/hash나 요청을 받아들이지 않습니다. 새 방식은 부모 경로를 단위 경계에서 검사하므로 단위 내부의 일시적 변경 후 복원을 놓칠 수 있습니다. [구현 결과와 검증 범위](docs/stage-4c17-read-unit-result.md)를 확인하고, 기존 명령을 새 방식으로 전환하는 옵션이나 회사 준비 v3 명령은 아직 없습니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.

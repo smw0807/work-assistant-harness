@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { types } from 'node:util';
 import { HarnessError } from '../domain/errors.js';
 import type { CompanyGitRangeMemoryLease } from '../domain/company-git-range.js';
-import { CompanyGitRangeBudget, getCompanyGitRangeProfile } from './company-git-range-budget.js';
+import { getCompanyGitRangeProfile } from './company-git-range-budget.js';
+import type { CompanyGitRangeBudgetOperations } from '../domain/company-git-range-budget-operations.js';
 import { getPersonalCollectionProfile } from './personal-readonly-collection.js';
 
 export type CompanyGitTreeMode = '40000' | '100644' | '100755' | '120000' | '160000';
@@ -20,7 +21,7 @@ const backingLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'by
 const resizable = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable')?.get;
 
 /** Caller inputs remain caller-owned. This codec reserves an independent, non-shared working copy before allocation. */
-const snapshot = (value: Uint8Array, maximum: number, budget: CompanyGitRangeBudget): { bytes: Buffer; lease: CompanyGitRangeMemoryLease } => {
+const snapshot = (value: Uint8Array, maximum: number, budget: CompanyGitRangeBudgetOperations): { bytes: Buffer; lease: CompanyGitRangeMemoryLease } => {
   if (!ArrayBuffer.isView(value) || ![Uint8Array.prototype, Buffer.prototype].includes(Object.getPrototypeOf(value))) return reject();
   for (const key of ['length', 'byteLength', 'byteOffset', 'buffer', 'constructor', 'valueOf', 'toString', 'slice', 'subarray',
     Symbol.iterator, Symbol.toPrimitive, Symbol.toStringTag]) if (Object.hasOwn(value, key)) return reject();
@@ -35,7 +36,7 @@ const snapshot = (value: Uint8Array, maximum: number, budget: CompanyGitRangeBud
     return { bytes, lease };
   } catch (error) { budget.releaseMemory(lease); throw error; }
 };
-const parse = <T>(input: Uint8Array, maximum: number, budget: CompanyGitRangeBudget, nowMs: number,
+const parse = <T>(input: Uint8Array, maximum: number, budget: CompanyGitRangeBudgetOperations, nowMs: number,
   operation: (bytes: Buffer) => T): T => {
   let lease: CompanyGitRangeMemoryLease | undefined;
   try {
@@ -82,7 +83,7 @@ const validIdentity = (text: string): boolean => {
 };
 
 /** Parses structure only: OID/type verification is the object codec's responsibility; authors and signatures are never authenticated. */
-export const parseCompanyGitCommitTree = (input: Uint8Array, budget: CompanyGitRangeBudget, nowMs: number): string =>
+export const parseCompanyGitCommitTree = (input: Uint8Array, budget: CompanyGitRangeBudgetOperations, nowMs: number): string =>
   parse(input, limits.objectBytes, budget, nowMs, bytes => {
     const text = utf8(bytes), separator = text.indexOf('\n\n');
     if (separator < 0 || !safeText(text, true)) return reject();
@@ -127,7 +128,7 @@ const compareTreeNames = (left: Buffer, leftMode: CompanyGitTreeMode, right: Buf
 };
 
 /** Validate the entire tree, including entries after the match. Only one small, immutable selected entry leaves the parser. */
-export const findCompanyGitTreeEntry = (input: Uint8Array, name: string, budget: CompanyGitRangeBudget,
+export const findCompanyGitTreeEntry = (input: Uint8Array, name: string, budget: CompanyGitRangeBudgetOperations,
   nowMs: number): CompanyGitTreeEntry | undefined => parse(input, limits.objectBytes, budget, nowMs, bytes => {
   if (typeof name !== 'string' || name.length > limits.objectBytes || !safeName(name)) return reject();
   let cursor = 0, previousName: Buffer | undefined, previousMode: CompanyGitTreeMode = '100644';
@@ -177,7 +178,7 @@ const selectionSnapshot = (value: readonly CompanyGitWorkingSelection[]): Map<st
  * Unselected conflict stages/known extended bits may exist; selected entries must match stage zero with no extension flags.
  */
 export const assertCompanyGitWorkingIndex = (input: Uint8Array, selection: readonly CompanyGitWorkingSelection[],
-  budget: CompanyGitRangeBudget, nowMs: number): void => parse(input, limits.gitFileBytes, budget, nowMs, bytes => {
+  budget: CompanyGitRangeBudgetOperations, nowMs: number): void => parse(input, limits.gitFileBytes, budget, nowMs, bytes => {
   const selected = selectionSnapshot(selection), found = new Set<string>();
   const bodyEnd = bytes.length - 20;
   if (bytes.length < 32 || bytes[0] !== 68 || bytes[1] !== 73 || bytes[2] !== 82 || bytes[3] !== 67

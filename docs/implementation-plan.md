@@ -830,6 +830,27 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - `plan/prune --diagnostics-dir`만 opt-in으로 연결한다. worker stderr의 고정 bounded frame을 부모가 검증하고, runtime 밖 0700/0600 진단 위치에 task/owner/runtime/진단 위치 hash와 기존 audit 만료로 결합해 불변 저장한다. 중복·부분·과대·잘못된 task/구조는 진단으로 인정하지 않는다. 일반 오류·강제 종료 시 상세 진단이 없을 수 있고 저장 실패는 unknown/같은 ID inspect로 처리한다. 자동 retry·fallback·한도 확대는 없다.
 - 합성 budget/실제 파일 reader/worker/CLI 및 보관·만료·오류 경쟁을 검증한다. 이번 회사 자료·인증·native/model·외부 서비스 접근은 0회이며 결과는 [진단 보완 결과](stage-4c17-diagnostic-result.md)에 기록한다. 다음 최소 작업은 기존 승인 범위와 현재 입력을 대조한 명시적 진단 준비 1회이며 자동 실행하지 않는다.
 
+##### 단계 4-C-17 후속: 경로 검사 비용과 대체 방식 검증
+
+- 반복 metadata 조회를 줄일 후보의 지원 여부와 검증 동등성을 합성 자료로 확인한다. 실제 회사 준비 재실행·회사 자료/인증/native/model 접근은 포함하지 않는다. 생산 판독기·고정 profile/hash·한도·worker 권한은 유지한다.
+- 현재 설치된 Node의 공개 FS API와 로컬 타입 선언을 확인하고, 64KiB 읽기 전후 부모 경로·파일/FD 검사 비용을 실제 API 호출과 예산 계수로 대조한다. 내부 binding·addon·추가 child·OS 우회 경로를 새 backend로 사용하지 않는다.
+- 열린 디렉터리/file FD의 identity만으로 원래 경로의 교체·symlink·pack 목록·부재 파일 검사를 대체할 수 있는지 합성 반례를 추가한다. 정상 최종 proof 동일성만으로 중간 관찰 시점의 동등성을 주장하지 않는다.
+- 결과는 [경로 검사 검증 결과](stage-4c17-guard-result.md)에 기록한다. 지원되지 않거나 동등성을 입증하지 못한 최적화는 기존 v1에 적용하지 않는다. 후속 변경은 기존 버전을 유지한 별도 검증 계약 또는 별도 실행 기반의 구체 설계로 구분하고, 권한·검사 시점 변경을 숨기지 않는다.
+
+##### 단계 4-C-17 후속: 읽기 단위 계약 비교 설계
+
+- [비교 설계](company-git-range-read-unit-design.md)는 A의 단위 경계 전체 경로 검사와 chunk별 leaf/FD 검사, B의 별도 descriptor-relative helper를 비교한다. 기존 공개 Node API·worker 권한을 유지하는 A를 새 계약의 우선 구현 후보로 권고하며 기존 v1에 동등 최적화로 적용하지 않는다.
+- A는 기존 파일/encoded span 상한으로 단위를 고정하고64KiB read·전체 자원 계수를 유지한다. 단위 내부의 일시적 조상 변경 후 복원을 놓칠 수 있는 차이를 hash/버전·보증 범위에 명시한다. 기존 profile/CLI/DB는 그대로 보존하고 실제 회사 입력으로 재시도하지 않는다.
+- 이번에는 별도 test-only guard 실험으로 조회 비용·지속/일시적 변경의 판정 차이·부분 읽기와 정리를 확인한다. 새 production profile/source/byte proof/회사 등록·CLI·DB 연결은 제공하지 않는다. 범위와 결과는 [설계 검증 결과](stage-4c17-read-unit-design-result.md)에 기록한다.
+- 다음 구현 묶음은 새 불변 guard/profile·혼용 거부·단위 reader의 합성 구현이다. 설계의 U1~U7과 기존 회귀를 확인한 뒤 새 회사 준비 연결 U8을 수행하며 실제 자료 적용과 검증 의미의 선택은 별도 명시적 단계다.
+
+##### 단계 4-C-17 후속: 읽기 단위 계약의 합성 구현
+
+- 새 `company-git-range-reader-v2`와 `company-git-range-read-unit-guard-v1`에 단위 종류/상한·검사 경계·일시적 조상 변경의 관찰 한계를 결합한다. 수치 limits와 수집 profile은 그대로이며 신규 budget/실패 identity와 byte-proof-v2는 기존 v1과 분리한다.
+- 내부 `company-git-range-source-v2`와 observation-v2는 profile/guard hash를 모두 요구한다. 원문을 반환하지 않는 조사와 고정 safe-view 수집을 새 Files에 연결하며, 전체 파일/검증된 encoded span/header/trailer를 정해진 단위로 읽는다. 전체 단위 결과와 chunk를 동시에 예약하고 단위 끝 guard 전에는 결과·chunk proof를 전달하지 않는다.
+- index/object/payload codec은 같은 순수 해석과 예약 연산을 재사용한다. 기존 세 codec 파일의 변경은 budget public 표면을 표현하는 TypeScript 타입뿐이다. 기존 source/files/budget/proof·회사 등록/CLI/DB와 worker는 자동 전환하지 않는다. 복제한 버전별 실행 로직은 향후 수정 시 두 버전의 회귀를 함께 확인한다.
+- U1~U7의 구현 범위·합성 변경/실패·전체 판독 계측과 미검증 항목은 [읽기 단위 구현 결과](stage-4c17-read-unit-result.md)에 기록한다. 회사 준비 v3·정책/보관/unknown/supervisor 연결 U8, 실제 회사 자료와 새 관찰 의미의 채택은 다음 별도 단계다. 이번에는 회사 자료·인증/native/model·외부 전송·추가 OS helper 실행을 하지 않는다.
+
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 

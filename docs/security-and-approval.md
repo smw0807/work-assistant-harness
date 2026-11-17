@@ -481,9 +481,11 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 1차 기록은 [codec 결과](stage-4c17-codec-result.md)를 따른다. [2차 파일 판독기](stage-4c17-reader-result.md)는 합성 저장소에서 실제 위치 지정 읽기, 경로·FD·부모·부재·pack 목록 대조, commit/tree/작업 index 해석과 두 pass의 새 읽기·proof 비교를 검증했다. symlink·hardlink·비정규 파일·작업 중 교체를 관찰하면 거부하며, pack 전체 읽기나 실패 후 다른 공급원으로의 자동 재시도는 없다. 명시적인 인증·설정 경로는 내용 읽기 전에 차단하고 alternate object store 참조 파일은 metadata로 존재를 확인해 거부한다.
 
-내부 source API의 입력 검증은 회사 승인 gate가 아니다. 기존 회사 명령·등록 v1은 이 판독기를 호출하지 않으며 회사용 v2 등록/준비·safe-view·DB/CLI 연결도 아직 없다. 성공 반환에는 raw commit/tree/base/source 본문이 없고 metadata/hash만 있다. 관찰 결과는 파일 시스템의 원자적 snapshot이나 OS 읽기 격리가 아니며 최종 관찰 후 변경까지 보증하지 않는다. byte proof 단독 parser와 신뢰하는 판독기가 실제 읽기에서 만든 관찰을 구분한다.
+내부 source API의 입력 검증은 회사 승인 gate가 아니다. 2차 당시 회사용 v2 등록/준비·safe-view·DB/CLI 연결은 없었으며, 이후 연결과 부모 supervisor의 검증 범위는 [3차 통합 결과](stage-4c17-integration-result.md)를 따른다. 기존 회사 명령·등록 v1은 자동 전환하지 않았다. metadata 전용 source의 성공 반환에는 raw commit/tree/base/source 본문이 없다. 관찰 결과는 파일 시스템의 원자적 snapshot이나 OS 읽기 격리가 아니며 최종 관찰 후 변경까지 보증하지 않는다. byte proof 단독 parser와 신뢰하는 판독기가 실제 읽기에서 만든 관찰을 구분한다.
 
-공통 예산은 실제 I/O와 buffer 소유권에 연결했다. 구간 proof는 동일 읽기 구간을 중복 제거하지만 예산은 반복 호출을 모두 차감한다. 실제 단조 시각을 작업 경계마다 검사하며 동기 작업을 선점하는 supervisor는 아직 없다. close 오류는 닫힘을 확정할 수 없으므로 FD 계수를 유지하고 실패하며 같은 FD 번호를 다시 닫지 않는다. 불확정 자원 정리는 후속 worker 종료 확인이 필요하다. 강제 30초 종료·128MiB old-space·256MiB RSS 측정 목표·회사 적용은 미검증이다.
+공통 예산은 실제 I/O와 buffer 소유권에 연결했다. 구간 proof는 동일 읽기 구간을 중복 제거하지만 예산은 반복 호출을 모두 차감한다. 내부 API 자체의 실제 단조 시각 검사는 동기 작업을 선점하지 않는다. close 오류는 닫힘을 확정할 수 없으므로 FD 계수를 유지하고 실패하며 같은 FD 번호를 다시 닫지 않는다. 불확정 자원 정리는 worker 종료 확인이 필요하다. 3차 회사 준비 v2의 종료 정책과 메모리 측정 범위는 위 통합 결과를 따르며 OS RSS 상한으로 취급하지 않는다.
+
+후속 [읽기 단위 계약](company-git-range-read-unit-design.md)은 별도 reader-v2/profile/guard hash·byte-proof-v2·source-v2로 합성 구현한다. 각 단위 시작/끝과 pass 최종에는 전체 경로를, chunk 전후에는 leaf/FD를 확인한다. 일시적으로 조상이 바뀌었다 단위 끝 전에 복원되면 관찰하지 못할 수 있으므로 기존 reader-v1과 동등하지 않다. 새 요청/hash·budget identity·증거 버전은 분리하며 기존 회사 준비 명령이나 승인/DB로 자동 선택하지 않는다. 새 판독기에는 새 회사 정책 gate·보관·supervisor를 아직 연결하지 않았다. 내부 호출이 회사 승인이나 OS 읽기 격리를 제공한다는 뜻은 아니며, [합성 구현 결과](stage-4c17-read-unit-result.md)의 범위를 넘는 회사 적용은 별도 단계다.
 
 ## 7. 회사 자료와 비밀정보
 

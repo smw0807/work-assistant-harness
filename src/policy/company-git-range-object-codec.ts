@@ -3,7 +3,8 @@ import { types } from 'node:util';
 import { inflateSync } from 'node:zlib';
 import { HarnessError } from '../domain/errors.js';
 import type { CompanyGitRangeMemoryLease } from '../domain/company-git-range.js';
-import { CompanyGitRangeBudget, getCompanyGitRangeProfile } from './company-git-range-budget.js';
+import { getCompanyGitRangeProfile } from './company-git-range-budget.js';
+import type { CompanyGitRangeBudgetOperations } from '../domain/company-git-range-budget-operations.js';
 
 type ObjectType = 'commit' | 'tree' | 'blob' | 'tag';
 type PackedType = ObjectType | 'ofs-delta' | 'ref-delta';
@@ -67,17 +68,17 @@ const byteView = (value: unknown, maximum: number): Uint8Array => {
 };
 
 interface OwnedBytes { bytes: Buffer; memoryLease: CompanyGitRangeMemoryLease }
-const allocate = (length: number, budget: CompanyGitRangeBudget): OwnedBytes => {
+const allocate = (length: number, budget: CompanyGitRangeBudgetOperations): OwnedBytes => {
   const memoryLease = budget.reserveMemory(length);
   try { return { bytes: Buffer.allocUnsafeSlow(length), memoryLease }; }
   catch (error) { budget.releaseMemory(memoryLease); throw error; }
 };
-const snapshot = (value: unknown, maximum: number, budget: CompanyGitRangeBudget): OwnedBytes => {
+const snapshot = (value: unknown, maximum: number, budget: CompanyGitRangeBudgetOperations): OwnedBytes => {
   const view = byteView(value, maximum), owned = allocate(view.byteLength, budget);
   try { Uint8Array.prototype.set.call(owned.bytes, view); return owned; }
   catch (error) { budget.releaseMemory(owned.memoryLease); throw error; }
 };
-const run = <T>(budget: CompanyGitRangeBudget, nowMs: number, work: () => T): T => {
+const run = <T>(budget: CompanyGitRangeBudgetOperations, nowMs: number, work: () => T): T => {
   try { budget.setStage('git_object'); budget.checkActive(nowMs); return work(); }
   catch (error) {
     budget.abort();
@@ -132,7 +133,7 @@ const packedHeader = (bytes: Uint8Array, offset: number): CompanyGitPackedHeader
 };
 
 /** Native zlib is bounded before inflation; its unobservable internal allocations are not claimed as OS memory limits. */
-const inflateExact = (compressed: Uint8Array, maximum: number, budget: CompanyGitRangeBudget): OwnedBytes => {
+const inflateExact = (compressed: Uint8Array, maximum: number, budget: CompanyGitRangeBudgetOperations): OwnedBytes => {
   const allocationBound = Math.max(1, maximum), reservation = budget.reserveInflation(allocationBound);
   let completed = false, temporary: CompanyGitRangeMemoryLease | undefined;
   try {
@@ -151,14 +152,14 @@ const inflateExact = (compressed: Uint8Array, maximum: number, budget: CompanyGi
   }
 };
 
-interface OwnedObject { budget: CompanyGitRangeBudget; data: CompanyGitDecodedObject; contentHash: string }
+interface OwnedObject { budget: CompanyGitRangeBudgetOperations; data: CompanyGitDecodedObject; contentHash: string }
 const ownedObjects = new WeakMap<object, OwnedObject>();
 const ownObject = (fields: Omit<CompanyGitDecodedObject, 'bytes' | 'memoryLease'>, content: OwnedBytes,
-  budget: CompanyGitRangeBudget): CompanyGitDecodedObject => {
+  budget: CompanyGitRangeBudgetOperations): CompanyGitDecodedObject => {
   const data = Object.freeze({ ...fields, ...content });
   ownedObjects.set(data, { budget, data, contentHash: sha256(content.bytes) }); return data;
 };
-const ownedObject = (value: unknown, budget: CompanyGitRangeBudget, verified: boolean): CompanyGitDecodedObject => {
+const ownedObject = (value: unknown, budget: CompanyGitRangeBudgetOperations, verified: boolean): CompanyGitDecodedObject => {
   const record = value && typeof value === 'object' ? ownedObjects.get(value) : undefined;
   if (!record || record.budget !== budget || verified && !isObjectType(record.data.type)) return fail();
   const view = byteView(record.data.bytes, limits.objectBytes);
@@ -168,14 +169,14 @@ const ownedObject = (value: unknown, budget: CompanyGitRangeBudget, verified: bo
 };
 
 /** Reject forged, released or mutated output before using it as a verified base/content again. */
-export const assertCompanyGitVerifiedObject = (value: unknown, budget: CompanyGitRangeBudget, nowMs: number): void =>
+export const assertCompanyGitVerifiedObject = (value: unknown, budget: CompanyGitRangeBudgetOperations, nowMs: number): void =>
   run(budget, nowMs, () => { ownedObject(value, budget, true); });
 
 /**
  * Pure span decoding. Entry/index authenticity and actual pack geometry belong to the separate index codec/reader.
  * Inputs are snapshotted; returned bytes belong to the caller. Delta OID verification requires the resolver below.
  */
-export const decodeCompanyGitPackedObject = (value: unknown, entryValue: unknown, packIdentity: unknown, budget: CompanyGitRangeBudget,
+export const decodeCompanyGitPackedObject = (value: unknown, entryValue: unknown, packIdentity: unknown, budget: CompanyGitRangeBudgetOperations,
   nowMs: number): CompanyGitDecodedObject => run(budget, nowMs, () => {
   if (!isHash(packIdentity)) return fail();
   const entry = entrySnapshot(entryValue); budget.visitObject(`${packIdentity}:${entry.offset}:${entry.oid}`);
@@ -195,7 +196,7 @@ export const decodeCompanyGitPackedObject = (value: unknown, entryValue: unknown
   }
 });
 
-export const decodeCompanyGitLooseObject = (value: unknown, expectedOid: unknown, budget: CompanyGitRangeBudget,
+export const decodeCompanyGitLooseObject = (value: unknown, expectedOid: unknown, budget: CompanyGitRangeBudgetOperations,
   nowMs: number): CompanyGitVerifiedObject => run(budget, nowMs, () => {
   if (!isOid(expectedOid)) return fail();
   budget.visitObject(`loose:${expectedOid}`);
@@ -259,7 +260,7 @@ const walkDelta = (delta: Buffer, base: Buffer, target?: Buffer): number => {
   return targetSize;
 };
 const applyDelta = (value: CompanyGitDecodedObject, baseValue: CompanyGitVerifiedObject,
-  budget: CompanyGitRangeBudget): CompanyGitVerifiedObject => {
+  budget: CompanyGitRangeBudgetOperations): CompanyGitVerifiedObject => {
   const delta = ownedObject(value, budget, false), base = ownedObject(baseValue, budget, true);
   if (isObjectType(delta.type) || !delta.base || base.offset === null
     || (delta.base.kind === 'oid' ? delta.base.oid !== base.oid : delta.base.offset !== base.offset)) return fail('INVALID_DELTA');
@@ -275,7 +276,7 @@ const applyDelta = (value: CompanyGitDecodedObject, baseValue: CompanyGitVerifie
 };
 
 /** The positioned reader resolves a same-pack base before applying an issued, still-owned delta. */
-export const applyCompanyGitPackedDelta = (delta: unknown, base: unknown, budget: CompanyGitRangeBudget,
+export const applyCompanyGitPackedDelta = (delta: unknown, base: unknown, budget: CompanyGitRangeBudgetOperations,
   nowMs: number): CompanyGitVerifiedObject => run(budget, nowMs, () =>
   applyDelta(ownedObject(delta, budget, false), ownedObject(base, budget, true) as CompanyGitVerifiedObject, budget));
 
@@ -285,7 +286,7 @@ export const applyCompanyGitPackedDelta = (delta: unknown, base: unknown, budget
  * No cache crosses calls/passes. All intermediate buffers are released; only the returned object's lease remains live.
  */
 export const resolveCompanyGitPackedObjects = (value: unknown, targetOid: unknown, packIdentity: unknown,
-  budget: CompanyGitRangeBudget, nowMs: number): CompanyGitVerifiedObject => run(budget, nowMs, () => {
+  budget: CompanyGitRangeBudgetOperations, nowMs: number): CompanyGitVerifiedObject => run(budget, nowMs, () => {
   if (!isOid(targetOid) || !isHash(packIdentity) || !Array.isArray(value) || types.isProxy(value)
     || Object.getPrototypeOf(value) !== Array.prototype || !integer(value.length, 1, limits.visitedObjects)
     || Reflect.ownKeys(value).length !== value.length + 1) return fail('INVALID_GRAPH');
