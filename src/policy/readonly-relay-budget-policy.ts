@@ -10,6 +10,8 @@ const invalid = (suffix: string): never => { throw new HarnessError(`READONLY_RE
 const budget: ReadonlyRelayExecutionBudget = Object.freeze({ policy: READONLY_RELAY_EXECUTION_BUDGET_POLICY,
   workTimeoutMs: 120000, cleanupTimeoutMs: 5000, totalTimeoutMs: 125000, frames: 8192,
   responseBytes: 4194304, frameBytes: 65536, jsonDepth: 16, outputBytes: 16384, nativeOutputBytes: 131072, stderrBytes: 16384 });
+/** Offline adapters reuse the fixed budget without constructing a native/credential configuration. */
+export const getDefaultReadonlyRelayExecutionBudget = (): ReadonlyRelayExecutionBudget => Object.freeze({ ...budget });
 const ownSnapshot = (value: unknown, keys: string[]): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(value))
     || Reflect.ownKeys(value).length !== keys.length) return invalid('INVALID_CONFIG');

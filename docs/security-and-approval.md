@@ -489,6 +489,18 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 공통 경로 순회 개선은 같은 pathname prefix의 반복 Git tree 요청을 묶는다. 기존 parser가 선택 항목 뒤의 잘못된 entry까지 전체 tree를 검사하며, 반환하는 OID/mode metadata 외에 본문은 즉시 해제한다. 각 실제 I/O의 open/unit/chunk/final guard와 매 pass의 새 읽기를 유지하고 기존 profile/guard hash·수치 상한을 바꾸지 않는다. 반복 호출이 줄어 syscall 순서·일시적 변경을 우연히 관찰하는 횟수까지 동일하지는 않으며 연속적 경로 동일성이나 원자적 snapshot을 주장하지 않는다. 회사 자료 재접근 없이 독립 합성 검증만 수행한다. [개선 결과와 한계](stage-4c17-tree-traversal-result.md)를 따른다.
 
+### 회사 준비에서 모의 조사로 넘어가는 경계
+
+`company-investigation-*`는 회사 v3 준비와 분리한 모의 조사 계약이다. 준비 중인 자료의 상태는 전송 승인이 아니며 새로운 계획 hash·OS 소유자·명시 TTL에 대해 별도의 **모의 호출만** 승인한다. 계획과 승인에는 `mode:mock`, `local:fixed-response`, `authentication:none`, 전송·실행 false가 고정된다. live 설정이나 임의 모델/목적지를 받지 않으며 기존 개인 승인·DB·전송 입력으로 변환하지 않는다.
+
+계획·승인·호출 직전·완료 경계에서 준비 상태/기간/내용과 회사 v3 source를 확인한다. 입력에는 검토 대상으로 선택한 안전 근거만 담고 원본 root·FD/identity는 로컬 payload에 남긴다. 기존 판독기의 두 pass, 경로/민감정보/한도와 일시적 변경 관찰 한계를 유지한다. 검증은 각 시점의 관찰이며 지속적인 snapshot이 아니다.
+
+단건 승인 소비와 dispatch 예약은 SQLite 트랜잭션으로 각각 먼저 확정한다. dispatch 계수는 예약 횟수이며 프로세스 중단 시 모델 함수가 실제 실행됐다는 증거가 아니다. 자동 재시도나 승인 복원이 없고 같은 준비의 재계획도 기존 작업을 반환한다. 취소·만료·중단 불확정 이후 늦은 응답은 보고서로 보관하지 않는다. 복구는 불확정 실행을 `BLOCKED`로 남기며 자동 호출하지 않는다.
+
+준비의 원래 본문/감사 기한을 상속한다. 모의 승인 TTL은 본문 기한을 넘을 수 없고 payload와 보고서가 함께 삭제된다. 응답은 기존 16KiB JSON·민감정보·제공된 근거/줄 범위를 검증한다. `responseHash`는 검증한 `result`의 canonical JSON hash이며 raw 응답 hash가 아니다. 모의 응답의 의미 정확성·실제 회사 정책·공급자 호환성은 미검증이다.
+
+DB 사전검사와 실행은 최소 환경의 별도 Node 권한 child에서 수행한다. 네트워크·추가 child/worker·addon·WASI·inspector를 허용하지 않고 새 조사 store와 필요한 기존 준비 store에만 쓰기를 허용한다. source는 읽기 전용 코드로 접근하며 OS 읽기 격리라고 주장하지 않는다. V8 old-space128MiB는 RSS 상한이 아니다. 전체 CLI 작업 기한은 사전검사를 포함해 run125초, 나머지30초이고, 비동기 실행 supervisor는250ms 유예 후 SIGKILL을 요청하며 close를 확인한다. 부모 생존과 OS 신호 처리에 의존한다. 상세 검사와 한계는 [4-C-18 결과](stage-4c18-result.md)를 따른다.
+
 ## 7. 회사 자료와 비밀정보
 
 회사 계정·저장소 연결 전에 AI 제공자, 모델, 실행 위치, 전송 가능 자료, 보관 기간과 감사 요구를 회사 정책에 따라 확인한다. 회사 승인이 없으면 합성 데이터로 계속 개발한다.

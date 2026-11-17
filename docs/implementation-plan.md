@@ -865,6 +865,17 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - 같은 fixture/절대 경로 깊이에서 변경 전후를 비교한다. 최초 observation/안전 근거 일치, 2pass 완결, 실제 조회 계수, v3 CLI/worker/보관/동일 ID 조회, 더 깊은 경로의 한도 거절과 기존 회귀를 검증한다. 초기 syscall 수나 일시적 변경 관찰 횟수까지 동일하다는 주장은 하지 않는다.
 - [개선 결과](stage-4c17-tree-traversal-result.md)에 검증 상태를 기록한다. 실제 회사 준비 재실행·인증/native/모델/Slack은 이번 개선에 포함하지 않는다.
 
+##### 단계 4-C-18 회사 준비에서 별도 모의 조사·승인·보고서 연결
+
+- 앞선 별도 명시적 v3 실제 준비는 8파일·2pass·metadata7816/8192와 같은 ID 조회 및 검토 대기 저장을 확인했다. 이번 구현에는 회사 자료 재접근을 포함하지 않으며 이 성공을 실제 AI 조사 성공으로 확대하지 않는다.
+- 회사 준비 v3의 유효한 계획·안전 근거·정책·두 판독 hash를 새 `company-investigation-plan-v1`에 결합한다. 입력에는 선택한 검토 근거만 포함하고 원본 root/identity는 로컬에 둔다. 기존 준비의 `AWAITING_APPROVAL`은 모의 호출 승인으로 재사용하지 않는다.
+- 목적지 `local:fixed-response`, 모델 `company-fixed-response-v1`, 인증 `none`, mode `mock`을 고정한다. 기존 실행 예산 v1과 최종 JSON·근거 검증을 재사용하지만 개인용 입력/승인/DB나 live relay에 회사 자료를 넣지 않는다. 기존 계약·profile hash·수치 한도·의존성을 바꾸지 않는다.
+- 별도 SQLite에서 계획 hash·OS 소유자·TTL에 묶인 모의 승인을 생성하고, claim과 dispatch 예약을 원자적으로 한 번만 기록한다. 중복 plan은 기존 준비 키의 상태를 반환하고 재승인·자동 재시도·중단 후 소비 복원을 제공하지 않는다. 취소/만료가 늦은 결과보다 우선하며 정리 불확정은 `BLOCKED`다.
+- 계획·승인·호출 직전과 완료 시 기존 준비의 유효 상태와 회사 v3 판독 결과를 확인한다. 매 source 검증은 새 2pass와 기존 판독 예산을 사용하며 여러 검증의 합계가 최초 준비의 예산이라고 주장하지 않는다. 일시적 조상 변경·원자적 snapshot의 기존 한계는 유지한다.
+- 계획·payload·보고서는 최초 준비의 `expiresAt`, 감사는 최초 `auditExpiresAt`을 그대로 따른다. 승인 만료는 요청 TTL과 payload 만료 중 빠른 시각이다. 취소·실패·만료 시 본문을 제거하고 명령 기반 정리만 제공한다.
+- `company-investigation-plan/approve/run`은 명시적인 `--mode mock`을 요구하고 `inspect/cancel/recover/prune`를 제공한다. Nest context의 제한 worker만 고정 응답을 만들며 실제 인증·native·모델·네트워크·대상 명령은 연결하지 않는다. DB 사전검사도 제한 child에서 처리하며 stdout에는 상태/집계만 노출한다.
+- 합성 수용 기준: 미승인/잘못된 plan/owner/mode 거부, 변경·만료·취소 전후 호출 차단, 호출 한 번과 중단 복구, 잘못된 JSON·중복 키·미제공 근거·권한 필드 거부, DB/경로/권한/worker 환경, 원본 전후 보존, 기존 회귀 통과. 결과와 실제 호출 미검증 범위는 [4-C-18 결과](stage-4c18-result.md)에 기록한다.
+
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 

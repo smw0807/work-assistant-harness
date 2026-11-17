@@ -239,7 +239,8 @@ export const parseReadonlyJson = (raw: string): unknown => {
   try { value(0); space(); if (cursor !== raw.length) fail('READONLY_INVALID_RESPONSE'); return JSON.parse(raw) as unknown; }
   catch (error) { if (error instanceof HarnessError) throw error; return fail('READONLY_INVALID_RESPONSE'); }
 };
-export const parseReadonlyResult = (raw: string, payload: ReadonlyPayload): ReadonlyResult => {
+/** Shared report checks depend only on the explicitly supplied evidence, not its repository type. */
+export const parseReadonlyEvidenceReport = (raw: string, selected: readonly ReadonlyEvidence[]): ReadonlyReport => {
   const output = parseReadonlyJson(raw);
   if (containsSensitiveText(raw) || containsSensitiveText(canonicalReadonlyJson(output))
     || !readonlyExactKeys(output, ['classification', 'summary', 'facts', 'hypotheses', 'answerDraft', 'questions', 'suggestions', 'limitations'])) fail('READONLY_INVALID_RESPONSE');
@@ -248,7 +249,6 @@ export const parseReadonlyResult = (raw: string, payload: ReadonlyPayload): Read
     && Buffer.from(value).toString('utf8') === value && !Array.from(value).some((character) => {
       const code = character.charCodeAt(0); return (code < 32 && ![9, 10, 13].includes(code)) || code === 127;
     });
-  const selected = payload.context.evidence.filter((item) => payload.transferEvidenceIds.includes(item.evidenceId));
   const references = (items: unknown, required: boolean): boolean => Array.isArray(items) && items.length <= 16 && (!required || items.length > 0)
     && items.every((item: unknown) => {
       if (!readonlyExactKeys(item, ['evidenceId', 'startLine', 'endLine'])) return false;
@@ -268,7 +268,11 @@ export const parseReadonlyResult = (raw: string, payload: ReadonlyPayload): Read
       && text(item.description) && references(item.references, true)
       && item.references.every((reference) => selected.some((evidence) => evidence.path === item.path && evidence.evidenceId === reference.evidenceId)))) fail('READONLY_INVALID_RESPONSE');
   if (report.facts.length === 0 && report.classification !== 'insufficient-evidence') fail('READONLY_INVALID_RESPONSE');
-  return { ...report, mode: 'mock', responseHash: hashReadonlyValue(raw) };
+  return report;
+};
+export const parseReadonlyResult = (raw: string, payload: ReadonlyPayload): ReadonlyResult => {
+  const selected = payload.context.evidence.filter((item) => payload.transferEvidenceIds.includes(item.evidenceId));
+  return { ...parseReadonlyEvidenceReport(raw, selected), mode: 'mock', responseHash: hashReadonlyValue(raw) };
 };
 /** The offline worker gets only the exact approved body and returns a fixed evidence-shaped report. */
 export const buildReadonlyMockResponse = (inputText: string): string => {

@@ -660,9 +660,34 @@ pnpm harness company-readonly-v3-prune --data-dir /private/review/company-runtim
 
 회사 준비 명령의 `v3`는 `company-git-range-reader-v2`를 선택하며, 위 회사 준비 `v2`는 계속 `company-git-range-reader-v1`을 사용합니다. 새 방식은 부모 경로를 열기·읽기 단위 경계·최종 pass에 검사하고 chunk마다 leaf/FD를 검사합니다. **단위 내부의 일시적 조상 변경 후 복원을 놓칠 수 있으며 구형과 동등한 검증은 아닙니다.** 이 차이는 별도 guard hash와 로컬 검토 자료에 포함됩니다. 수집·읽기·metadata·메모리·시간 한도는 높이지 않았습니다.
 
-v3도 `AWAITING_APPROVAL`까지만 제공하며 승인 생성·전송·실행은 `false`입니다. 회사용 `approve/run`은 없습니다. worker 권한, 30초·250ms 종료 정책, RSS 관찰 목표, 본문 최대24시간·감사 최대30일과 명시적 정리는 v2와 같습니다. 이번 연결의 검증은 합성 자료에 한정하며 실제 회사 자료의 적용과 새 검사 의미 채택은 별도 명시적 실행으로 구분합니다. [v3 통합 결과](docs/stage-4c17-company-v3-result.md)에 검증과 남은 범위를 기록합니다.
+v3 준비 명령은 `AWAITING_APPROVAL`까지만 제공하며 승인 생성·전송·실행은 `false`입니다. 준비 명령 자체에는 `approve/run`이 없습니다. worker 권한, 30초·250ms 종료 정책, RSS 관찰 목표, 본문 최대24시간·감사 최대30일과 명시적 정리는 v2와 같습니다. [v3 통합 결과](docs/stage-4c17-company-v3-result.md)는 당시 합성 검증 기록이며, 이후 별도로 허용된 실제 준비에서 8파일·2pass·metadata7816/8192·같은 ID 조회와 검토 대기 저장을 확인했습니다. 이는 실제 AI 답변 생성 성공이 아닙니다.
 
 후속 개선은 선택 경로들의 공통 상위 Git tree를 각 pass에서 한 번 해석하고, 필요한 자식의 OID·mode만 남긴 뒤 본문을 해제합니다. 본문 캐시·서로 다른 경로의 OID 합치기·guard 생략·한도 상향은 없습니다. 동일 경로 깊이의 독립 합성 4-pack/8파일 사례에서 기존 구현은 metadata8192회에 중단됐고 개선 구현은7128회로 검토 자료 보관까지 완료했습니다. 더 깊은 경로는 여전히 한도에 걸릴 수 있으며 실제 회사 성공을 보증하지 않습니다. [공통 경로 순회 개선 결과](docs/stage-4c17-tree-traversal-result.md)를 따릅니다.
+
+### 회사 준비를 사용하는 별도 모의 조사
+
+`company-investigation-*`는 유효한 회사 준비 v3에서 **새 모의 조사 계획**을 만들고, 별도 승인 후 고정 응답 보고서를 로컬에 보관합니다. 실제 AI 연결은 없으며 `--mode mock`만 받습니다. 모델·목적지·인증 방식은 `company-fixed-response-v1`·`local:fixed-response`·`none`으로 고정됩니다. 기존 준비의 검토 대기 상태나 개인용 승인은 호출 승인이 아닙니다.
+
+```sh
+pnpm harness company-investigation-plan --mode mock --preparation-task <preparation-uuid> --preparation-data-dir /private/review/company-runtime-v3 --data-dir /private/review/company-investigation
+# 새 계획의 taskId·planHash와 비공개 로컬 입력을 검토한 뒤 모의 실행만 승인
+pnpm harness company-investigation-approve --mode mock --task <investigation-uuid> --plan-hash <sha256> --expires-in-minutes 10 --preparation-data-dir /private/review/company-runtime-v3 --data-dir /private/review/company-investigation
+pnpm harness company-investigation-run --mode mock --task <investigation-uuid> --plan-hash <sha256> --preparation-data-dir /private/review/company-runtime-v3 --data-dir /private/review/company-investigation
+pnpm harness company-investigation-inspect --task <investigation-uuid> --data-dir /private/review/company-investigation
+pnpm harness company-investigation-cancel --task <investigation-uuid> --data-dir /private/review/company-investigation
+pnpm harness company-investigation-recover --task <investigation-uuid> --data-dir /private/review/company-investigation
+pnpm harness company-investigation-prune --data-dir /private/review/company-investigation
+```
+
+두 runtime은 서로, 하네스와 대상 저장소로부터 분리합니다. 새 runtime과 부모는 소유자 전용 `0700`이며 파일은 `0600`입니다. 질문·발췌·보고서 본문은 새 `store/company-investigation.sqlite`의 private payload에만 보관하며 stdout에는 상태·hash·기한·승인/시도/호출 예약 집계만 표시합니다. `inspect`는 `reportAvailable`을 제공하고 본문을 출력하지 않습니다. 이 단계에는 보고서 파일 export나 검토 UI가 없으며 비공개 DB의 입력/보고서 열람이 필요합니다.
+
+계획·승인·호출 직전·완료 시 기존 준비의 취소/만료 여부와 source를 다시 확인합니다. 각 재검증은 기존 v3 판독기의 새 2pass/동일 한도를 사용합니다. 같은 준비를 다시 계획해도 기존 상태를 반환하고, 승인 소비/dispatch는 한 번뿐이며 자동 재시도하지 않습니다. source 변경, 잘못된 JSON, 미제공 근거, 취소/만료 이후 결과는 성공 보고서가 되지 않습니다. 중단 불확정은 `recover`로 `BLOCKED` 처리하며 소비를 복원하지 않습니다.
+
+payload·보고서·감사의 만료는 원래 준비 시각을 상속합니다. 모의 승인 TTL은1~60분이지만 원래 본문 만료를 넘지 않습니다. 취소/실패/만료는 본문을 제거하며 `prune` 등 명령 실행 시 정리합니다. DB 사전검사와 실행 worker 모두 최소 환경/old-space128MiB/네트워크·추가 프로세스 금지를 적용합니다. 전체 작업 기한은 사전검사를 포함해 run125초, 나머지30초이며 OS RSS 상한·독립 guardian은 아닙니다. 기존 reader의 일시적 경로 변경 관찰 한계도 유지합니다.
+
+원래 준비를 취소하면 이후 조사 계획·승인·호출이 차단됩니다. 이미 별도 조사 DB에 보관한 입력/보고서까지 즉시 제거하려면 해당 조사에도 `company-investigation-cancel`을 호출합니다. 두 DB 사이의 자동 연쇄 삭제는 제공하지 않습니다.
+
+`REPORTED`는 **고정 응답의 형식·근거 검증과 보관 성공**입니다. 보고서의 실제 모델·인증·native·외부 전송은 모두 `not_run`, 의미 정확성은 미검증입니다. 준비 자료를 실제 모델로 전송하는 명령은 아직 제공하지 않습니다. 구현·합성 검증과 남은 범위는 [4-C-18 결과](docs/stage-4c18-result.md)를 따릅니다.
 
 ## 모의 입력과 오류 재현
 
