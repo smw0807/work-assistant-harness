@@ -127,7 +127,8 @@ v2 worker는 최소 환경을 사용하고 쓰기는 runtime의 `store/`에만 �
 1. **순수 codec와 예산 — 1차 구현:** index/pack header/span/loose/delta 검증, 한 요청의 공유 계수와 byte proof/profile 및 합성 테스트를 추가했다. 고정 합성 바이트만 사용했고 당시에는 대상 파일을 열지 않았다. 당시 검사 결과는 보존한다.
 2. **본문 parser와 합성 positioned reader — 2차 구현:** commit/tree·작업 index parser, 제한된 FD 위치 지정 읽기와 실제 작업 계수, 두 pass의 source proof hash 재검증을 연결했다. 합성 큰 pack에서 필요한 구간만 읽으며 전체 pack 읽기나 구형 라이브러리 fallback은 없다. 실제 회사 접근·OS RSS 실험·강제 시간 종료 검증은 포함하지 않는다.
 3. **회사 준비 v2 연결 — 3차 통합:** 회사 정책/새 등록 gate, 고정 safe-view, 새 계획/전용 보관·CLI와 부모 supervisor를 연결하고 합성 검증을 수행한다. 구형 계약과 테스트 결과가 달라지지 않는지 회귀를 확인하며 결과는 별도 기록한다.
-4. **원본 읽기 전용 적용 — 미실행:** 합성 검증을 마친 구체 구현·profile과 회사에 이미 확인된 범위를 대조한 후 지정된 원본/질문으로 새 준비를 실행한다. 구현 전 회사 pack을 추가로 읽거나 지원 성공을 추정하지 않는다.
+4. **원본 읽기 전용 적용 — 별도 1회 중단:** 3차 통합 뒤 추가 의존 객체 접근까지 허용된 준비 1회는 `COMPANY_GIT_RANGE_LIMIT`로 중단됐으며 계획 부재를 확인했다. 당시 동적 계수는 없어 정확한 제한 항목은 미확인이다. 구현·profile은 그대로 유지한다.
+5. **실패 진단 보완 — 합성 검증:** 최초 한도 실패의 단계·항목·현재/요청/최대량과 정리 전 공유 계수를 별도 진단으로 기록한다. 기존 오류·성공 snapshot·plan/payload/DB/stdout 계약은 유지한다. 회사 원본 재실행은 포함하지 않으며 합성 재현으로 과거 실패 원인을 단정하지 않는다.
 
 전체 기능의 필수 수용 기준은 다음과 같다. 1차 순수 검사는 [codec 결과](stage-4c17-codec-result.md), 2차 parser·파일 I/O/guard 검사는 [reader 결과](stage-4c17-reader-result.md), 회사 준비·저장·CLI·supervisor 통합은 [3차 결과](stage-4c17-integration-result.md)에 구분한다. 항목별 실제 검증과 한계를 기록하며 이전 단계나 4-C-16의 통과 결과로 전체 완료를 대신하지 않는다.
 
@@ -151,3 +152,7 @@ v2 worker는 최소 환경을 사용하고 쓰기는 runtime의 `store/`에만 �
 설계 기준은 기존 판독기·회사 준비 service/정책·설치된 `isomorphic-git` 1.44.12 구현이다. 1차 domain/policy codec의 기록은 [4-C-17 codec 결과](stage-4c17-codec-result.md)에 보존한다. 2차는 별도 payload parser·files/source 모듈과 합성 테스트를 추가하며 기존 판독기·등록·CLI·DB·수집 profile/hash·상한·의존성·lockfile은 유지한다. 실제 검사 결과와 미실행 사유는 [4-C-17 reader 결과](stage-4c17-reader-result.md)에 기록하고 상세 로그는 허용된 비공개 로컬 위치에 보관한다.
 
 3차는 회사 정책/등록 v2 gate와 고정 safe-view·계획/전용 보관·CLI·부모 supervisor를 연결한다. 검사 집계·RSS 관찰·저장 경쟁과 남은 한계는 [통합 결과](stage-4c17-integration-result.md)를 따른다. 실제 회사 자료·인증·native·모델·외부 서비스 접근은 이번 범위에 없으며 회사 원본 적용은 미실행이다. 부모 강제 종료에 대한 독립 guardian과 OS RSS 강제 상한도 제공하지 않는다. 다음 실제 적용 판단은 구체 통합 결과와 기존 회사 허용 범위, 추가·미확인 의존 객체 접근을 대조한 뒤에만 한다. 합성 결과를 해당 회사 저장소의 호환성 해결이나 조사 성공으로 표시하지 않는다.
+
+3차 기록은 당시 범위로 보존한다. 이후 별도 허용된 회사 준비의 자원 한도 중단을 계기로 [진단 보완 결과](stage-4c17-diagnostic-result.md)를 추가한다. `company-git-range-failure-v1`은 실제 budget 오류의 identity에 결합하며, cleanup에서 최초 실패를 보존한다. worker의 고정 stderr frame은 기존 64KiB stderr 한도 안에서 최대 8192바이트 JSON으로 검증한다. task 불일치·중복·잘린 frame·임의 필드/값은 거부하고 원시 stderr는 보관하지 않는다. 강제 종료 시 진단이 없을 수 있으며 `failure:null`을 성공이나 특정 원인으로 해석하지 않는다.
+
+선택 `--diagnostics-dir`을 준 plan/prune은 runtime과 분리된 부모·디렉터리0700/파일0600 위치를 사용한다. 부모만 `diagnostic-<id>.json`을 불변 생성하며 task/owner/runtime/진단 위치 hash와 기존 audit 만료를 검증한다. 최대8192바이트·8192파일이고 이동/복사·링크·권한·hash 변경은 거부한다. 같은 옵션의 plan 시작/prune에서만 만료 기록을 정리하며 별도 자동 정리 타이머는 없다. 상세 진단과 정상 run/result 형식을 섞지 않는다. 진단 저장 실패는 unknown이고 같은 ID inspect로 이미 저장됐을 수 있는 계획을 확인한다. 한도·조회 횟수·경로 guard·읽기 pass를 늘리거나 자동 재시도하지 않는다.

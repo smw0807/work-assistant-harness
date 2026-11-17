@@ -60,6 +60,7 @@ export const parseCompanyGitRangeIndex = (input: Uint8Array, packBytes: number,
   budget: CompanyGitRangeBudget, nowMs: number): CompanyGitRangeIndex => {
   let inputLease: Lease | undefined, orderLease: Lease | undefined, rankLease: Lease | undefined;
   try {
+    budget.setStage('pack_index');
     budget.checkActive(nowMs);
     if (!integer(packBytes, 32, limits.packBytes)) reject();
     const owned = snapshot(input, limits.indexBytes, budget); inputLease = owned.lease;
@@ -146,6 +147,7 @@ export const validateCompanyGitRangePackHeader = (header: Uint8Array, trailer: U
   budget: CompanyGitRangeBudget, nowMs: number): CompanyGitRangePackMetadata => {
   const leases: Lease[] = [];
   try {
+    budget.setStage('pack_header');
     budget.checkActive(nowMs);
     const state = indexStates.get(index);
     if (!state || state.budget !== budget || state.released) return reject('INVALID_INDEX_HANDLE');

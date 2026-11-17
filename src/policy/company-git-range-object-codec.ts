@@ -78,7 +78,7 @@ const snapshot = (value: unknown, maximum: number, budget: CompanyGitRangeBudget
   catch (error) { budget.releaseMemory(owned.memoryLease); throw error; }
 };
 const run = <T>(budget: CompanyGitRangeBudget, nowMs: number, work: () => T): T => {
-  try { budget.checkActive(nowMs); return work(); }
+  try { budget.setStage('git_object'); budget.checkActive(nowMs); return work(); }
   catch (error) {
     budget.abort();
     if (error instanceof HarnessError && /^COMPANY_GIT_RANGE_(?:INVALID_OBJECT|INVALID_DELTA|INVALID_GRAPH|INVALID_BYTES|LIMIT|INVALID_BUDGET|TIMEOUT|ABORTED)$/u.test(error.code)) throw error;

@@ -10,28 +10,31 @@ import { assertCompanyReadonlyPolicyAllowed, parseCompanyReadonlyPolicy } from '
 import { parseCompanyReadonlyRegistrationV2 } from '../policy/company-readonly-v2.js';
 import { canonicalReadonlyJson, hashReadonlyValue, isReadonlyId } from '../policy/readonly-investigation-policy.js';
 import { companyPath, companyPathsOverlap, readCompanyPrivateJson } from './company-readonly-files.js';
-import { companyV2RuntimeHash, prepareCompanyV2Directory, pruneCompanyV2Runs, readCompanyV2Registration, readCompanyV2RunResult,
+import { prepCompanyV2DiagnosticsDirectory, pruneCompanyV2Diagnostics, writeCompanyV2Diagnostic } from './company-readonly-v2-diagnostic-files.js';
+import { COMPANY_V2_DIAGNOSTIC_VERSION } from './company-readonly-v2-diagnostic-protocol.js';
+import { companyV2FileExists, companyV2RuntimeHash, prepareCompanyV2Directory, pruneCompanyV2Runs, readCompanyV2Registration, readCompanyV2RunResult,
   writeCompanyV2Run, writeCompanyV2RunResult, type CompanyV2Run } from './company-readonly-v2-files.js';
 import { companyV2Disabled, type CompanyV2WorkerOptions } from './company-readonly-v2-protocol.js';
 import { superviseCompanyV2Worker, type CompanyV2WorkerOutcome } from './company-readonly-v2-supervisor.js';
 
 export const companyReadonlyV2Usage = [
-  'pnpm harness company-readonly-v2-plan --policy <private-json> --registration <private-v2-json> --data-dir <private-runtime>',
+  'pnpm harness company-readonly-v2-plan --policy <private-json> --registration <private-v2-json> --data-dir <private-runtime> [--diagnostics-dir <private-diagnostics>]',
   'pnpm harness company-readonly-v2-inspect --task <uuid> --data-dir <private-runtime>',
   'pnpm harness company-readonly-v2-cancel --task <uuid> --data-dir <private-runtime>',
-  'pnpm harness company-readonly-v2-prune --data-dir <private-runtime>',
+  'pnpm harness company-readonly-v2-prune --data-dir <private-runtime> [--diagnostics-dir <private-diagnostics>]',
 ].join('\n');
 const parseArguments = (args: string[]) => {
   const command = args[0]?.replace(/^company-readonly-v2-/, '');
   if (!args[0]?.startsWith('company-readonly-v2-') || !['plan', 'inspect', 'cancel', 'prune'].includes(command ?? '')) throw new HarnessError('UNKNOWN_COMMAND');
   const names = command === 'plan' ? ['--policy', '--registration', '--data-dir'] : command === 'prune' ? ['--data-dir'] : ['--task', '--data-dir'];
+  const allowed = [...names, ...(['plan', 'prune'].includes(command!) ? ['--diagnostics-dir'] : [])];
   const options = new Map<string, string>();
   for (let index = 1; index < args.length; index += 2) {
     const name = args[index]!, value = args[index + 1];
-    if (!names.includes(name) || !value || value.startsWith('--') || options.has(name)) throw new HarnessError('INVALID_ARGUMENTS');
+    if (!allowed.includes(name) || !value || value.startsWith('--') || options.has(name)) throw new HarnessError('INVALID_ARGUMENTS');
     options.set(name, value);
   }
-  if (options.size !== names.length || options.has('--task') && !isReadonlyId(options.get('--task')!)) throw new HarnessError('INVALID_ARGUMENTS');
+  if (names.some(name => !options.has(name)) || options.has('--task') && !isReadonlyId(options.get('--task')!)) throw new HarnessError('INVALID_ARGUMENTS');
   return { command: command as CompanyV2WorkerOptions['command'], options };
 };
 
@@ -40,20 +43,26 @@ export const runCompanyReadonlyV2Command = async (args: string[]): Promise<void>
   const { command, options } = parseArguments(args);
   const sourceDirectory = await realpath(resolve(dirname(fileURLToPath(import.meta.url)), '../../..'));
   const runtime = companyPath(options.get('--data-dir'));
+  const diagnostics = options.has('--diagnostics-dir') ? companyPath(options.get('--diagnostics-dir')) : null;
   if (companyPathsOverlap(runtime, sourceDirectory)) throw new HarnessError('COMPANY_READONLY_V2_UNSAFE_PATH');
+  if (diagnostics && [runtime, sourceDirectory].some(path => companyPathsOverlap(diagnostics, path))) {
+    throw new HarnessError('COMPANY_READONLY_V2_UNSAFE_PATH');
+  }
   const worker: CompanyV2WorkerOptions = { command, sourceDirectory, runtimeDirectory: runtime };
   let run: CompanyV2Run | undefined;
   if (command === 'plan') {
     const policyFile = companyPath(options.get('--policy')), registrationFile = companyPath(options.get('--registration'));
     for (const path of [policyFile, registrationFile]) {
-      if (companyPathsOverlap(path, sourceDirectory) || companyPathsOverlap(path, runtime)) throw new HarnessError('COMPANY_READONLY_V2_UNSAFE_PATH');
+      if (companyPathsOverlap(path, sourceDirectory) || companyPathsOverlap(path, runtime)
+        || diagnostics && companyPathsOverlap(path, diagnostics)) throw new HarnessError('COMPANY_READONLY_V2_UNSAFE_PATH');
     }
     const policy = parseCompanyReadonlyPolicy(await readCompanyPrivateJson(policyFile, 'policy'));
     // Do not read registration or source metadata before both read and storage policy are declared.
     assertCompanyReadonlyPolicyAllowed(policy);
     const registration = parseCompanyReadonlyRegistrationV2(await readCompanyV2Registration(registrationFile));
     companyPath(registration.sourceRoot);
-    if ([runtime, sourceDirectory, policyFile, registrationFile].some(path => companyPathsOverlap(registration.sourceRoot, path))) {
+    if ([runtime, sourceDirectory, policyFile, registrationFile, ...(diagnostics ? [diagnostics] : [])]
+      .some(path => companyPathsOverlap(registration.sourceRoot, path))) {
       throw new HarnessError('COMPANY_READONLY_V2_UNSAFE_PATH');
     }
     const startedAt = new Date().toISOString(), taskId = randomUUID();
@@ -62,9 +71,15 @@ export const runCompanyReadonlyV2Command = async (args: string[]): Promise<void>
       gitProfileHash: getCompanyGitRangeProfileHash(), policyHash: hashReadonlyValue(canonicalReadonlyJson(policy)),
       registrationHash: hashReadonlyValue(canonicalReadonlyJson(registration)), runtimeHash: companyV2RuntimeHash(runtime, `os-user:${process.getuid?.()}`) };
     Object.assign(worker, { taskId, startedAt, policyFile, registrationFile, policyHash: run.policyHash, registrationHash: run.registrationHash });
+    if (diagnostics) worker.diagnosticsVersion = COMPANY_V2_DIAGNOSTIC_VERSION;
   } else if (command !== 'prune') worker.taskId = options.get('--task')!;
   const startedAtMs = performance.now();
+  if (diagnostics && await companyV2FileExists(diagnostics)) await prepCompanyV2DiagnosticsDirectory(diagnostics, runtime, false);
   await prepareCompanyV2Directory(runtime, command === 'plan');
+  if (diagnostics) {
+    await prepCompanyV2DiagnosticsDirectory(diagnostics, runtime, command === 'plan');
+    await pruneCompanyV2Diagnostics(diagnostics, runtime, new Date());
+  }
   if (run) await writeCompanyV2Run(runtime, run);
   let outcome: CompanyV2WorkerOutcome;
   try {
@@ -78,10 +93,14 @@ export const runCompanyReadonlyV2Command = async (args: string[]): Promise<void>
       { cwd: sourceDirectory, env: { LANG: 'C.UTF-8', TZ: 'UTC' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       child.stdin.on('error', () => { /* No input is sent; worker outcome is decided by its exit and bounded output. */ });
       child.stdin.end();
-      outcome = await superviseCompanyV2Worker(child, command, worker.taskId ?? null, startedAtMs);
+      outcome = await superviseCompanyV2Worker(child, command, worker.taskId ?? null, startedAtMs, undefined, Boolean(diagnostics && run));
     }
   } catch { outcome = { summary: null, reason: 'worker_failed', exitConfirmed: false }; }
   if (run) {
+    if (diagnostics) {
+      try { await writeCompanyV2Diagnostic(diagnostics, runtime, run, outcome, outcome.failureDiagnostic ?? null); }
+      catch { outcome = { ...outcome, summary: null, reason: 'worker_failed' }; }
+    }
     try {
       await writeCompanyV2RunResult(runtime, { version: 'company-readonly-v2-run-result-v1', taskId: run.taskId,
         status: outcome.summary ? 'succeeded' : 'unknown', planHash: outcome.summary?.planHash ?? null,

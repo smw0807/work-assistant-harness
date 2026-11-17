@@ -37,6 +37,8 @@ native 파일을 지정하지 않을 때는 [부분 진단 템플릿](../config/
 
 `company-git-range-source-v1`은 계속 metadata/hash만 반환하는 내부 API다. v2 준비는 별도 `company-readonly-registration-v2`와 고정 `gitProfileHash`를 요구하고 `company-readonly-v2-plan/inspect/cancel/prune` 명령을 사용한다. [README의 v2 사용법](../README.md#구간-판독기를-사용하는-회사-준비-v2)에 정확한 설정·명령을 둔다. 기본 미확인 정책은 등록·대상 접근 전에 거부하고 기존 v1 명령·DB·계약은 자동 전환하지 않는다. 선택 원문은 내부 메모리에서 안전 발췌로 바꾼 뒤 해제하며, 최종 pass에서 원문 hash와 발췌를 다시 확인한다. raw 본문이나 내부 FS 경로를 일반 출력에 내보내지 않고 허용된 로컬 위치에 상세 자료를 보관하며 공유 요약에는 집계만 남긴다.
 
+별도 허용된 첫 회사 읽기 준비는 자원 한도 오류로 중단됐고 같은 ID 조회에서 계획 부재를 확인했다. 실패 당시 세부 계수는 없어 동적 한도의 원인은 미확인이다. 후속 [진단 보완](stage-4c17-diagnostic-result.md)은 합성 자료로만 검증하며 회사 원본/Slack 재접근이나 자동 재시도를 하지 않는다. `plan/prune`의 선택 `--diagnostics-dir`은 기존 runtime과 분리된 `0700` 위치에 `0600` 진단을 보관한다. 최초 실패의 고정 항목과 숫자만 저장하고 기존 audit 만료를 유지하며, 같은 옵션을 준 plan/prune에서 만료 자료를 삭제한다. 기존 결과·계약·상한/hash를 바꾸거나 실패를 성공으로 해석하지 않는다. 새로운 실제 준비는 기존에 허용된 범위 안의 별도 명시적 실행으로 구분한다.
+
 실제 I/O·할당은 기존 고정 profile 예산을 공유하며 두 pass의 반복 읽기·해제도 계수한다. v2 부모 supervisor는 30초 기한에 `SIGTERM`, 250ms 유예 뒤 `SIGKILL`을 요청하며 child의 `close`만 종료 확인으로 인정한다. 부모 생존·OS 신호 처리에 의존하고 부모 자체가 강제 종료되면 독립 guardian이나 고아 프로세스 방지는 제공하지 않는다. 닫힘 불확정 FD는 계수를 유지하며 같은 번호로 재시도하지 않는다. worker의 V8 old-space 128MiB 설정, 관리 Buffer 계수와 RSS 256MiB 합성 측정 목표는 서로 다르며 OS RSS 강제 상한이 아니다.
 
 소유자 전용 runtime은 `store/`와 `runs/`로 나누며 부모/디렉터리 `0700`, 파일 `0600`을 요구한다. worker는 `store/`만 쓸 수 있다. 시작 전에 ID와 hash를 별도 시작 기록에 fsync하고 결과를 다른 파일에 한 번 기록한다. 저장 후 응답을 잃거나 부모 종료로 결과 파일이 없으면 `unknown`이며 같은 ID의 `inspect`로 보관 상태·hash·기간을 확인한다. 이 조회는 원래 worker의 종료를 증명하지 않으며 자동 재시도하지 않는다. 새 명시적 `plan`만 새 ID를 만든다.

@@ -823,6 +823,13 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - 3차 검사·측정·미실행 범위는 [통합 결과](stage-4c17-integration-result.md)에 기록한다. 구현·검증은 합성 자료만 사용하며 실제 회사 원본 적용은 미실행이다. 다음 적용 판단에서는 기존에 확인한 회사 허용 범위와 추가·미확인 의존 객체 접근만 대조한다. R1~R10의 항목별 근거와 한계를 구분하며 합성 통합을 해당 회사 호환성 해결이나 조사 성공으로 표현하지 않는다.
 - 회사 레포 사본·대상 Git CLI·브랜치 생성·수정/검사 실행·실제 인증/native/model·외부 전송은 이 설계에 포함하지 않는다. 실제 기능 변경용 작업 브랜치는 읽기 조사와 다른 후속 범위다.
 
+##### 단계 4-C-17 후속: 자원 실패 진단
+
+- 3차 합성 통합 뒤 별도 허용된 회사 읽기 준비 1회는 `COMPANY_GIT_RANGE_LIMIT`로 중단됐고 같은 ID의 계획 부재를 확인했다. 세부 동적 계수는 남지 않아 실패 항목은 미확인이다. 합성 재현이 과거 회사 실패 원인을 확정하지 않는다.
+- 최초 실제 한도 거절의 stage/phase·항목·current/requested/maximum·정리 전 budget snapshot을 별도 `company-git-range-failure-v1`로 기록한다. 오류 객체 identity로 연결해 위조 오류나 임의 메시지에서 진단을 구성하지 않는다. 기존 오류 코드·profile/hash·한도·성공 snapshot과 plan/payload/DB 계약은 유지한다.
+- `plan/prune --diagnostics-dir`만 opt-in으로 연결한다. worker stderr의 고정 bounded frame을 부모가 검증하고, runtime 밖 0700/0600 진단 위치에 task/owner/runtime/진단 위치 hash와 기존 audit 만료로 결합해 불변 저장한다. 중복·부분·과대·잘못된 task/구조는 진단으로 인정하지 않는다. 일반 오류·강제 종료 시 상세 진단이 없을 수 있고 저장 실패는 unknown/같은 ID inspect로 처리한다. 자동 retry·fallback·한도 확대는 없다.
+- 합성 budget/실제 파일 reader/worker/CLI 및 보관·만료·오류 경쟁을 검증한다. 이번 회사 자료·인증·native/model·외부 서비스 접근은 0회이며 결과는 [진단 보완 결과](stage-4c17-diagnostic-result.md)에 기록한다. 다음 최소 작업은 기존 승인 범위와 현재 입력을 대조한 명시적 진단 준비 1회이며 자동 실행하지 않는다.
+
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 

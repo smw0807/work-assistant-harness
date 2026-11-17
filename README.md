@@ -633,13 +633,17 @@ pnpm harness company-readonly-v2-cancel --task <uuid> --data-dir /private/review
 pnpm harness company-readonly-v2-prune --data-dir /private/review/company-runtime-v2
 ```
 
+자원 한도 실패의 세부 계수가 필요하면 `plan`과 `prune`에만 선택 옵션 `--diagnostics-dir /private/review/company-diagnostics-v2`를 추가합니다. 진단 위치와 부모는 `0700`이어야 하며 하네스·원본·설정·runtime과 겹치면 거부합니다. 부모 프로세스가 별도 `diagnostic-<uuid>.json`을 `0600`으로 한 번 저장합니다. 원문·원본 경로·객체 ID·임의 오류 문자열은 포함하지 않고, 최초 한도 실패의 단계·한도명·현재 사용량·거절된 요청량·상한·정리 전 계수를 기록합니다. `current + requested > maximum`은 요청을 수행하기 전에 거절했다는 뜻이며, timeout은 경과 시간을 기록합니다.
+
+진단은 기존 `auditExpiresAt`을 따르며, 같은 옵션을 준 `plan` 시작 또는 `prune`에서 만료 기록을 삭제합니다. 별도 타이머가 자동 삭제하지는 않습니다. 기존 stdout·계획/payload·DB·시작/결과 기록 형식과 한도/hash는 유지합니다. 진단 저장 실패는 `unknown`이며 같은 ID의 `inspect`로 저장 상태를 확인합니다. 강제 종료·일반 오류·손상된 진단은 `failure:null`일 수 있으므로 원인을 추정하지 않습니다. 진단은 승인이나 재시도를 만들지 않으며 과거 실패의 상세 계수를 복원하지 않습니다. 합성 검사와 남은 한계는 [진단 보완 결과](docs/stage-4c17-diagnostic-result.md)를 따릅니다.
+
 설정 파일은 소유자 전용 `0600`, 설정의 부모·runtime과 그 부모는 `0700`이어야 합니다. runtime은 하네스·원본·설정·v1 보관 위치와 분리합니다. v2는 `store/company-readonly-v2.sqlite`에 안전 발췌·검증 metadata를, `runs/`에 본문 없는 시작·결과 기록을 둡니다. 두 하위 디렉터리는 `0700`, 파일은 `0600`이며 worker의 쓰기 권한은 `store/`에만 부여합니다. 시작 기록도 runtime 위치 hash에 결합하므로 DB 생성 전 실패한 기록을 이동·복사한 경우에도 조작을 거부합니다. 대상 원문·전체 안전 view·commit/tree/base 본문은 디스크에 보관하지 않습니다. 같은 공유 예산 안에서 두 번 읽으며 첫 읽기의 선택 원문은 내부 메모리에서만 안전 발췌로 변환한 후 해제합니다. 최종 읽기는 원문 hash와 안전 view를 다시 비교하며 추가 collect 읽기는 없습니다. `AWAITING_APPROVAL`, 승인 생성·전송·실행 false와 기존 수집 한도는 유지합니다.
 
 `plan`은 시작 전에 새 ID를 정하고 `runs/run-<uuid>.json` 및 디렉터리 항목을 fsync한 뒤 worker를 시작합니다. 결과는 별도 `result-<uuid>.json`에 한 번 기록하며 시작 기록을 덮어쓰지 않습니다. 저장 직후 응답 유실·timeout·부모 종료 등으로 결과를 확정하지 못하면 `unknown`입니다. 시작 기록만 있고 결과 기록이 없어도 같은 ID로 `inspect`해 저장된 상태·hash·기한 또는 부재를 확인합니다. 이 조회는 원래 worker의 종료 확인을 대신하지 않습니다. 자동 재시도는 없으며 새로 명시한 `plan`은 새 ID의 작업입니다. 취소·만료된 자료는 재사용으로 되살리지 않습니다.
 
 부모 supervisor는 원래 시작 시각의 30초 기한에 `SIGTERM`, 250ms 뒤에도 종료되지 않으면 `SIGKILL`을 요청하고, child의 `close`를 관찰해야 `exitConfirmed:true`로 표시합니다. 유효 응답만으로 성공 처리하지 않습니다. 이 종료 정책은 부모 생존과 OS 신호 처리에 의존하며, 부모 자체의 강제 종료를 견디는 독립 guardian이나 고아 프로세스 방지를 제공하지 않습니다. worker에는 V8 old-space 128MiB를 설정하지만 관리 Buffer 32MiB 계수 및 RSS 256MiB 합성 측정 목표와는 다릅니다. RSS의 OS 강제 상한을 제공하지 않습니다. 읽기 권한은 부모 metadata 검증 때문에 전체로 열고 실제 읽기는 고정 판독기로 제한하므로 OS 읽기 격리로 설명하지 않습니다.
 
-전체 pack checksum·미조회 객체는 계속 `not_checked`이고, 선택 객체 OID가 맞아도 작성자·서명·회사 출처를 인증하지 않습니다. 3차 구현·검증에는 실제 회사 자료·실제 인증·native·모델·외부 서비스 접근이 없으며 실제 회사 원본 적용과 호환성은 미검증입니다.
+전체 pack checksum·미조회 객체는 계속 `not_checked`이고, 선택 객체 OID가 맞아도 작성자·서명·회사 출처를 인증하지 않습니다. 3차 합성 통합 후 별도로 허용된 회사 읽기 준비 1회는 `COMPANY_GIT_RANGE_LIMIT`로 중단됐고 저장된 계획은 없었습니다. 당시 어떤 동적 한도가 원인인지는 미확인입니다. 이번 진단 보완은 합성 검증만 수행하며 회사 준비를 다시 실행하지 않습니다. 실제 인증·native·모델 연결과 회사 조사 성공은 미검증입니다.
 
 ## 모의 입력과 오류 재현
 

@@ -1,9 +1,11 @@
 import { HarnessError } from '../domain/errors.js';
+import { COMPANY_GIT_RANGE_DIAGNOSTIC_STAGES, COMPANY_GIT_RANGE_LIMIT_NAMES, type CompanyGitRangeDiagnosticStage,
+  type CompanyGitRangeFailure, type CompanyGitRangeFailureLimit, type CompanyGitRangeLimitName } from '../domain/company-git-range-diagnostic.js';
 import { COMPANY_GIT_RANGE_POLICY, type CompanyGitRangeBudgetSnapshot, type CompanyGitRangeDependencyLease,
   type CompanyGitRangeDescriptorLease, type CompanyGitRangeInflationReceipt, type CompanyGitRangeMemoryKind,
   type CompanyGitRangeMemoryLease, type CompanyGitRangeMetadataOperation, type CompanyGitRangePass,
   type CompanyGitRangePhase, type CompanyGitRangeProfile, type CompanyGitRangeReadReceipt } from '../domain/company-git-range.js';
-import { getPersonalCollectionProfileHash } from './personal-readonly-collection.js';
+import { getPersonalCollectionProfile, getPersonalCollectionProfileHash } from './personal-readonly-collection.js';
 import { canonicalReadonlyJson, hashReadonlyValue } from './readonly-investigation-policy.js';
 
 const mib = 1024 * 1024;
@@ -23,6 +25,13 @@ const profile: CompanyGitRangeProfile = Object.freeze({ policy: COMPANY_GIT_RANG
 const profileHash = hashReadonlyValue(canonicalReadonlyJson(profile));
 export const getCompanyGitRangeProfile = (): CompanyGitRangeProfile => profile;
 export const getCompanyGitRangeProfileHash = (): string => profileHash;
+
+const failures = new WeakMap<object, CompanyGitRangeFailure>();
+/** Error identity is the only authority; inspecting arbitrary error properties could execute untrusted getters. */
+export const extractCompanyGitRangeFailure = (error: unknown): CompanyGitRangeFailure | null =>
+  typeof error === 'object' && error !== null ? failures.get(error) ?? null : null;
+const diagnosticLimits = Object.freeze({ ...limits, ...getPersonalCollectionProfile().limits,
+  inflationOutputBytes: limits.objectBytes + limits.looseHeaderBytes });
 
 type FailureCode = 'COMPANY_GIT_RANGE_LIMIT' | 'COMPANY_GIT_RANGE_INVALID_BUDGET'
   | 'COMPANY_GIT_RANGE_TIMEOUT' | 'COMPANY_GIT_RANGE_ABORTED';
@@ -45,6 +54,8 @@ const token = <T extends object>(): T => Object.freeze({}) as T;
 export class CompanyGitRangeBudget {
   #phase: CompanyGitRangePhase = 'ready';
   #failureCode: FailureCode | null = null;
+  #stage: CompanyGitRangeDiagnosticStage = 'budget';
+  #failureDiagnostic: CompanyGitRangeFailure | null = null;
   readonly #startedAtMs: number;
   #lastNowMs: number;
   #completedPasses = 0;
@@ -86,7 +97,21 @@ export class CompanyGitRangeBudget {
     this.active();
     if (!timestamp(nowMs) || nowMs < this.#lastNowMs) this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
     this.#lastNowMs = nowMs;
-    if (nowMs - this.#startedAtMs >= limits.wallClockMs) this.fail('COMPANY_GIT_RANGE_TIMEOUT');
+    if (nowMs - this.#startedAtMs >= limits.wallClockMs) this.fail('COMPANY_GIT_RANGE_TIMEOUT', {
+      name: 'wallClockMs', current: nowMs - this.#startedAtMs, requested: 0, maximum: limits.wallClockMs,
+    });
+  }
+
+  /** Stage changes annotate trusted operations without changing a pass or obstructing failure cleanup. */
+  setStage(stage: CompanyGitRangeDiagnosticStage): void {
+    if (!COMPANY_GIT_RANGE_DIAGNOSTIC_STAGES.includes(stage)) this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
+    this.#stage = stage;
+  }
+
+  failLimit(name: CompanyGitRangeLimitName, current: number, requested: number, maximum: number): never {
+    const valid = COMPANY_GIT_RANGE_LIMIT_NAMES.includes(name) && integer(current) && integer(requested)
+      && maximum === diagnosticLimits[name] && requested > maximum - current;
+    return this.fail('COMPANY_GIT_RANGE_LIMIT', valid ? { name, current, requested, maximum } : undefined);
   }
 
   beginPass(pass: CompanyGitRangePass, nowMs: number): void {
@@ -107,9 +132,9 @@ export class CompanyGitRangeBudget {
   }
 
   reserveRead(bytes: number): CompanyGitRangeReadReceipt {
-    const pass = this.currentPass(); this.amount(bytes, limits.readChunkBytes);
-    this.fits(this.#readBytesReserved, bytes, limits.readBytes);
-    this.fits(pass.readBytesReserved, bytes, limits.readBytesPerPass); this.fits(this.#readCalls, 1, limits.readCalls);
+    const pass = this.currentPass(); this.amount(bytes, 'readChunkBytes');
+    this.fits(this.#readBytesReserved, bytes, 'readBytes');
+    this.fits(pass.readBytesReserved, bytes, 'readBytesPerPass'); this.fits(this.#readCalls, 1, 'readCalls');
     const receipt = token<CompanyGitRangeReadReceipt>();
     this.#reads.set(receipt, { bytes, live: true }); this.#pendingReads++;
     this.#readBytesReserved += bytes; pass.readBytesReserved += bytes; this.#readCalls++;
@@ -130,11 +155,11 @@ export class CompanyGitRangeBudget {
   chargeMetadata(operation: CompanyGitRangeMetadataOperation): void {
     this.currentPass();
     if (!['lstat', 'fstat', 'open', 'realpath', 'readdir'].includes(operation)) this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
-    this.fits(this.#metadataCalls, 1, limits.metadataCalls); this.#metadataCalls++;
+    this.fits(this.#metadataCalls, 1, 'metadataCalls'); this.#metadataCalls++;
   }
 
   reserveDescriptor(): CompanyGitRangeDescriptorLease {
-    this.currentPass(); this.fits(this.#openDescriptors, 1, limits.openDescriptors);
+    this.currentPass(); this.fits(this.#openDescriptors, 1, 'openDescriptors');
     const lease = token<CompanyGitRangeDescriptorLease>(); this.#descriptors.set(lease, { live: true });
     this.#openDescriptors++; this.#peakOpenDescriptors = Math.max(this.#peakOpenDescriptors, this.#openDescriptors);
     return lease;
@@ -147,10 +172,10 @@ export class CompanyGitRangeBudget {
   }
 
   reserveMemory(bytes: number, kind: CompanyGitRangeMemoryKind = 'buffer'): CompanyGitRangeMemoryLease {
-    this.active(); this.amount(bytes, limits.managedBytes);
+    this.active(); this.amount(bytes, 'managedBytes');
     if (kind !== 'buffer' && kind !== 'cache') this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
-    this.fits(this.#liveMemoryBytes, bytes, limits.managedBytes);
-    if (kind === 'cache') this.fits(this.#cacheMemoryBytes, bytes, limits.cacheBytes);
+    this.fits(this.#liveMemoryBytes, bytes, 'managedBytes');
+    if (kind === 'cache') this.fits(this.#cacheMemoryBytes, bytes, 'cacheBytes');
     const group = { bytes, kind, references: 1 }, lease = token<CompanyGitRangeMemoryLease>();
     this.#memory.set(lease, { group, live: true }); this.#liveMemoryBytes += bytes;
     if (kind === 'cache') { this.#cacheMemoryBytes += bytes; this.#liveCacheAllocations++; }
@@ -181,8 +206,8 @@ export class CompanyGitRangeBudget {
   }
 
   reserveInflation(maxBytes: number): CompanyGitRangeInflationReceipt {
-    this.currentPass(); this.amount(maxBytes, limits.objectBytes + limits.looseHeaderBytes);
-    this.fits(this.#inflations, 1, limits.inflations); this.fits(this.#outputBytesCharged, maxBytes, limits.inflatedBytes);
+    this.currentPass(); this.amount(maxBytes, 'inflationOutputBytes');
+    this.fits(this.#inflations, 1, 'inflations'); this.fits(this.#outputBytesCharged, maxBytes, 'inflatedBytes');
     const receipt = token<CompanyGitRangeInflationReceipt>(); this.#inflation.set(receipt, { bytes: maxBytes, live: true });
     this.#pendingInflations++; this.#inflations++; this.#outputBytesCharged += maxBytes; return receipt;
   }
@@ -200,39 +225,39 @@ export class CompanyGitRangeBudget {
   }
 
   chargeReconstruction(targetBytes: number): void {
-    this.currentPass(); this.amount(targetBytes, limits.objectBytes);
-    this.fits(this.#outputBytesCharged, targetBytes, limits.inflatedBytes);
+    this.currentPass(); this.amount(targetBytes, 'objectBytes');
+    this.fits(this.#outputBytesCharged, targetBytes, 'inflatedBytes');
     this.#outputBytesCharged += targetBytes; this.#reconstructionBytes += targetBytes;
   }
 
   admitDirectory(entryCount: number, candidatePairs: number): void {
-    this.currentPass(); this.amount(entryCount, limits.packDirectoryEntries); this.amount(candidatePairs, limits.candidatePairs);
+    this.currentPass(); this.amount(entryCount, 'packDirectoryEntries'); this.amount(candidatePairs, 'candidatePairs');
     if (candidatePairs * 2 > entryCount) this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
   }
 
   admitIndex(indexIdentity: string, bytes: number, objects: number): void {
     const pass = this.currentPass(); this.identity(indexIdentity);
-    this.amount(bytes, limits.indexBytes); this.amount(objects, limits.indexObjects);
+    this.amount(bytes, 'indexBytes'); this.amount(objects, 'indexObjects');
     const previous = pass.indexes.get(indexIdentity);
     if (previous) {
       if (previous.bytes !== bytes || previous.objects !== objects) this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
       return;
     }
-    this.fits(pass.indexes.size, 1, limits.candidatePairs);
-    this.fits(pass.indexBytes, bytes, limits.indexBytesPerPass); this.fits(pass.indexObjects, objects, limits.indexObjectsPerPass);
+    this.fits(pass.indexes.size, 1, 'candidatePairs');
+    this.fits(pass.indexBytes, bytes, 'indexBytesPerPass'); this.fits(pass.indexObjects, objects, 'indexObjectsPerPass');
     pass.indexes.set(indexIdentity, { bytes, objects }); pass.indexBytes += bytes; pass.indexObjects += objects;
   }
 
   visitObject(objectIdentity: string): void {
     this.currentPass(); this.identity(objectIdentity);
     if (this.#objects.has(objectIdentity)) return;
-    this.fits(this.#objects.size, 1, limits.visitedObjects); this.#objects.add(objectIdentity);
+    this.fits(this.#objects.size, 1, 'visitedObjects'); this.#objects.add(objectIdentity);
   }
 
   enterDependency(objectIdentity: string): CompanyGitRangeDependencyLease {
     this.currentPass(); this.identity(objectIdentity);
     if (this.#dependencies.some(entry => entry.identity === objectIdentity)) this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
-    this.fits(this.#dependencies.length, 1, limits.dependencyNodes); this.visitObject(objectIdentity);
+    this.fits(this.#dependencies.length, 1, 'dependencyNodes'); this.visitObject(objectIdentity);
     const lease = token<CompanyGitRangeDependencyLease>(); this.#dependencies.push({ identity: objectIdentity, lease });
     this.#peakDependencyDepth = Math.max(this.#peakDependencyDepth, this.#dependencies.length); return lease;
   }
@@ -264,7 +289,7 @@ export class CompanyGitRangeBudget {
   }
 
   private active(): void {
-    if (this.#failureCode) throw new HarnessError(this.#failureCode);
+    if (this.#failureCode) this.throwFailure();
     if (this.#phase === 'complete') this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
   }
   private currentPass(): PassState {
@@ -272,12 +297,14 @@ export class CompanyGitRangeBudget {
     if (this.#phase !== 'inspect' && this.#phase !== 'verify') this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
     return this.#passes[this.#phase];
   }
-  private amount(value: number, maximum: number): void {
+  private amount(value: number, name: CompanyGitRangeLimitName): void {
     if (!integer(value)) this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
-    if (value > maximum) this.fail('COMPANY_GIT_RANGE_LIMIT');
+    const maximum = diagnosticLimits[name];
+    if (value > maximum) this.failLimit(name, 0, value, maximum);
   }
-  private fits(current: number, addition: number, maximum: number): void {
-    if (addition > maximum - current) this.fail('COMPANY_GIT_RANGE_LIMIT');
+  private fits(current: number, addition: number, name: CompanyGitRangeLimitName): void {
+    const maximum = diagnosticLimits[name];
+    if (addition > maximum - current) this.failLimit(name, current, addition, maximum);
   }
   private identity(value: string): void {
     if (!identity(value)) this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET');
@@ -294,9 +321,23 @@ export class CompanyGitRangeBudget {
     const record = this.#inflation.get(receipt);
     if (!record?.live) this.fail('COMPANY_GIT_RANGE_INVALID_BUDGET'); return record;
   }
-  private fail(code: FailureCode): never {
-    if (!this.#failureCode) this.#failureCode = code;
-    this.#phase = 'failed'; throw new HarnessError(this.#failureCode);
+  private fail(code: FailureCode, limit?: CompanyGitRangeFailureLimit): never {
+    if (!this.#failureCode) {
+      if (limit && (code === 'COMPANY_GIT_RANGE_LIMIT' || code === 'COMPANY_GIT_RANGE_TIMEOUT')) {
+        const { profileHash, phase, failureCode, ...counters } = this.snapshot();
+        if (phase !== 'failed' && failureCode === null) {
+          this.#failureDiagnostic = Object.freeze({ version: 'company-git-range-failure-v1', profileHash, errorCode: code,
+            phase, stage: this.#stage, limit: Object.freeze({ ...limit }), counters: Object.freeze(counters) });
+        }
+      }
+      this.#failureCode = code;
+    }
+    this.#phase = 'failed'; return this.throwFailure();
+  }
+  private throwFailure(): never {
+    const error = new HarnessError(this.#failureCode!);
+    if (this.#failureDiagnostic) failures.set(error, this.#failureDiagnostic);
+    throw error;
   }
 }
 Object.freeze(CompanyGitRangeBudget.prototype);

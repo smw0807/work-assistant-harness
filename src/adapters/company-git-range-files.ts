@@ -12,6 +12,7 @@ import { isRepositoryPath, validateReadRequest } from '../policy/read-policy.js'
 const limits = getCompanyGitRangeProfile().limits;
 const collectionLimits = getPersonalCollectionProfile().limits;
 const reject = (code = 'COMPANY_GIT_RANGE_SOURCE_CHANGED'): never => { throw new HarnessError(code); };
+const throwCleanupFailure = (error: unknown, alreadyFailed: boolean): void => { if (!alreadyFailed) throw error; };
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const packName = /^pack-[a-f0-9]{40}\.(idx|pack)$/u;
 const gitPath = (path: string): boolean => /^\.git\/(?:HEAD|index|packed-refs|refs\/heads\/[a-zA-Z0-9_./-]+|objects\/[a-f0-9]{2}\/[a-f0-9]{38}|objects\/pack\/pack-[a-f0-9]{40}\.(?:idx|pack))$/u.test(path)
@@ -131,30 +132,32 @@ export const createCompanyGitRangeFiles = (inputRoot: string, inputSelectedPaths
     }
     return undefined;
   };
-  const regular = (value: fs.Stats, maximum: number): void => {
+  const regular = (value: fs.Stats, maximum: number, path: string): void => {
     if (!value.isFile() || value.isSymbolicLink() || value.nlink !== 1 || value.uid !== process.getuid?.()
       || !integer(value.size)) reject();
-    if (value.size > maximum) reject('COMPANY_GIT_RANGE_LIMIT');
+    if (value.size > maximum) budget.failLimit(gitPath(path)
+      ? path.endsWith('.pack') ? 'packBytes' : path.endsWith('.idx') ? 'indexBytes' : 'gitFileBytes'
+      : 'sourceFileBytes', 0, value.size, maximum);
   };
   const comparePath = (observation: FileObservation): void => {
     const absolute = join(root, observation.path);
     observeParents(dirname(absolute));
     const current = stat(absolute);
     if (!current || !sameFile(observation.stat, current)) return reject();
-    regular(current, observation.stat.size);
+    regular(current, observation.stat.size, observation.path);
   };
   const compareFile = (file: OpenFile): void => {
     if (file.descriptor === null) reject('COMPANY_GIT_RANGE_INVALID_FILES');
     comparePath(file.observation);
     const current = metadata('fstat', () => fs.fstatSync(file.descriptor!));
     if (!sameFile(file.observation.stat, current)) reject();
-    regular(current, file.observation.stat.size);
+    regular(current, file.observation.stat.size, file.observation.path);
   };
   const read = (file: OpenFile, offset: number, length: number): { bytes: Buffer; memoryLease: CompanyGitRangeMemoryLease } => run(() => {
     active();
     if (file.descriptor === null || !integer(offset) || !integer(length) || offset > file.observation.stat.size
       || length > file.observation.stat.size - offset) reject('COMPANY_GIT_RANGE_INVALID_FILES');
-    if (length > limits.readChunkBytes) reject('COMPANY_GIT_RANGE_LIMIT');
+    if (length > limits.readChunkBytes) budget.failLimit('readChunkBytes', 0, length, limits.readChunkBytes);
     compareFile(file);
     const memoryLease = budget.reserveMemory(length);
     let receipt: ReturnType<CompanyGitRangeBudget['reserveRead']> | undefined;
@@ -193,7 +196,7 @@ export const createCompanyGitRangeFiles = (inputRoot: string, inputSelectedPaths
       absentPaths.set(path, frontier); return undefined;
     }
     if (absentPaths.has(path)) reject();
-    regular(current, maximum);
+    regular(current, maximum, path);
     const previous = files.get(path);
     if (previous && !sameFile(previous.stat, current)) reject();
     const observation = previous ?? { path, stat: current, reads: new Map<string, CompanyGitRangeReadMetadata>() };
@@ -220,11 +223,12 @@ export const createCompanyGitRangeFiles = (inputRoot: string, inputSelectedPaths
     try { directory = metadata('open', () => fs.opendirSync(absolute, { bufferSize: 1 })); }
     catch (error) { budget.releaseDescriptor(lease); throw error; }
     const names: string[] = [], candidates = new Set<string>();
+    let failed = false;
     try {
       for (;;) {
         const entry = metadata('readdir', () => directory.readSync());
         if (!entry) break;
-        if (names.length >= limits.packDirectoryEntries) reject('COMPANY_GIT_RANGE_LIMIT');
+        if (names.length >= limits.packDirectoryEntries) budget.failLimit('packDirectoryEntries', names.length, 1, limits.packDirectoryEntries);
         if (!safeRelative(entry.name) || entry.name.includes('/')) reject();
         names.push(entry.name);
         if (packName.test(entry.name)) {
@@ -232,9 +236,11 @@ export const createCompanyGitRangeFiles = (inputRoot: string, inputSelectedPaths
           candidates.add(entry.name);
         }
       }
-    } finally {
+    } catch (error) { failed = true; throw error; }
+    finally {
       // An uncertain directory close also keeps its descriptor charge; do not report unconfirmed cleanup.
-      directory.closeSync(); budget.releaseDescriptor(lease);
+      try { directory.closeSync(); budget.releaseDescriptor(lease); }
+      catch (error) { throwCleanupFailure(error, failed); }
     }
     observeParents(absolute);
     for (const candidate of candidates) {

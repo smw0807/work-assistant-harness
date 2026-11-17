@@ -14,6 +14,7 @@ export interface CompanyV2WorkerOptions {
   registrationFile?: string;
   policyHash?: string;
   registrationHash?: string;
+  diagnosticsVersion?: 'company-git-range-failure-v1';
 }
 export const companyV2Disabled = {
   approvalCreated: false, transmissionAllowed: false, executionAllowed: false, companyPolicyVerified: false,
@@ -82,10 +83,12 @@ export const parseCompanyV2WorkerOptions = (text: string): CompanyV2WorkerOption
     throw new HarnessError('COMPANY_READONLY_V2_INVALID_WORKER_INPUT');
   }
   const fields = ['command', 'sourceDirectory', 'runtimeDirectory', ...(value.command === 'plan'
-    ? ['taskId', 'startedAt', 'policyFile', 'registrationFile', 'policyHash', 'registrationHash'] : value.command === 'prune' ? [] : ['taskId'])];
+    ? ['taskId', 'startedAt', 'policyFile', 'registrationFile', 'policyHash', 'registrationHash',
+      ...(Object.hasOwn(value, 'diagnosticsVersion') ? ['diagnosticsVersion'] : [])] : value.command === 'prune' ? [] : ['taskId'])];
   if (Object.keys(value).length !== fields.length || Object.keys(value).some(key => !fields.includes(key))
     || Object.values(value).some(item => typeof item !== 'string')
     || value.command !== 'prune' && !isReadonlyId(value.taskId!)
+    || Object.hasOwn(value, 'diagnosticsVersion') && value.diagnosticsVersion !== 'company-git-range-failure-v1'
     || value.command === 'plan' && (!date(value.startedAt) || ![value.policyHash, value.registrationHash].every(hash => /^[a-f0-9]{64}$/.test(hash!)))) {
     throw new HarnessError('COMPANY_READONLY_V2_INVALID_WORKER_INPUT');
   }

@@ -9,16 +9,18 @@ import { SqliteCompanyReadonlyV2Store } from '../adapters/sqlite-company-readonl
 import { CompanyReadonlyPreparationServiceV2 } from '../application/prepare-company-readonly-v2.js';
 import type { CompanyReadonlySnapshotV2 } from '../domain/company-readonly-v2.js';
 import { HarnessError } from '../domain/errors.js';
-import { getCompanyGitRangeProfileHash } from '../policy/company-git-range-budget.js';
+import { extractCompanyGitRangeFailure, getCompanyGitRangeProfileHash } from '../policy/company-git-range-budget.js';
 import { assertCompanyReadonlyPolicyAllowed, parseCompanyReadonlyPolicy } from '../policy/company-readonly.js';
 import { parseCompanyReadonlyRegistrationV2 } from '../policy/company-readonly-v2.js';
 import { canonicalReadonlyJson, hashReadonlyValue } from '../policy/readonly-investigation-policy.js';
 import { companyPath, companyPathsOverlap, readCompanyPrivateJson } from './company-readonly-files.js';
 import { companyV2FileExists, prepareCompanyV2Directory, readCompanyV2Registration, readCompanyV2Run } from './company-readonly-v2-files.js';
 import { companyV2Disabled, parseCompanyV2WorkerOptions, type CompanyV2Summary } from './company-readonly-v2-protocol.js';
+import { formatCompanyV2Diagnostic } from './company-readonly-v2-diagnostic-protocol.js';
 
 @Module({})
 class CompanyReadonlyV2Module {}
+let diagnosticTaskId: string | null = null;
 
 const snapshotSummary = (snapshot: CompanyReadonlySnapshotV2) => ({
   status: snapshot.status, planHash: snapshot.plan.planHash, createdAt: snapshot.plan.createdAt,
@@ -63,6 +65,7 @@ const run = async (): Promise<void> => {
       throw new HarnessError('COMPANY_READONLY_V2_INPUT_CHANGED');
     }
     context.now = new Date(receipt.startedAt);
+    if (options.diagnosticsVersion) diagnosticTaskId = options.taskId!;
   }
   let summary: CompanyV2Summary = {
     version: 'company-readonly-v2-result-v1', command: options.command, taskId: options.taskId ?? null,
@@ -100,6 +103,11 @@ const run = async (): Promise<void> => {
   process.stdout.write(`${JSON.stringify(summary)}\n`);
 };
 void run().catch((error: unknown) => {
+  const failure = extractCompanyGitRangeFailure(error);
+  if (diagnosticTaskId && failure) {
+    try { process.stderr.write(formatCompanyV2Diagnostic(diagnosticTaskId, failure)); }
+    catch { /* Diagnostic formatting cannot change the original worker failure. */ }
+  }
   const code = error instanceof HarnessError && /^COMPANY_(READONLY|GIT_RANGE)_[A-Z0-9_]+$/.test(error.code)
     ? error.code : 'COMPANY_READONLY_V2_PREPARATION_FAILED';
   process.stderr.write(`${code}\n`); process.exitCode = 1;

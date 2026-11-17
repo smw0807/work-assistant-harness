@@ -22,6 +22,7 @@ const collectionLimits = getPersonalCollectionProfile().limits;
 type Files = ReturnType<typeof createCompanyGitRangeFiles>;
 type File = NonNullable<ReturnType<Files['open']>>;
 const fail = (suffix = 'INVALID_SOURCE'): never => { throw new HarnessError(`COMPANY_GIT_RANGE_${suffix}`); };
+const throwCleanupFailure = (error: unknown, alreadyFailed: boolean): void => { if (!alreadyFailed) throw error; };
 const oid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40}$/u.test(value);
 const digest = (value: unknown): string => hashReadonlyValue(canonicalReadonlyJson(value));
 const inputKeys = ['version', 'profileHash', 'sourceRoot', 'baseCommit', 'selectedPaths'];
@@ -161,8 +162,11 @@ const collectSources = (request: CompanyGitRangeSourceRequest, selection: Collec
       for (const [position, range] of selection.readRanges.entries()) {
         if (range.path !== path) continue;
         const item = extractPersonalCollectionEvidence(selection.repoId, request.baseCommit, range, view);
-        evidenceBytes += Buffer.byteLength(item.excerpt);
-        if (evidenceBytes > collectionLimits.evidenceBytes) return fail('LIMIT');
+        const bytes = Buffer.byteLength(item.excerpt);
+        if (evidenceBytes + bytes > collectionLimits.evidenceBytes) {
+          budget.failLimit('evidenceBytes', evidenceBytes, bytes, collectionLimits.evidenceBytes);
+        }
+        evidenceBytes += bytes;
         evidence[position] = Object.freeze(item);
       }
       budget.checkActive(now());
@@ -199,11 +203,13 @@ const withFileBytes = <T>(files: Files, budget: CompanyGitRangeBudget, path: str
   action: (bytes: Buffer, mode: number, memoryLease: CompanyGitRangeMemoryLease) => T, optional = false): T | undefined => {
   const file = files.open(path, maximum, optional);
   if (!file) return undefined;
+  let failed = false;
   try {
     const read = readBytes(file, 0, file.size, budget);
     try { file.close(); return action(read.bytes, file.mode, read.memoryLease); }
     finally { budget.releaseMemory(read.memoryLease); }
-  } finally { file.close(); }
+  } catch (error) { failed = true; throw error; }
+  finally { try { file.close(); } catch (error) { throwCleanupFailure(error, failed); } }
 };
 const validRef = (name: string): boolean => name.length <= 512 && /^refs\/[a-zA-Z0-9_./-]+$/u.test(name)
   && !name.endsWith('/') && !name.includes('//') && !name.includes('..')
@@ -236,13 +242,17 @@ const verifyHead = (files: Files, budget: CompanyGitRangeBudget, baseCommit: str
 };
 
 const openPacks = (files: Files, budget: CompanyGitRangeBudget, now: () => number, packs: Pack[]): void => {
+  budget.setStage('pack_inventory');
   for (const name of files.listPacks()) {
     const path = `.git/objects/pack/${name.replace(/\.idx$/u, '.pack')}`;
+    budget.setStage('pack_inventory');
     const file = files.open(path, limits.packBytes)!;
-    let index: CompanyGitRangeIndex | undefined, retained = false;
+    let index: CompanyGitRangeIndex | undefined, retained = false, failed = false;
     try {
+      budget.setStage('pack_index');
       index = withFileBytes(files, budget, `.git/objects/pack/${name}`, limits.indexBytes,
         bytes => parseCompanyGitRangeIndex(bytes, file.size, budget, now()))!;
+      budget.setStage('pack_header');
       const header = file.read(0, 12);
       try {
         const trailer = file.read(file.size - 20, 20);
@@ -251,7 +261,17 @@ const openPacks = (files: Files, budget: CompanyGitRangeBudget, now: () => numbe
           packs.push({ path, file, index, metadata, roots: new Set(), objects: new Map() }); retained = true;
         } finally { budget.releaseMemory(trailer.memoryLease); }
       } finally { budget.releaseMemory(header.memoryLease); }
-    } finally { if (!retained) { index?.release(); file.close(); } }
+    } catch (error) { failed = true; throw error; }
+    finally {
+      if (!retained) {
+        let cleanupFailed = false, cleanupError: unknown;
+        try { index?.release(); }
+        catch (error) { cleanupFailed = true; cleanupError = error; }
+        try { file.close(); }
+        catch (error) { if (!cleanupFailed) cleanupError = error; cleanupFailed = true; }
+        if (cleanupFailed) throwCleanupFailure(cleanupError, failed);
+      }
+    }
   }
 };
 
@@ -298,14 +318,17 @@ const createSource = (request: CompanyGitRangeSourceRequest, clock: () => number
   let firstProof: string | undefined, firstCollectionHash: string | undefined;
   const runPass = (pass: 'inspect' | 'verify', sources: Map<string, RetainedSource>): CompanyGitRangeSourceObservation => {
     let files: Files | undefined;
+    let failed = false;
     const packs: Pack[] = [];
     try {
-      budget.beginPass(pass, now());
+      budget.setStage('budget'); budget.beginPass(pass, now());
+      budget.setStage('head');
       files = createCompanyGitRangeFiles(request.sourceRoot, request.selectedPaths, budget, now);
       verifyHead(files, budget, request.baseCommit);
       openPacks(files, budget, now, packs);
       const looseObjects = new Map<string, LooseProof>();
       const load = (wanted: string): CompanyGitVerifiedObject => {
+        budget.setStage('git_object');
         budget.checkActive(now());
         const loose = withFileBytes(files!, budget, `.git/objects/${wanted.slice(0, 2)}/${wanted.slice(2)}`, limits.gitFileBytes,
           bytes => decodeCompanyGitLooseObject(bytes, wanted, budget, now()), true);
@@ -325,7 +348,11 @@ const createSource = (request: CompanyGitRangeSourceRequest, clock: () => number
       };
       const consume = <T>(wanted: string, expected: 'commit' | 'tree' | 'blob', action: (object: CompanyGitVerifiedObject) => T): T => {
         const object = load(wanted);
-        try { if (object.type !== expected) return fail(); return action(object); }
+        try {
+          if (object.type !== expected) return fail();
+          budget.setStage(expected === 'blob' ? 'selected_file' : expected);
+          return action(object);
+        }
         finally { budget.releaseMemory(object.memoryLease); }
       };
       const rootTree = consume(request.baseCommit, 'commit', object => parseCompanyGitCommitTree(object.bytes, budget, now()));
@@ -349,8 +376,10 @@ const createSource = (request: CompanyGitRangeSourceRequest, clock: () => number
           });
         });
       }
+      budget.setStage('working_index');
       withFileBytes(files, budget, '.git/index', limits.gitFileBytes, bytes =>
         assertCompanyGitWorkingIndex(bytes, selectedFiles.map(({ path, oid, mode }) => ({ path, oid, mode })), budget, now()));
+      budget.setStage('final_guard');
       files.assertUnchanged();
       const packProofs = packs.map(pack => Object.freeze({ path: pack.path, metadata: pack.metadata,
         byteProof: pack.roots.size ? createCompanyGitRangeByteProof(JSON.stringify({ pack: pack.metadata,
@@ -362,12 +391,20 @@ const createSource = (request: CompanyGitRangeSourceRequest, clock: () => number
         looseObjects: Object.freeze([...looseObjects.values()].sort((left, right) => left.oid.localeCompare(right.oid))), fileSystem: files.proof() };
       return Object.freeze({ ...fields, proofHash: digest(fields) });
     } catch (error) {
-      budget.abort();
+      failed = true; budget.abort();
       if (error instanceof HarnessError && error.code.startsWith('COMPANY_GIT_RANGE_')) throw error;
       return fail();
     } finally {
-      for (const pack of packs) pack.index.release();
-      files?.close();
+      budget.setStage('cleanup');
+      // Keep the first failure and its pre-cleanup diagnostic; uncertain closes retain their descriptor charge.
+      let cleanupFailed = false, cleanupError: unknown;
+      for (const pack of packs) {
+        try { pack.index.release(); }
+        catch (error) { if (!cleanupFailed) cleanupError = error; cleanupFailed = true; }
+      }
+      try { files?.close(); }
+      catch (error) { if (!cleanupFailed) cleanupError = error; cleanupFailed = true; }
+      if (cleanupFailed) throwCleanupFailure(cleanupError, failed);
     }
   };
   const execute = (pass: 'inspect' | 'verify'): PassResult => {
@@ -376,9 +413,12 @@ const createSource = (request: CompanyGitRangeSourceRequest, clock: () => number
       const result = runPass(pass, sources);
       if (pass === 'verify' && result.proofHash !== firstProof) return fail('SOURCE_CHANGED');
       // Ordinary owned source buffers may survive endPass; no cache or file descriptor survives this boundary.
+      budget.setStage('budget');
       if (pass === 'inspect') budget.endPass(now());
+      budget.setStage('safe_view');
       const collected = collection ? collectSources(request, collection, sources, budget, now) : undefined;
       if (pass === 'verify' && collected && digest(collected) !== firstCollectionHash) return fail('SOURCE_CHANGED');
+      budget.setStage('budget');
       if (pass === 'verify') budget.endPass(now());
       if (pass === 'inspect') { firstProof = result.proofHash; firstCollectionHash = collected ? digest(collected) : undefined; }
       return collected ? { observation: result, collected } : { observation: result };
