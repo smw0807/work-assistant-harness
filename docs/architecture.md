@@ -363,7 +363,7 @@ CLI는 private 설정·경로 분리 확인 후 최소 환경의 Node 권한 wor
 
 2차 이후 회사 정책 gate·등록/준비 v2, safe-view 수집, DB·CLI와 부모 supervisor를 연결했으며 [3차 통합 결과](stage-4c17-integration-result.md)를 따른다. 이 회사 준비 v2는 계속 판독 계약 `company-git-range-reader-v1`을 사용한다. 관리 buffer 계수는 호출자의 소유권 등록을 전제하며 프로세스 RSS 제한을 대신하지 않는다. 내부 판독기의 작업 경계 시간 검사는 동기 I/O나 압축 해제를 선점하지 않는다. close 성공을 확인하지 못한 FD는 계수를 유지하고 준비를 실패시키며, 같은 번호로 자동 close 재시도하지 않는다.
 
-이후 [읽기 단위 설계](company-git-range-read-unit-design.md)의 독립 `company-git-range-reader-v2`를 합성 자료에 연결했다. 새 guard/profile/budget·byte proof·source 버전은 기존 수치 한도를 유지하되 전체 부모 검사 시점을 단위 경계로 바꾼다. chunk별 leaf/FD, 전체 단위 결과의 끝 guard, pack 목록/부재/최종 검사와 두 pass의 원문·safe-view 대조를 유지한다. 일시적인 조상 변경 후 복원을 놓칠 수 있는 차이를 명시하며 기존 v1 동등성을 주장하지 않는다. 새 source는 내부 API이고 회사 명령/정책/DB/worker에는 연결하지 않았다. 실제 검사와 다음 범위는 [읽기 단위 구현 결과](stage-4c17-read-unit-result.md)를 따른다.
+이후 [읽기 단위 설계](company-git-range-read-unit-design.md)의 독립 `company-git-range-reader-v2`를 합성 자료에 연결했다. 새 guard/profile/budget·byte proof·source 버전은 기존 수치 한도를 유지하되 전체 부모 검사 시점을 단위 경계로 바꾼다. chunk별 leaf/FD, 전체 단위 결과의 끝 guard, pack 목록/부재/최종 검사와 두 pass의 원문·safe-view 대조를 유지한다. 일시적인 조상 변경 후 복원을 놓칠 수 있는 차이를 명시하며 기존 v1 동등성을 주장하지 않는다. 첫 내부 구현의 검사는 [읽기 단위 구현 결과](stage-4c17-read-unit-result.md)에 보존한다. 후속 U8은 별도 회사 준비 v3의 등록/계획·전용 DB·CLI·제한 worker·supervisor와 진단을 연결한다. 등록·계획·시작 기록·worker 입력은 profile/guard hash를 함께 요구하고 기존 v1/v2를 자동 변환하지 않는다. 정책 선언과 수치 한도는 유지하며, 성공한 최종 검증과 source 정리 뒤에만 보관한다. 합성 통합과 실제 회사 적용의 구분은 [v3 통합 결과](stage-4c17-company-v3-result.md)를 따른다.
 
 ## 3. 구성 요소와 책임
 

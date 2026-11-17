@@ -645,7 +645,22 @@ pnpm harness company-readonly-v2-prune --data-dir /private/review/company-runtim
 
 전체 pack checksum·미조회 객체는 계속 `not_checked`이고, 선택 객체 OID가 맞아도 작성자·서명·회사 출처를 인증하지 않습니다. 3차 합성 통합 후 별도로 허용된 회사 읽기 준비 1회는 `COMPANY_GIT_RANGE_LIMIT`로 중단됐고 저장된 계획은 없었습니다. 당시 어떤 동적 한도가 원인인지는 미확인입니다. 이번 진단 보완은 합성 검증만 수행하며 회사 준비를 다시 실행하지 않습니다. 실제 인증·native·모델 연결과 회사 조사 성공은 미검증입니다.
 
-읽기 단위 계약의 후속 내부 판독기 `company-git-range-reader-v2`는 [별도 설계](docs/company-git-range-read-unit-design.md)에 따라 합성 테스트에서만 사용합니다. 회사 준비 명령의 `v2`와 판독 계약의 `v2`는 서로 다른 버전입니다. 위 회사 명령은 계속 `company-git-range-reader-v1`을 사용하며 새 profile/hash나 요청을 받아들이지 않습니다. 새 방식은 부모 경로를 단위 경계에서 검사하므로 단위 내부의 일시적 변경 후 복원을 놓칠 수 있습니다. [구현 결과와 검증 범위](docs/stage-4c17-read-unit-result.md)를 확인하고, 기존 명령을 새 방식으로 전환하는 옵션이나 회사 준비 v3 명령은 아직 없습니다.
+### 읽기 단위 판독기를 사용하는 회사 준비 v3
+
+`company-readonly-v3-*`는 [읽기 단위 판독기](docs/company-git-range-read-unit-design.md)를 등록·정책 확인·로컬 보관·제한 worker에 연결한 별도 명령입니다. [등록 예제](config/company-readonly-registration-v3.example.json)를 `company-readonly-registration-v3.json`이라는 소유자 전용 `0600` 파일로 준비합니다. `version: company-readonly-registration-v3`, 고정 `gitProfileHash`와 `guardPolicyHash`가 모두 일치해야 합니다. 기존 정책 파일의 읽기·보관 선언과 기간, `enabled:false`를 그대로 사용하며 이미 확인한 정책을 다시 승인받지 않습니다.
+
+```sh
+pnpm harness company-readonly-v3-plan --policy /private/review/company-readonly-policy.json --registration /private/review/company-readonly-registration-v3.json --data-dir /private/review/company-runtime-v3 --diagnostics-dir /private/review/company-diagnostics-v3
+pnpm harness company-readonly-v3-inspect --task <uuid> --data-dir /private/review/company-runtime-v3
+pnpm harness company-readonly-v3-cancel --task <uuid> --data-dir /private/review/company-runtime-v3
+pnpm harness company-readonly-v3-prune --data-dir /private/review/company-runtime-v3 --diagnostics-dir /private/review/company-diagnostics-v3
+```
+
+진단 옵션은 `plan/prune`에서만 선택할 수 있습니다. 기존 v1/v2와 분리한 새 runtime·진단 위치를 사용하며 부모와 디렉터리는 `0700`, 파일은 `0600`이어야 합니다. 보관은 `store/company-readonly-v3.sqlite`, 시작/결과는 `runs/`, 진단은 별도 위치의 `diagnostic-v3-<uuid>.json`을 사용합니다. 구형 등록·DB·작업 기록·진단을 변환하거나 자동 선택하지 않습니다. stdout에는 내용·경로 없이 상태·식별자·hash와 보관 정보만 출력합니다. 결과가 불확실하면 `unknown`으로 남기고 같은 ID의 `inspect`로 확인하며 자동 재시도하지 않습니다.
+
+회사 준비 명령의 `v3`는 `company-git-range-reader-v2`를 선택하며, 위 회사 준비 `v2`는 계속 `company-git-range-reader-v1`을 사용합니다. 새 방식은 부모 경로를 열기·읽기 단위 경계·최종 pass에 검사하고 chunk마다 leaf/FD를 검사합니다. **단위 내부의 일시적 조상 변경 후 복원을 놓칠 수 있으며 구형과 동등한 검증은 아닙니다.** 이 차이는 별도 guard hash와 로컬 검토 자료에 포함됩니다. 수집·읽기·metadata·메모리·시간 한도는 높이지 않았습니다.
+
+v3도 `AWAITING_APPROVAL`까지만 제공하며 승인 생성·전송·실행은 `false`입니다. 회사용 `approve/run`은 없습니다. worker 권한, 30초·250ms 종료 정책, RSS 관찰 목표, 본문 최대24시간·감사 최대30일과 명시적 정리는 v2와 같습니다. 이번 연결의 검증은 합성 자료에 한정하며 실제 회사 자료의 적용과 새 검사 의미 채택은 별도 명시적 실행으로 구분합니다. [v3 통합 결과](docs/stage-4c17-company-v3-result.md)에 검증과 남은 범위를 기록합니다.
 
 ## 모의 입력과 오류 재현
 

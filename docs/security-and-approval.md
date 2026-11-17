@@ -485,7 +485,7 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 공통 예산은 실제 I/O와 buffer 소유권에 연결했다. 구간 proof는 동일 읽기 구간을 중복 제거하지만 예산은 반복 호출을 모두 차감한다. 내부 API 자체의 실제 단조 시각 검사는 동기 작업을 선점하지 않는다. close 오류는 닫힘을 확정할 수 없으므로 FD 계수를 유지하고 실패하며 같은 FD 번호를 다시 닫지 않는다. 불확정 자원 정리는 worker 종료 확인이 필요하다. 3차 회사 준비 v2의 종료 정책과 메모리 측정 범위는 위 통합 결과를 따르며 OS RSS 상한으로 취급하지 않는다.
 
-후속 [읽기 단위 계약](company-git-range-read-unit-design.md)은 별도 reader-v2/profile/guard hash·byte-proof-v2·source-v2로 합성 구현한다. 각 단위 시작/끝과 pass 최종에는 전체 경로를, chunk 전후에는 leaf/FD를 확인한다. 일시적으로 조상이 바뀌었다 단위 끝 전에 복원되면 관찰하지 못할 수 있으므로 기존 reader-v1과 동등하지 않다. 새 요청/hash·budget identity·증거 버전은 분리하며 기존 회사 준비 명령이나 승인/DB로 자동 선택하지 않는다. 새 판독기에는 새 회사 정책 gate·보관·supervisor를 아직 연결하지 않았다. 내부 호출이 회사 승인이나 OS 읽기 격리를 제공한다는 뜻은 아니며, [합성 구현 결과](stage-4c17-read-unit-result.md)의 범위를 넘는 회사 적용은 별도 단계다.
+후속 [읽기 단위 계약](company-git-range-read-unit-design.md)은 별도 reader-v2/profile/guard hash·byte-proof-v2·source-v2로 합성 구현한다. 각 단위 시작/끝과 pass 최종에는 전체 경로를, chunk 전후에는 leaf/FD를 확인한다. 일시적으로 조상이 바뀌었다 단위 끝 전에 복원되면 관찰하지 못할 수 있으므로 기존 reader-v1과 동등하지 않다. 새 요청/hash·budget identity·증거 버전은 분리하며 기존 회사 준비 명령이나 승인/DB로 자동 선택하지 않는다. 후속 회사 준비 v3는 동일 회사 정책 gate와 별도 등록/계획·DB·worker·진단을 연결한다. v3 등록은 새 profile/guard hash를 모두 요구하고 worker 입력·시작 기록·runtime binding에도 결합한다. 구형 DB를 이름만 바꾸어 사용하거나 구형 등록/증거/진단을 받아들이지 않는다. 정리 실패 시 준비를 보관하지 않고 최초 실패 진단을 보존한다. 불확실 결과는 자동 재시도 없이 같은 ID로 조회한다. [합성 통합 결과](stage-4c17-company-v3-result.md)는 회사 승인이나 OS 읽기 격리를 제공한다는 뜻이 아니며 실제 회사 적용은 별도 명시적 단계다.
 
 ## 7. 회사 자료와 비밀정보
 

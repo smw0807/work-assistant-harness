@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { deflateSync } from 'node:zlib';
 import git from 'isomorphic-git';
+import { SqliteCompanyReadonlyV3Store } from '../src/adapters/sqlite-company-readonly-v3-store.js';
 import { createCompanyGitRangeSource, type CompanyGitRangeSourceObservation } from '../src/adapters/company-git-range-source.js';
 import { createCompanyGitRangeUnitCollectionSource, createCompanyGitRangeUnitSource,
   type CompanyGitRangeUnitSourceObservation } from '../src/adapters/company-git-range-unit-source.js';
@@ -262,5 +264,45 @@ test('one large independent synthetic index exercises complete source pipelines 
     assert.equal(deepUnit.final.readCalls, deepBaseline.final.readCalls);
     assert.equal(deepUnit.final.readBytesReturned, deepBaseline.final.readBytesReturned);
   }
+  assert.equal(snapshot(deeperRoot), deepBefore);
+
+  // Exercise this same independently encoded, deep fixture through the actual v3 CLI and restricted worker.
+  const policyFile = join(value.parent, 'company-readonly-policy.json');
+  const registrationFile = join(value.parent, 'company-readonly-registration-v3.json');
+  const runtime = join(value.parent, 'runtime-v3'), diagnostics = join(value.parent, 'diagnostics-v3');
+  const question = 'Explain the selected synthetic constant.';
+  fs.writeFileSync(policyFile, JSON.stringify({ version: 'company-readonly-policy-v1', enabled: false,
+    readPermission: 'confirmed', storagePermission: 'confirmed', policyReference: 'synthetic-deep-unit-policy',
+    payloadRetentionHours: 1, auditRetentionDays: 1 }), { mode: 0o600 });
+  fs.writeFileSync(registrationFile, JSON.stringify({ version: 'company-readonly-registration-v3',
+    gitProfileHash: getCompanyGitRangeUnitProfileHash(), guardPolicyHash: getCompanyGitRangeUnitGuardPolicyHash(),
+    repoId: 'synthetic-unit-integration', sourceRoot: deeperRoot, baseCommit: value.baseCommit, question,
+    readRanges: [{ path: selectedPath, startLine: 1, endLine: 1 }], reviewPaths: [selectedPath] }), { mode: 0o600 });
+  const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((done, reject) => {
+    const child = spawn(process.execPath, [resolve('dist/src/cli/main.js'), 'company-readonly-v3-plan',
+      '--policy', policyFile, '--registration', registrationFile, '--data-dir', runtime, '--diagnostics-dir', diagnostics],
+    { env: { LANG: 'C.UTF-8', TZ: 'UTC' } });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += String(chunk); }); child.stderr.on('data', chunk => { stderr += String(chunk); });
+    child.once('error', reject); child.once('close', code => done({ code, stdout, stderr }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  const summary = JSON.parse(result.stdout) as Record<string, unknown>;
+  assert.equal(summary.status, 'AWAITING_APPROVAL'); assert.equal(summary.runStatus, 'succeeded'); assert.equal(summary.exitConfirmed, true);
+  assert.equal(summary.gitProfileHash, getCompanyGitRangeUnitProfileHash()); assert.equal(summary.guardPolicyHash, getCompanyGitRangeUnitGuardPolicyHash());
+  for (const text of [deeperRoot, question, selectedBody.trim(), selectedPath]) assert.equal((result.stdout + result.stderr).includes(text), false);
+  const store = new SqliteCompanyReadonlyV3Store(join(runtime, 'store/company-readonly-v3.sqlite'));
+  try {
+    const stored = store.inspect(summary.taskId as string, { ownerId: `os-user:${process.getuid!()}`, now: new Date() });
+    assert.equal(stored.status, 'AWAITING_APPROVAL'); assert.ok(stored.payload);
+    assert.equal(stored.payload.budget.completedPasses, 2);
+    assert.equal(stored.payload.budget.metadataCalls, deepUnit.final.metadataCalls);
+    assert.equal(stored.payload.budget.readBytesReturned, deepUnit.final.readBytesReturned);
+    assert.equal(stored.payload.collected.evidence[0]!.excerpt.trim(), selectedBody.trim());
+    context.diagnostic(JSON.stringify({ case: 'large-index-deep-v3-cli', status: stored.status,
+      completedPasses: stored.payload.budget.completedPasses, metadataCalls: stored.payload.budget.metadataCalls,
+      peakRssBytes: summary.peakRssBytes, oldSpaceMiB: summary.oldSpaceMiB, exitConfirmed: summary.exitConfirmed,
+      realModel: summary.realModel, nativeExecution: summary.nativeExecution, contractEquivalent: false }));
+  } finally { store.close(); }
   assert.equal(snapshot(deeperRoot), deepBefore);
 });

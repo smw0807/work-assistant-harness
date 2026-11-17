@@ -851,6 +851,13 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - index/object/payload codec은 같은 순수 해석과 예약 연산을 재사용한다. 기존 세 codec 파일의 변경은 budget public 표면을 표현하는 TypeScript 타입뿐이다. 기존 source/files/budget/proof·회사 등록/CLI/DB와 worker는 자동 전환하지 않는다. 복제한 버전별 실행 로직은 향후 수정 시 두 버전의 회귀를 함께 확인한다.
 - U1~U7의 구현 범위·합성 변경/실패·전체 판독 계측과 미검증 항목은 [읽기 단위 구현 결과](stage-4c17-read-unit-result.md)에 기록한다. 회사 준비 v3·정책/보관/unknown/supervisor 연결 U8, 실제 회사 자료와 새 관찰 의미의 채택은 다음 별도 단계다. 이번에는 회사 자료·인증/native/model·외부 전송·추가 OS helper 실행을 하지 않는다.
 
+##### 단계 4-C-17 후속: 회사 준비 v3 통합 U8
+
+- 독립 `company-readonly-registration-v3`·준비 v3·DB·CLI를 새 reader-v2에 연결한다. profile/guard hash를 등록·계획·worker 입력·run/runtime·진단에 결합하고 기존 v1/v2 계약과 hash를 보존한다. 기존 정책 gate·TTL·모든 수치 상한은 유지한다.
+- 등록/대상 접근 전 미확인 정책 차단, 최종 검증과 source 정리 후에만 저장, 전용 DB 식별·혼용 거부, 비공개 보관과 취소/만료/정리, 제한 worker·30초/250ms supervisor, unknown·동일 ID 조회·재시도0을 합성 검증한다.
+- 새 명령은 `company-readonly-v3-plan/inspect/cancel/prune`이며 `plan/prune`의 선택 진단만 추가한다. 원문/경로 없는 stdout·진단, 시작 전 fsync·종료 확인, source 전후 동일성과 구형 회귀를 확인한다. 회사용 approve/run이나 실제 인증/native/모델/Slack은 추가하지 않는다.
+- 구현·검증 상태와 남은 한계는 [v3 통합 결과](stage-4c17-company-v3-result.md)를 따른다. 다음 최소 작업은 합성 재설계가 아니라 기존 승인 범위와 새 관찰 의미를 적용한 회사 읽기 준비의 명시적 1회 사용이다. 실제 회사 자료를 이번 합성 검증에 사용하지 않는다.
+
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 

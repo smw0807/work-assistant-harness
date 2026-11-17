@@ -2,7 +2,7 @@
 
 2026-11-17. **권고안은 A: 기존 Node worker 안에서 읽기 단위의 경계를 명시한 새 판독 계약을 구현·검증하는 것이다.** 기존 판독기와 같은 검증 강도라고 주장하지 않는다. B의 별도 OS helper는 실행 권한과 배포·격리·정리 체계까지 추가해야 하므로 이번 구현 우선순위에서 제외한다.
 
-이 문서는 비교 당시의 설계안이다. 그때의 결과물은 test-only 합성 실험과 [설계 검증 결과](stage-4c17-read-unit-design-result.md)다. 이후 새 profile·내부 판독기·proof의 합성 구현은 [읽기 단위 구현 결과](stage-4c17-read-unit-result.md)에서 구분한다. 회사 등록·CLI·DB는 새 방식에 연결하지 않았으며 현재 회사 준비 v2는 계속 기존 `company-git-range-reader-v1`을 사용한다. 실제 회사 자료·인증·native Codex·모델·외부 서비스는 사용하지 않는다.
+이 문서는 비교 당시의 설계안이다. 그때의 결과물은 test-only 합성 실험과 [설계 검증 결과](stage-4c17-read-unit-design-result.md)다. 이후 새 profile·내부 판독기·proof의 합성 구현은 [읽기 단위 구현 결과](stage-4c17-read-unit-result.md)에서 구분한다. 이후 회사 등록·CLI·DB·worker의 U8 연결은 [회사 준비 v3 통합 결과](stage-4c17-company-v3-result.md)에 기록한다. 기존 회사 준비 v2는 계속 기존 `company-git-range-reader-v1`을 사용한다. 실제 회사 자료·인증·native Codex·모델·외부 서비스는 사용하지 않는다.
 
 ## 1. 선택지와 결정 근거
 
@@ -61,7 +61,7 @@ delta base는 기존 `loadPacked`와 같이 같은 pack/index 안에서만 찾�
 - guard 정책: `company-git-range-read-unit-guard-v1`. 단위 종류/상한, 전체 경로 검사 경계, chunk별 leaf/FD 검사, 결과 전달 시점과 일시적 조상 변경의 관찰 한계를 고정한다.
 - 판독 profile: `company-git-range-reader-v2`. 기존과 같은 수치 limits 및 수집 profile hash에 새 guard 정책을 결합해 새 hash를 만든다. 숫자가 같아도 v1 hash를 재사용하지 않는다.
 - 내부 요청/관찰: `company-git-range-source-v2`, `company-git-range-source-observation-v2`. byte proof와 budget snapshot도 새 profile에 결합하는 별도 검증 경로가 필요하다. 기존 byte-proof-v1 parser에 새 profile을 끼워 넣지 않는다.
-- 실제 회사 기능 연결: 기존 회사 준비 v2와 분리한 등록/계획/payload/전용 DB 버전을 사용한다. 후보 이름은 `company-readonly-registration-v3`, `company-readonly-preparation-v3`다. 기존 CLI·설정·작업·승인은 변환하거나 자동 fallback하지 않는다. 이번에는 새 명령을 추가하지 않는다.
+- 실제 회사 기능 연결: 기존 회사 준비 v2와 분리한 등록/계획/payload/전용 DB 버전을 사용한다. 후속 U8의 확정 이름은 `company-readonly-registration-v3`, `company-readonly-preparation-v3`다. 기존 CLI·설정·작업·승인은 변환하거나 자동 fallback하지 않는다. 비교 설계 당시에는 새 명령을 추가하지 않았고, 후속 U8에서 별도 `company-readonly-v3-*` 명령을 연결한다.
 
 향후 등록은 정확한 새 profile hash를 요구하고 계획 hash에는 guard 의미·관찰/proof·budget·safe-view·정책·보관 기간을 결합한다. 버전/profile 혼용은 대상 metadata와 DB 접근 전에 거부한다. 현재 회사의 읽기/보관 정책과 기간, private 권한, 승인/전송/실행 false를 유지한다. 새 관찰 의미를 회사 적용에 사용하기 전에는 기존 자료 접근 허용과 구분하여 적용 범위를 명시적으로 결정한다. 기존 회사 준비 승인으로 변경된 검증 의미까지 자동 승인됐다고 처리하지 않는다.
 
