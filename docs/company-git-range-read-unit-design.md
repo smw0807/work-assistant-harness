@@ -31,7 +31,7 @@
 | pack에 저장된 delta base | 각 base의 encoded span 하나 | 2MiB 및 깊이/해제/누적 한도 유지 |
 | pack header / trailer | 각각12바이트 / 20바이트 | 두 개의 별도 작은 단위 |
 
-delta base는 기존 `loadPacked`와 같이 같은 pack/index 안에서만 찾는다. loose 객체나 다른 pack으로 base를 찾는 fallback은 추가하지 않는다. 512MiB pack 전체를 읽기 단위로 취급하지 않는다. 각 단위도64KiB 이하 chunk로 읽고, 실제 read 호출 수와 예약/반환 바이트를 그대로 계수한다. 빈 파일도 기존0바이트 read·guard·proof 계수를 유지한다. 최초 pass와 최종 pass는 같은 공유 예산을 쓰고 재검증 때 새로 읽는다. tree/blob/base 캐시나 trie 최적화는 이번 계약에 추가하지 않는다.
+delta base는 기존 `loadPacked`와 같이 같은 pack/index 안에서만 찾는다. loose 객체나 다른 pack으로 base를 찾는 fallback은 추가하지 않는다. 512MiB pack 전체를 읽기 단위로 취급하지 않는다. 각 단위도64KiB 이하 chunk로 읽고, 실제 read 호출 수와 예약/반환 바이트를 그대로 계수한다. 빈 파일도 기존0바이트 read·guard·proof 계수를 유지한다. 최초 pass와 최종 pass는 같은 공유 예산을 쓰고 재검증 때 새로 읽는다. 초기 읽기 단위 구현은 tree/blob/base 캐시나 공통 경로 묶음 순회를 추가하지 않았다. 후속 [공통 경로 순회 개선](stage-4c17-tree-traversal-result.md)은 같은 pathname prefix의 요청을 한 tree 읽기에서 해석하며 각 pass의 새 읽기·단위 guard를 유지한다. 작은 OID/mode metadata만 남기고 본문을 해제하므로 본문 캐시는 계속 사용하지 않는다.
 
 ## 3. 검사 순서와 결과 전달
 

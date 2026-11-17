@@ -487,6 +487,8 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 후속 [읽기 단위 계약](company-git-range-read-unit-design.md)은 별도 reader-v2/profile/guard hash·byte-proof-v2·source-v2로 합성 구현한다. 각 단위 시작/끝과 pass 최종에는 전체 경로를, chunk 전후에는 leaf/FD를 확인한다. 일시적으로 조상이 바뀌었다 단위 끝 전에 복원되면 관찰하지 못할 수 있으므로 기존 reader-v1과 동등하지 않다. 새 요청/hash·budget identity·증거 버전은 분리하며 기존 회사 준비 명령이나 승인/DB로 자동 선택하지 않는다. 후속 회사 준비 v3는 동일 회사 정책 gate와 별도 등록/계획·DB·worker·진단을 연결한다. v3 등록은 새 profile/guard hash를 모두 요구하고 worker 입력·시작 기록·runtime binding에도 결합한다. 구형 DB를 이름만 바꾸어 사용하거나 구형 등록/증거/진단을 받아들이지 않는다. 정리 실패 시 준비를 보관하지 않고 최초 실패 진단을 보존한다. 불확실 결과는 자동 재시도 없이 같은 ID로 조회한다. [합성 통합 결과](stage-4c17-company-v3-result.md)는 회사 승인이나 OS 읽기 격리를 제공한다는 뜻이 아니며 실제 회사 적용은 별도 명시적 단계다.
 
+공통 경로 순회 개선은 같은 pathname prefix의 반복 Git tree 요청을 묶는다. 기존 parser가 선택 항목 뒤의 잘못된 entry까지 전체 tree를 검사하며, 반환하는 OID/mode metadata 외에 본문은 즉시 해제한다. 각 실제 I/O의 open/unit/chunk/final guard와 매 pass의 새 읽기를 유지하고 기존 profile/guard hash·수치 상한을 바꾸지 않는다. 반복 호출이 줄어 syscall 순서·일시적 변경을 우연히 관찰하는 횟수까지 동일하지는 않으며 연속적 경로 동일성이나 원자적 snapshot을 주장하지 않는다. 회사 자료 재접근 없이 독립 합성 검증만 수행한다. [개선 결과와 한계](stage-4c17-tree-traversal-result.md)를 따른다.
+
 ## 7. 회사 자료와 비밀정보
 
 회사 계정·저장소 연결 전에 AI 제공자, 모델, 실행 위치, 전송 가능 자료, 보관 기간과 감사 요구를 회사 정책에 따라 확인한다. 회사 승인이 없으면 합성 데이터로 계속 개발한다.

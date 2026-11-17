@@ -365,6 +365,8 @@ CLI는 private 설정·경로 분리 확인 후 최소 환경의 Node 권한 wor
 
 이후 [읽기 단위 설계](company-git-range-read-unit-design.md)의 독립 `company-git-range-reader-v2`를 합성 자료에 연결했다. 새 guard/profile/budget·byte proof·source 버전은 기존 수치 한도를 유지하되 전체 부모 검사 시점을 단위 경계로 바꾼다. chunk별 leaf/FD, 전체 단위 결과의 끝 guard, pack 목록/부재/최종 검사와 두 pass의 원문·safe-view 대조를 유지한다. 일시적인 조상 변경 후 복원을 놓칠 수 있는 차이를 명시하며 기존 v1 동등성을 주장하지 않는다. 첫 내부 구현의 검사는 [읽기 단위 구현 결과](stage-4c17-read-unit-result.md)에 보존한다. 후속 U8은 별도 회사 준비 v3의 등록/계획·전용 DB·CLI·제한 worker·supervisor와 진단을 연결한다. 등록·계획·시작 기록·worker 입력은 profile/guard hash를 함께 요구하고 기존 v1/v2를 자동 변환하지 않는다. 정책 선언과 수치 한도는 유지하며, 성공한 최종 검증과 source 정리 뒤에만 보관한다. 합성 통합과 실제 회사 적용의 구분은 [v3 통합 결과](stage-4c17-company-v3-result.md)를 따른다.
 
+후속 [공통 경로 순회 개선](stage-4c17-tree-traversal-result.md)은 reader-v2의 선택 경로 해석만 바꾼다. 같은 pathname prefix를 한 번 consume하고 기존 전체-tree parser로 요청된 이름별 OID/mode를 얻은 뒤 본문을 즉시 해제한다. 그 metadata로 다음 tree를 순회하고 blob/작업 파일은 기존 선택 순서로 확인한다. 각 pass마다 새 resolver를 만들며 본문/parsed-tree cache나 다른 prefix의 OID 중복 제거는 없다. Files·guard/profile·두 pass 대조·회사 v3 명령/보관 계약은 유지한다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.

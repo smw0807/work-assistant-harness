@@ -858,6 +858,13 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - 새 명령은 `company-readonly-v3-plan/inspect/cancel/prune`이며 `plan/prune`의 선택 진단만 추가한다. 원문/경로 없는 stdout·진단, 시작 전 fsync·종료 확인, source 전후 동일성과 구형 회귀를 확인한다. 회사용 approve/run이나 실제 인증/native/모델/Slack은 추가하지 않는다.
 - 구현·검증 상태와 남은 한계는 [v3 통합 결과](stage-4c17-company-v3-result.md)를 따른다. 다음 최소 작업은 합성 재설계가 아니라 기존 승인 범위와 새 관찰 의미를 적용한 회사 읽기 준비의 명시적 1회 사용이다. 실제 회사 자료를 이번 합성 검증에 사용하지 않는다.
 
+##### 단계 4-C-17 후속: 공통 Git tree 경로 순회 개선
+
+- 앞선 v3 실제 1회 준비가 metadata8192회에서 중단된 뒤, 회사 자료를 다시 읽지 않고 4개 pack/index·선택8파일·92,000객체·선택 의존22객체·delta 깊이7의 독립 합성 사례로 조사한다.
+- reader-v2에서 공통 pathname prefix의 tree를 각 pass당 한 번 읽는다. 기존 전체-tree parser로 요청 자식의 OID/mode만 얻고 본문을 해제한 뒤 내려간다. 본문/parsed-tree cache·다른 경로의 OID 합치기·각 실제 unit의 guard 변경·상한 변경은 하지 않는다.
+- 같은 fixture/절대 경로 깊이에서 변경 전후를 비교한다. 최초 observation/안전 근거 일치, 2pass 완결, 실제 조회 계수, v3 CLI/worker/보관/동일 ID 조회, 더 깊은 경로의 한도 거절과 기존 회귀를 검증한다. 초기 syscall 수나 일시적 변경 관찰 횟수까지 동일하다는 주장은 하지 않는다.
+- [개선 결과](stage-4c17-tree-traversal-result.md)에 검증 상태를 기록한다. 실제 회사 준비 재실행·인증/native/모델/Slack은 이번 개선에 포함하지 않는다.
+
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 

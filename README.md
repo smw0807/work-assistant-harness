@@ -662,6 +662,8 @@ pnpm harness company-readonly-v3-prune --data-dir /private/review/company-runtim
 
 v3도 `AWAITING_APPROVAL`까지만 제공하며 승인 생성·전송·실행은 `false`입니다. 회사용 `approve/run`은 없습니다. worker 권한, 30초·250ms 종료 정책, RSS 관찰 목표, 본문 최대24시간·감사 최대30일과 명시적 정리는 v2와 같습니다. 이번 연결의 검증은 합성 자료에 한정하며 실제 회사 자료의 적용과 새 검사 의미 채택은 별도 명시적 실행으로 구분합니다. [v3 통합 결과](docs/stage-4c17-company-v3-result.md)에 검증과 남은 범위를 기록합니다.
 
+후속 개선은 선택 경로들의 공통 상위 Git tree를 각 pass에서 한 번 해석하고, 필요한 자식의 OID·mode만 남긴 뒤 본문을 해제합니다. 본문 캐시·서로 다른 경로의 OID 합치기·guard 생략·한도 상향은 없습니다. 동일 경로 깊이의 독립 합성 4-pack/8파일 사례에서 기존 구현은 metadata8192회에 중단됐고 개선 구현은7128회로 검토 자료 보관까지 완료했습니다. 더 깊은 경로는 여전히 한도에 걸릴 수 있으며 실제 회사 성공을 보증하지 않습니다. [공통 경로 순회 개선 결과](docs/stage-4c17-tree-traversal-result.md)를 따릅니다.
+
 ## 모의 입력과 오류 재현
 
 `--fixture`는 이벤트 예제와 **고정 모델 시나리오**를 고릅니다. 실제 자연어 분류 모델이 메시지를 해석하는 기능은 아닙니다. `config/local.example.json`의 합성 ID인 `W_LOCAL`, `C_ALLOWED`, `U_OWNER`를 사용합니다.

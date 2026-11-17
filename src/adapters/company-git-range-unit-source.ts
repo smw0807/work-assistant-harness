@@ -301,7 +301,7 @@ const loadPacked = (pack: Pack, entry: CompanyGitRangeIndexEntry, budget: Compan
 };
 
 /**
- * Separate read-unit contract. Only synthetic fixtures exercise it; existing company ports and CLI keep v1.
+ * The company v3 adapter selects this read-unit contract; older company paths retain their original reader.
  * The trusted clock is sampled at I/O/codec boundaries; a synchronous operation is not forcibly preempted here.
  */
 const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => number, collection?: CollectionSelection) => {
@@ -348,22 +348,45 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
         finally { budget.releaseMemory(object.memoryLease); }
       };
       const rootTree = consume(request.baseCommit, 'commit', object => parseCompanyGitCommitTree(object.bytes, budget, now()));
+      const selectedEntries = new Map<string, { oid: string; mode: '100644' | '100755' }>();
+      const selectedPaths = request.selectedPaths.map(path => ({ path, parts: path.split('/') }));
+      const resolveTree = (treeOid: string, paths: typeof selectedPaths, depth: number): void => {
+        const children = new Map<string, typeof selectedPaths>();
+        for (const selected of paths) {
+          const name = selected.parts[depth]!;
+          const group = children.get(name);
+          if (group) group.push(selected); else children.set(name, [selected]);
+        }
+        // Resolve only this prefix's requested names while its verified body is owned by consume.
+        // The parser still validates the whole tree for every name. Only small mode/OID metadata
+        // survives the release; no body, parsed-tree cache or cross-path OID cache is retained.
+        const resolved = consume(treeOid, 'tree', object => [...children].map(([name, group]) => ({
+          group, entry: findCompanyGitTreeEntry(object.bytes, name, budget, now()),
+        })));
+        for (const { group, entry } of resolved) {
+          if (!entry) return fail();
+          const leaf = group.find(selected => selected.parts.length === depth + 1);
+          if (leaf) {
+            if (group.length !== 1 || entry.mode !== '100644' && entry.mode !== '100755') return fail();
+            selectedEntries.set(leaf.path, { oid: entry.oid, mode: entry.mode });
+          } else {
+            if (entry.mode !== '40000') return fail();
+            resolveTree(entry.oid, group, depth + 1);
+          }
+        }
+      };
+      // Each path prefix is resolved independently even if different directories share a tree OID.
+      // The same bounded traversal starts from fresh objects again in the verification pass.
+      resolveTree(rootTree, selectedPaths, 0);
       const selectedFiles: CompanyGitRangeSelectedFile[] = [];
       for (const path of request.selectedPaths) {
-        const parts = path.split('/'); let currentOid = rootTree, mode: '100644' | '100755' | undefined;
-        for (const [position, name] of parts.entries()) {
-          const entry = consume(currentOid, 'tree', object => findCompanyGitTreeEntry(object.bytes, name, budget, now()));
-          if (!entry) return fail();
-          if (position < parts.length - 1) { if (entry.mode !== '40000') return fail(); }
-          else { if (entry.mode !== '100644' && entry.mode !== '100755') return fail(); mode = entry.mode; }
-          currentOid = entry.oid;
-        }
-        consume(currentOid, 'blob', object => {
-          if (!mode || object.bytes.length > collectionLimits.sourceFileBytes) return fail();
-          const selectedMode = mode;
+        const selected = selectedEntries.get(path);
+        if (!selected) return fail();
+        consume(selected.oid, 'blob', object => {
+          if (object.bytes.length > collectionLimits.sourceFileBytes) return fail();
           withFileBytes(files!, budget, path, collectionLimits.sourceFileBytes, (bytes, fileMode, memoryLease) => {
-            if (!bytes.equals(object.bytes) || Boolean(fileMode & 0o111) !== (selectedMode === '100755')) return fail('SOURCE_CHANGED');
-            selectedFiles.push(Object.freeze({ path, oid: currentOid, mode: selectedMode, sha256: hashReadonlyValue(bytes), bytes: bytes.length }));
+            if (!bytes.equals(object.bytes) || Boolean(fileMode & 0o111) !== (selected.mode === '100755')) return fail('SOURCE_CHANGED');
+            selectedFiles.push(Object.freeze({ path, oid: selected.oid, mode: selected.mode, sha256: hashReadonlyValue(bytes), bytes: bytes.length }));
             if (collection) sources.set(path, { bytes, memoryLease: budget.retainMemory(memoryLease) });
           });
         });
@@ -427,7 +450,7 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
     close: () => { firstProof = undefined; firstCollectionHash = undefined; if (budget.snapshot().phase !== 'complete') budget.abort(); } });
 };
 
-/** Synthetic-only v2 entry point; no CLI or company preparation selects this different observation contract. */
+/** Metadata-only reader entry point; company v3 uses the separate fixed safe-collection entry point below. */
 export const createCompanyGitRangeUnitSource = (input: unknown, clock: () => number = () => performance.now()): CompanyGitRangeUnitSource => {
   const source = createSource(parseRequest(input), clock);
   return Object.freeze({ inspect: () => source.inspect().observation, verify: () => source.verify().observation,
