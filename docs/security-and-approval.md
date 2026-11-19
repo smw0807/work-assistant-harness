@@ -491,6 +491,8 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 회사 준비 v3의 일반 실패 진단은 53개 고정 오류 코드만 허용한다. task ID에 결합된 단일 완결 프레임을 기존 64KiB stderr 한도 안에서 해석하며, supervisor가 중단하지 않은 worker의 종료 코드 1·signal 없음·close를 확인한 때만 `workerFailureCode`를 보관한다. 성공 출력과의 충돌은 거절하고 budget 진단의 오류 코드와 다르면 새 코드를 버린다. getter·proxy·오류 message/stack·임의 코드 문자열은 기록하지 않는다. 새 코드가 있는 진단 record-v2와 없는 기존 record-v1을 엄격히 구분하며 원래 audit 기한·0700/0600·위치와 hash 결합·명령 기반 정리를 유지한다. 일반 오류 진단은 정책 승인·자료 무결성 증명·재시도 근거가 아니며 과거 원인을 소급 복원하지 않는다. 합성 검증 범위는 [4-C-21 결과](stage-4c21-result.md)를 따른다.
 
+소스 거부 분기는 판독기가 생성한 `INVALID_SOURCE` 오류 identity에 WeakMap으로만 결합한다. 외부 오류의 property·message·stack에서 분기를 가져오지 않으며 원본 경로·OID·행번호·본문을 보관하지 않는다. 고정9분기를 가진 새 worker frame-v2와 diagnostic record-v3는 `workerFailureCode=COMPANY_GIT_RANGE_INVALID_SOURCE`일 때만 허용한다. 기존 frame-v1과 혼합/중복되면 진단을 거부하고, 종료/기한/출력 및 budget 진단 우선순위는 유지한다. 기존 record-v1/v2의 필드와 hash, 모든 계약·수치 한도와 보관 조건은 보존한다. 안전 view·발췌 오류도 이 일반 코드로 합쳐질 수 있으므로 Git 원본 손상의 증거로 확대하지 않는다. [분기 검증 결과](stage-4c22-result.md)를 따른다.
+
 ### 회사 준비에서 모의 조사로 넘어가는 경계
 
 `company-investigation-*`는 회사 v3 준비와 분리한 모의 조사 계약이다. 준비 중인 자료의 상태는 전송 승인이 아니며 새로운 계획 hash·OS 소유자·명시 TTL에 대해 별도의 **모의 호출만** 승인한다. 계획과 승인에는 `mode:mock`, `local:fixed-response`, `authentication:none`, 전송·실행 false가 고정된다. live 설정이나 임의 모델/목적지를 받지 않으며 기존 개인 승인·DB·전송 입력으로 변환하지 않는다.

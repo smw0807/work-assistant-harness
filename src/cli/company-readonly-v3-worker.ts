@@ -9,6 +9,7 @@ import { SqliteCompanyReadonlyV3Store } from '../adapters/sqlite-company-readonl
 import { CompanyReadonlyPreparationServiceV3 } from '../application/prepare-company-readonly-v3.js';
 import type { CompanyReadonlySnapshotV3 } from '../domain/company-readonly-v3.js';
 import { HarnessError } from '../domain/errors.js';
+import { extractCompanyGitRangeSourceFailureReason } from '../policy/company-git-range-source-failure.js';
 import { extractCompanyGitRangeUnitFailure, getCompanyGitRangeUnitGuardPolicyHash, getCompanyGitRangeUnitProfileHash } from '../policy/company-git-range-unit-budget.js';
 import { assertCompanyReadonlyPolicyAllowed, parseCompanyReadonlyPolicy } from '../policy/company-readonly.js';
 import { parseCompanyReadonlyRegistrationV3 } from '../policy/company-readonly-v3.js';
@@ -122,7 +123,10 @@ void run().catch((error: unknown) => {
     catch { /* Diagnostic formatting cannot change the original worker failure. */ }
   }
   if (diagnosticTaskId) {
-    try { process.stderr.write(formatCompanyV3WorkerFailure(diagnosticTaskId, code)); }
+    try {
+      const sourceFailureReason = extractCompanyGitRangeSourceFailureReason(error);
+      process.stderr.write(formatCompanyV3WorkerFailure(diagnosticTaskId, code, sourceFailureReason ?? undefined));
+    }
     catch { /* A diagnostic cannot replace or expose the underlying failure. */ }
   }
   process.stderr.write(`${code}\n`); process.exitCode = 1;

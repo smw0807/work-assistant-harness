@@ -11,6 +11,7 @@ import { derivePersonalSourceView } from '../src/policy/personal-readonly-collec
 import { createCompanyReadonlyV3Fixture } from './company-readonly-v3-fixture.js';
 import { CompanyReadonlyV2SourceAdapter } from '../src/adapters/company-readonly-v2-source.js';
 import { getCompanyGitRangeProfileHash } from '../src/policy/company-git-range-budget.js';
+import { extractCompanyGitRangeSourceFailureReason } from '../src/policy/company-git-range-source-failure.js';
 
 type Fixture = Awaited<ReturnType<typeof createCompanyReadonlyV3Fixture>>;
 const request = (registration: CompanyReadonlyRegistrationV3) => ({ version: 'company-git-range-source-v2',
@@ -144,7 +145,10 @@ test('an oversized excerpt fails after the first pass and releases every retaine
   const fixture = await createCompanyReadonlyV3Fixture(context), registration = await replaceMain(fixture, `${'x'.repeat(32769)}\n`);
   const source = collection(registration);
   try {
-    assert.throws(() => source.inspect(), { code: 'COMPANY_GIT_RANGE_INVALID_SOURCE' });
+    assert.throws(() => source.inspect(), error => {
+      assert.equal((error as { code: string }).code, 'COMPANY_GIT_RANGE_INVALID_SOURCE');
+      assert.equal(extractCompanyGitRangeSourceFailureReason(error), 'excerpt'); return true;
+    });
     assert.equal(source.snapshot().phase, 'failed'); assert.equal(source.snapshot().completedPasses, 1);
     assert.ok(source.snapshot().readBytesReturned > 32769); released(source);
   } finally { source.close(); }
@@ -167,7 +171,10 @@ test('multiline masking expansion and invalid UTF-8 fail safely without returnin
   for (const body of [`-----BEGIN PRIVATE KEY-----\n${'x\n'.repeat(10000)}-----END PRIVATE KEY-----\n`, Buffer.from([0xff, 0xfe, 10])]) {
     const fixture = await createCompanyReadonlyV3Fixture(context), registration = await replaceMain(fixture, body), source = collection(registration);
     try {
-      assert.throws(() => source.inspect(), { code: 'COMPANY_GIT_RANGE_INVALID_SOURCE' });
+      assert.throws(() => source.inspect(), error => {
+        assert.equal((error as { code: string }).code, 'COMPANY_GIT_RANGE_INVALID_SOURCE');
+        assert.equal(extractCompanyGitRangeSourceFailureReason(error), 'safe_view'); return true;
+      });
       assert.equal(source.snapshot().phase, 'failed'); released(source);
     } finally { source.close(); }
   }

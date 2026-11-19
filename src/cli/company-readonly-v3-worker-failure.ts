@@ -1,5 +1,6 @@
 import { types } from 'node:util';
 import { HarnessError } from '../domain/errors.js';
+import { isCompanyGitRangeSourceFailureReason, type CompanyGitRangeSourceFailureReason } from '../policy/company-git-range-source-failure.js';
 import { isReadonlyId } from '../policy/readonly-investigation-policy.js';
 import { parseReadonlyTransportJson } from '../policy/readonly-transport-protocol.js';
 
@@ -33,6 +34,9 @@ const fallback: CompanyV3WorkerFailureCode = 'COMPANY_READONLY_V3_PREPARATION_FA
 const version = 'company-readonly-v3-worker-failure-v1';
 const marker = 'COMPANY_READONLY_V3_WORKER_FAILURE_V1';
 const prefix = `${marker} `;
+const sourceVersion = 'company-readonly-v3-worker-failure-v2';
+const sourcePrefix = 'COMPANY_READONLY_V3_WORKER_FAILURE_V2 ';
+const familyMarker = 'COMPANY_READONLY_V3_WORKER_FAILURE_V';
 const frameBytes = 1024;
 const stderrBytes = 65_536;
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
@@ -51,29 +55,48 @@ export const companyV3WorkerFailureCode = (error: unknown): CompanyV3WorkerFailu
   } catch { return fallback; }
 };
 
-export const formatCompanyV3WorkerFailure = (taskId: string, code: CompanyV3WorkerFailureCode): string => {
+export type CompanyV3WorkerFailureDetails =
+  | { code: CompanyV3WorkerFailureCode; sourceFailureReason?: never }
+  | { code: 'COMPANY_GIT_RANGE_INVALID_SOURCE'; sourceFailureReason: CompanyGitRangeSourceFailureReason };
+
+export const formatCompanyV3WorkerFailure = (taskId: string, code: CompanyV3WorkerFailureCode,
+  sourceFailureReason?: CompanyGitRangeSourceFailureReason): string => {
   if (!isReadonlyId(taskId) || !isCompanyV3WorkerFailureCode(code)) throw new HarnessError('COMPANY_READONLY_V3_INVALID_DIAGNOSTIC');
-  const frame = `${prefix}${JSON.stringify({ version, taskId, code })}\n`;
+  if (sourceFailureReason !== undefined && (code !== 'COMPANY_GIT_RANGE_INVALID_SOURCE'
+    || !isCompanyGitRangeSourceFailureReason(sourceFailureReason))) throw new HarnessError('COMPANY_READONLY_V3_INVALID_DIAGNOSTIC');
+  const frame = sourceFailureReason === undefined ? `${prefix}${JSON.stringify({ version, taskId, code })}\n`
+    : `${sourcePrefix}${JSON.stringify({ version: sourceVersion, taskId, code, sourceFailureReason })}\n`;
   if (Buffer.byteLength(frame) > frameBytes) throw new HarnessError('COMPANY_READONLY_V3_INVALID_DIAGNOSTIC');
   return frame;
 };
 
-/** A complete task-bound frame returns only its allowlisted code, never stderr or JSON supplied by the worker. */
-export const parseCompanyV3WorkerFailure = (bytes: Uint8Array, taskId: string): CompanyV3WorkerFailureCode | null => {
+/** Both versions share one frame allowance; no mixed or duplicate frame can select a more detailed result. */
+export const parseCompanyV3WorkerFailureDetails = (bytes: Uint8Array, taskId: string): CompanyV3WorkerFailureDetails | null => {
   try {
     if (types.isProxy(bytes) || !types.isUint8Array(bytes) || byteLength.call(bytes) > stderrBytes
       || types.isSharedArrayBuffer(backingBuffer.call(bytes)) || !isReadonlyId(taskId)) return null;
     const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
     if (text.includes('\r')) return null;
     const lines = text.split('\n');
-    const candidates = lines.map((line, index) => ({ line, index })).filter(({ line }) => line.startsWith(marker));
+    const candidates = lines.map((line, index) => ({ line, index })).filter(({ line }) => line.startsWith(familyMarker));
     if (candidates.length !== 1) return null;
     const candidate = candidates[0]!;
-    if (candidate.index === lines.length - 1 || !candidate.line.startsWith(prefix)
-      || Buffer.byteLength(candidate.line) + 1 > frameBytes) return null;
-    const value = parseReadonlyTransportJson(candidate.line.slice(prefix.length), frameBytes) as Record<string, unknown>;
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join() !== 'code,taskId,version'
-      || value.version !== version || value.taskId !== taskId || !isCompanyV3WorkerFailureCode(value.code)) return null;
-    return value.code;
+    const selectedPrefix = candidate.line.startsWith(prefix) ? prefix : candidate.line.startsWith(sourcePrefix) ? sourcePrefix : null;
+    if (candidate.index === lines.length - 1 || selectedPrefix === null || Buffer.byteLength(candidate.line) + 1 > frameBytes) return null;
+    const value = parseReadonlyTransportJson(candidate.line.slice(selectedPrefix.length), frameBytes) as Record<string, unknown>;
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value.taskId !== taskId) return null;
+    if (selectedPrefix === prefix) {
+      if (Object.keys(value).sort().join() !== 'code,taskId,version' || value.version !== version || !isCompanyV3WorkerFailureCode(value.code)) return null;
+      return { code: value.code };
+    }
+    if (Object.keys(value).sort().join() !== 'code,sourceFailureReason,taskId,version' || value.version !== sourceVersion
+      || value.code !== 'COMPANY_GIT_RANGE_INVALID_SOURCE' || !isCompanyGitRangeSourceFailureReason(value.sourceFailureReason)) return null;
+    return { code: value.code, sourceFailureReason: value.sourceFailureReason };
   } catch { return null; }
+};
+
+/** Preserve the original v1-only string result for callers that have not adopted source reasons. */
+export const parseCompanyV3WorkerFailure = (bytes: Uint8Array, taskId: string): CompanyV3WorkerFailureCode | null => {
+  const details = parseCompanyV3WorkerFailureDetails(bytes, taskId);
+  return details && details.sourceFailureReason === undefined ? details.code : null;
 };

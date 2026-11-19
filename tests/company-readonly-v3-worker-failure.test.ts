@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { HarnessError } from '../src/domain/errors.js';
 import { companyV3WorkerFailureCode, formatCompanyV3WorkerFailure, isCompanyV3WorkerFailureCode,
-  parseCompanyV3WorkerFailure, type CompanyV3WorkerFailureCode } from '../src/cli/company-readonly-v3-worker-failure.js';
+  parseCompanyV3WorkerFailure, parseCompanyV3WorkerFailureDetails, type CompanyV3WorkerFailureCode } from '../src/cli/company-readonly-v3-worker-failure.js';
+import type { CompanyGitRangeSourceFailureReason } from '../src/policy/company-git-range-source-failure.js';
 
 const taskId = '11111111-1111-4111-8111-111111111111';
 const otherId = '22222222-2222-4222-8222-222222222222';
@@ -115,5 +116,79 @@ test('formatting refuses unknown codes and invalid task identifiers instead of s
   const foreign = { toJSON: () => { accesses++; return code; } };
   assert.throws(() => formatCompanyV3WorkerFailure(taskId, foreign as unknown as CompanyV3WorkerFailureCode),
     { code: 'COMPANY_READONLY_V3_INVALID_DIAGNOSTIC' });
+  assert.equal(accesses, 0);
+});
+
+const sourceCode = 'COMPANY_GIT_RANGE_INVALID_SOURCE';
+const sourceVersion = 'company-readonly-v3-worker-failure-v2';
+const sourcePrefix = 'COMPANY_READONLY_V3_WORKER_FAILURE_V2 ';
+const sourceValue = { version: sourceVersion, taskId, code: sourceCode, sourceFailureReason: 'tree_selection' };
+const sourceFrame = (input: unknown): Buffer => Buffer.from(`${sourcePrefix}${JSON.stringify(input)}\n`);
+
+test('source reasons use a version-two frame while the original code-only API remains version-one only', () => {
+  for (const reason of ['head_ref', 'delta_base', 'object_lookup', 'object_type', 'tree_selection', 'source_size',
+    'safe_view', 'excerpt', 'unexpected'] as const) {
+    const encoded = formatCompanyV3WorkerFailure(taskId, sourceCode, reason);
+    assert.ok(Buffer.byteLength(encoded) <= 1024);
+    assert.deepEqual(JSON.parse(encoded.slice(sourcePrefix.length)), { version: sourceVersion, taskId, code: sourceCode, sourceFailureReason: reason });
+    assert.deepEqual(parseCompanyV3WorkerFailureDetails(Buffer.from(encoded), taskId), { code: sourceCode, sourceFailureReason: reason });
+    assert.equal(parseCompanyV3WorkerFailure(Buffer.from(encoded), taskId), null);
+  }
+  const legacy = formatCompanyV3WorkerFailure(taskId, sourceCode);
+  assert.deepEqual(parseCompanyV3WorkerFailureDetails(Buffer.from(legacy), taskId), { code: sourceCode });
+  assert.equal(parseCompanyV3WorkerFailure(Buffer.from(legacy), taskId), sourceCode);
+  assert.deepEqual(JSON.parse(legacy.slice(prefix.length)), { version, taskId, code: sourceCode });
+});
+
+test('source reasons cannot be attached to other codes, version-one frames or arbitrary JSON fields', () => {
+  for (const changed of [{ ...sourceValue, code }, { ...sourceValue, code: fallback },
+    { ...sourceValue, sourceFailureReason: undefined }, { ...sourceValue, sourceFailureReason: null },
+    { ...sourceValue, sourceFailureReason: 'SYNTHETIC_PRIVATE_REASON' }, { ...sourceValue, sourceFailureReason: { reason: 'tree_selection' } },
+    { ...sourceValue, sourceFailureReason: ['tree_selection'] }, { ...sourceValue, path: '/synthetic/private' },
+    { ...sourceValue, version }, { ...sourceValue, taskId: otherId }]) {
+    assert.equal(parseCompanyV3WorkerFailureDetails(sourceFrame(changed), taskId), null);
+  }
+  assert.equal(parseCompanyV3WorkerFailureDetails(frame({ ...sourceValue, version }), taskId), null);
+  assert.equal(parseCompanyV3WorkerFailureDetails(frame(sourceValue), taskId), null);
+  const duplicate = `{"version":"${sourceVersion}","taskId":"${taskId}","code":"${sourceCode}","sourceFailureReason":"tree_selection","sourceFailureReaso\\u006e":"excerpt"}`;
+  assert.equal(parseCompanyV3WorkerFailureDetails(Buffer.from(`${sourcePrefix}${duplicate}\n`), taskId), null);
+});
+
+test('mixed-version, duplicate, malformed and partial source frames cannot choose a preferred diagnostic', () => {
+  const legacy = formatCompanyV3WorkerFailure(taskId, sourceCode), detailed = formatCompanyV3WorkerFailure(taskId, sourceCode, 'excerpt');
+  for (const text of [legacy + detailed, detailed + legacy, detailed + detailed, detailed + sourcePrefix,
+    `${legacy}COMPANY_READONLY_V3_WORKER_FAILURE_V3 {}\n`, detailed.trimEnd(), detailed.replace('\n', '\r\n'),
+    detailed.replace(sourcePrefix, sourcePrefix.trimEnd()), detailed.replace(taskId, otherId)]) {
+    assert.equal(parseCompanyV3WorkerFailureDetails(Buffer.from(text), taskId), null);
+    assert.equal(parseCompanyV3WorkerFailure(Buffer.from(text), taskId), null);
+  }
+});
+
+test('version-two frames obey the existing byte limits and reject invalid byte containers', () => {
+  const encoded = formatCompanyV3WorkerFailure(taskId, sourceCode, 'safe_view'), bytes = Buffer.from(encoded);
+  const padded = `${sourcePrefix}${' '.repeat(1024 - bytes.length)}${encoded.slice(sourcePrefix.length)}`;
+  assert.equal(Buffer.byteLength(padded), 1024);
+  assert.deepEqual(parseCompanyV3WorkerFailureDetails(Buffer.from(padded), taskId), { code: sourceCode, sourceFailureReason: 'safe_view' });
+  assert.equal(parseCompanyV3WorkerFailureDetails(Buffer.from(padded.replace(sourcePrefix, `${sourcePrefix} `)), taskId), null);
+  const maximum = Buffer.concat([Buffer.alloc(65536 - bytes.length - 1, 120), Buffer.from('\n'), bytes]);
+  assert.deepEqual(parseCompanyV3WorkerFailureDetails(maximum, taskId), { code: sourceCode, sourceFailureReason: 'safe_view' });
+  assert.equal(parseCompanyV3WorkerFailureDetails(Buffer.concat([maximum, Buffer.from('\n')]), taskId), null);
+  assert.equal(parseCompanyV3WorkerFailureDetails(Buffer.concat([bytes, Buffer.from([0xff])]), taskId), null);
+  const shared = new Uint8Array(new SharedArrayBuffer(bytes.length)); shared.set(bytes);
+  let accesses = 0;
+  const hostile = (): never => { accesses++; throw new Error('SYNTHETIC_PRIVATE_HOOK'); };
+  const proxy = new Proxy(bytes, { get: hostile, getPrototypeOf: hostile });
+  for (const input of [proxy, shared]) assert.equal(parseCompanyV3WorkerFailureDetails(input, taskId), null);
+  assert.equal(accesses, 0);
+});
+
+test('source formatting validates fixed reason and code before any foreign property hook can run', () => {
+  let accesses = 0;
+  const hostile = (): never => { accesses++; throw new Error('SYNTHETIC_PRIVATE_HOOK'); };
+  for (const reason of [null, 'SYNTHETIC_PRIVATE_REASON', { toJSON: hostile }, new Proxy({}, { get: hostile, getPrototypeOf: hostile })]) {
+    assert.throws(() => formatCompanyV3WorkerFailure(taskId, sourceCode, reason as CompanyGitRangeSourceFailureReason),
+      { code: 'COMPANY_READONLY_V3_INVALID_DIAGNOSTIC' });
+  }
+  assert.throws(() => formatCompanyV3WorkerFailure(taskId, code, 'excerpt'), { code: 'COMPANY_READONLY_V3_INVALID_DIAGNOSTIC' });
   assert.equal(accesses, 0);
 });

@@ -660,6 +660,8 @@ pnpm harness company-readonly-v3-prune --data-dir /private/review/company-runtim
 
 진단을 켠 v3 준비는 일반 worker 실패의 허용된 고정 코드를 `workerFailureCode`로도 보관합니다. 새 코드가 있는 기록만 `company-readonly-v3-diagnostic-record-v2`를 사용하고, 기존 v1 기록의 형식과 hash는 유지합니다. 새 reader는 두 기록을 읽고 정리하지만 구버전 reader가 v2 기록을 읽는 호환은 제공하지 않습니다. 작업 ID가 맞는 단일 완결 프레임과 worker의 종료 코드 1을 확인한 경우에만 저장하며, timeout·출력 초과·강제 종료·스트림 오류는 코드로 원인을 덮어쓰지 않습니다. 원문·경로·stack은 저장하지 않고 미등록 오류는 고정 fallback으로 처리합니다. 과거 실패 원인을 복원하거나 자동 재시도하지 않습니다. [일반 오류 진단 결과](docs/stage-4c21-result.md)를 참고하세요.
 
+`COMPANY_GIT_RANGE_INVALID_SOURCE`는 Git 객체뿐 아니라 안전 view와 발췌 거부도 포함하므로 코드만으로 원본 손상을 단정하지 않습니다. 판독기가 직접 발행한 해당 오류는 새 진단 record-v3의 `sourceFailureReason`으로 HEAD/ref·delta base·객체 조회/타입·tree 선택·원본 크기·safe view·excerpt·unexpected 중 고정 분기 하나를 구분합니다. 경로·OID·본문·행번호를 기록하지 않고 기존 오류 코드와 한도를 유지합니다. 기존 record-v1/v2는 그대로 읽고 정리하며, 새 record-v3는 최신 reader가 필요합니다. [소스 거부 분기 검증](docs/stage-4c22-result.md)을 참고하세요.
+
 회사 준비 명령의 `v3`는 `company-git-range-reader-v2`를 선택하며, 위 회사 준비 `v2`는 계속 `company-git-range-reader-v1`을 사용합니다. 새 방식은 부모 경로를 열기·읽기 단위 경계·최종 pass에 검사하고 chunk마다 leaf/FD를 검사합니다. **단위 내부의 일시적 조상 변경 후 복원을 놓칠 수 있으며 구형과 동등한 검증은 아닙니다.** 이 차이는 별도 guard hash와 로컬 검토 자료에 포함됩니다. 수집·읽기·metadata·메모리·시간 한도는 높이지 않았습니다.
 
 v3 준비 명령은 `AWAITING_APPROVAL`까지만 제공하며 승인 생성·전송·실행은 `false`입니다. 준비 명령 자체에는 `approve/run`이 없습니다. worker 권한, 30초·250ms 종료 정책, RSS 관찰 목표, 본문 최대24시간·감사 최대30일과 명시적 정리는 v2와 같습니다. [v3 통합 결과](docs/stage-4c17-company-v3-result.md)는 당시 합성 검증 기록이며, 이후 별도로 허용된 실제 준비에서 8파일·2pass·metadata7816/8192·같은 ID 조회와 검토 대기 저장을 확인했습니다. 이는 실제 AI 답변 생성 성공이 아닙니다.

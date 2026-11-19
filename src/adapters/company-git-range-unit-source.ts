@@ -18,12 +18,15 @@ import { derivePersonalSourceView, extractPersonalCollectionEvidence, getPersona
 import { assertMigrationPartialRuntimePath } from '../policy/migration-check.js';
 import { canonicalReadonlyJson, hashReadonlyValue, normalizeReadonlyRanges } from '../policy/readonly-investigation-policy.js';
 import { assertCompanyGitRangeUnitSourcePath, createCompanyGitRangeUnitFiles } from './company-git-range-unit-files.js';
+import { createCompanyGitRangeSourceFailure, type CompanyGitRangeSourceFailureReason } from '../policy/company-git-range-source-failure.js';
 
 const limits = getCompanyGitRangeUnitProfile().limits;
 const collectionLimits = getPersonalCollectionProfile().limits;
 type Files = ReturnType<typeof createCompanyGitRangeUnitFiles>;
 type File = NonNullable<ReturnType<Files['open']>>;
-const fail = (suffix = 'INVALID_SOURCE'): never => { throw new HarnessError(`COMPANY_GIT_RANGE_${suffix}`); };
+const fail = (suffix = 'INVALID_SOURCE', reason: CompanyGitRangeSourceFailureReason = 'unexpected'): never => {
+  throw suffix === 'INVALID_SOURCE' ? createCompanyGitRangeSourceFailure(reason) : new HarnessError(`COMPANY_GIT_RANGE_${suffix}`);
+};
 const throwCleanupFailure = (error: unknown, alreadyFailed: boolean): void => { if (!alreadyFailed) throw error; };
 const oid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40}$/u.test(value);
 const digest = (value: unknown): string => hashReadonlyValue(canonicalReadonlyJson(value));
@@ -161,11 +164,15 @@ const collectSources = (request: CompanyGitRangeUnitSourceRequest, selection: Co
       + Math.max(collectionLimits.fullViewBytes, poolBytes);
     const temporary = budget.reserveMemory(copies);
     try {
-      const view = derivePersonalSourceView(path, source.bytes);
+      let view: PersonalSourceView;
+      try { view = derivePersonalSourceView(path, source.bytes); }
+      catch { return fail('INVALID_SOURCE', 'safe_view'); }
       sourceViews.push(viewProof(view));
       for (const [position, range] of selection.readRanges.entries()) {
         if (range.path !== path) continue;
-        const item = extractPersonalCollectionEvidence(selection.repoId, request.baseCommit, range, view);
+        let item: ReadonlyEvidence;
+        try { item = extractPersonalCollectionEvidence(selection.repoId, request.baseCommit, range, view); }
+        catch { return fail('INVALID_SOURCE', 'excerpt'); }
         const bytes = Buffer.byteLength(item.excerpt);
         if (evidenceBytes + bytes > collectionLimits.evidenceBytes) {
           budget.failLimit('evidenceBytes', evidenceBytes, bytes, collectionLimits.evidenceBytes);
@@ -210,26 +217,26 @@ const validRef = (name: string): boolean => name.length <= 512 && /^refs\/[a-zA-
 const verifyHead = (files: Files, budget: CompanyGitRangeUnitBudget, baseCommit: string): void => {
   const head = withFileBytes(files, budget, '.git/HEAD', limits.gitFileBytes, bytes => bytes.toString('utf8'));
   if (head === `${baseCommit}\n`) return;
-  if (head === undefined || head.length > 520) return fail();
+  if (head === undefined || head.length > 520) return fail('INVALID_SOURCE', 'head_ref');
   const match = /^ref: (refs\/heads\/[a-zA-Z0-9_./-]+)\n$/u.exec(head);
-  if (!match || !validRef(match[1]!)) return fail();
+  if (!match || !validRef(match[1]!)) return fail('INVALID_SOURCE', 'head_ref');
   const ref = match[1]!;
   const loose = withFileBytes(files, budget, `.git/${ref}`, limits.gitFileBytes, bytes => bytes.toString('utf8'), true);
-  if (loose !== undefined) { if (loose !== `${baseCommit}\n`) fail(); return; }
+  if (loose !== undefined) { if (loose !== `${baseCommit}\n`) fail('INVALID_SOURCE', 'head_ref'); return; }
   withFileBytes(files, budget, '.git/packed-refs', limits.gitFileBytes, bytes => {
     let cursor = 0, found = 0, canPeel = false;
     while (cursor < bytes.length) {
       const end = bytes.indexOf(10, cursor);
-      if (end < 0) return fail();
+      if (end < 0) return fail('INVALID_SOURCE', 'head_ref');
       const line = bytes.toString('utf8', cursor, end); cursor = end + 1;
       if (line.startsWith('#')) { canPeel = false; continue; }
       if (/^\^[a-f0-9]{40}$/u.test(line) && canPeel) { canPeel = false; continue; }
       const entry = /^([a-f0-9]{40}) (refs\/[a-zA-Z0-9_./-]+)$/u.exec(line);
-      if (!entry || !validRef(entry[2]!)) return fail();
+      if (!entry || !validRef(entry[2]!)) return fail('INVALID_SOURCE', 'head_ref');
       canPeel = true;
-      if (entry[2] === ref && (++found !== 1 || entry[1] !== baseCommit)) return fail();
+      if (entry[2] === ref && (++found !== 1 || entry[1] !== baseCommit)) return fail('INVALID_SOURCE', 'head_ref');
     }
-    if (found !== 1) fail();
+    if (found !== 1) fail('INVALID_SOURCE', 'head_ref');
   });
 };
 
@@ -279,9 +286,9 @@ const loadPacked = (pack: Pack, entry: CompanyGitRangeIndexEntry, budget: Compan
     try { decoded = decodeCompanyGitPackedObject(read.bytes, entry, pack.index.summary.indexSha256, budget, now()); }
     finally { budget.releaseMemory(read.memoryLease); }
     if (decoded.type === 'ofs-delta' || decoded.type === 'ref-delta') {
-      if (!decoded.base) return fail();
+      if (!decoded.base) return fail('INVALID_SOURCE', 'delta_base');
       const baseEntry = decoded.base.kind === 'oid' ? pack.index.find(decoded.base.oid, now()) : pack.index.atOffset(decoded.base.offset, now());
-      if (!baseEntry) return fail();
+      if (!baseEntry) return fail('INVALID_SOURCE', 'delta_base');
       base = loadPacked(pack, baseEntry, budget, now);
       result = applyCompanyGitPackedDelta(decoded, base, budget, now());
     } else { result = decoded as CompanyGitVerifiedObject; }
@@ -336,12 +343,12 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
           const entry = pack.index.find(wanted, now());
           if (entry) { pack.roots.add(wanted); return loadPacked(pack, entry, budget, now); }
         }
-        return fail();
+        return fail('INVALID_SOURCE', 'object_lookup');
       };
       const consume = <T>(wanted: string, expected: 'commit' | 'tree' | 'blob', action: (object: CompanyGitVerifiedObject) => T): T => {
         const object = load(wanted);
         try {
-          if (object.type !== expected) return fail();
+          if (object.type !== expected) return fail('INVALID_SOURCE', 'object_type');
           budget.setStage(expected === 'blob' ? 'selected_file' : expected);
           return action(object);
         }
@@ -364,13 +371,13 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
           group, entry: findCompanyGitTreeEntry(object.bytes, name, budget, now()),
         })));
         for (const { group, entry } of resolved) {
-          if (!entry) return fail();
+          if (!entry) return fail('INVALID_SOURCE', 'tree_selection');
           const leaf = group.find(selected => selected.parts.length === depth + 1);
           if (leaf) {
-            if (group.length !== 1 || entry.mode !== '100644' && entry.mode !== '100755') return fail();
+            if (group.length !== 1 || entry.mode !== '100644' && entry.mode !== '100755') return fail('INVALID_SOURCE', 'tree_selection');
             selectedEntries.set(leaf.path, { oid: entry.oid, mode: entry.mode });
           } else {
-            if (entry.mode !== '40000') return fail();
+            if (entry.mode !== '40000') return fail('INVALID_SOURCE', 'tree_selection');
             resolveTree(entry.oid, group, depth + 1);
           }
         }
@@ -381,9 +388,9 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
       const selectedFiles: CompanyGitRangeSelectedFile[] = [];
       for (const path of request.selectedPaths) {
         const selected = selectedEntries.get(path);
-        if (!selected) return fail();
+        if (!selected) return fail('INVALID_SOURCE', 'tree_selection');
         consume(selected.oid, 'blob', object => {
-          if (object.bytes.length > collectionLimits.sourceFileBytes) return fail();
+          if (object.bytes.length > collectionLimits.sourceFileBytes) return fail('INVALID_SOURCE', 'source_size');
           withFileBytes(files!, budget, path, collectionLimits.sourceFileBytes, (bytes, fileMode, memoryLease) => {
             if (!bytes.equals(object.bytes) || Boolean(fileMode & 0o111) !== (selected.mode === '100755')) return fail('SOURCE_CHANGED');
             selectedFiles.push(Object.freeze({ path, oid: selected.oid, mode: selected.mode, sha256: hashReadonlyValue(bytes), bytes: bytes.length }));

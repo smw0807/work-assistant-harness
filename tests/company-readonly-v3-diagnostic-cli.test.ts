@@ -276,3 +276,25 @@ test('an unsafe synthetic worker emits a bound fixed code before receipt access 
     assert.equal(fixture.snapshot(), before);
   }
 });
+
+test('an out-of-file synthetic range records the excerpt branch while preserving the public failure and empty store', { timeout: 30_000 }, async context => {
+  const fixture = await setup(context);
+  const registration = { ...fixture.registration, readRanges: fixture.registration.readRanges.map(range =>
+    range.path === 'src/main.ts' ? { ...range, endLine: 2 } : range) };
+  fs.writeFileSync(fixture.registrationFile, JSON.stringify(registration), { mode: 0o600 });
+  const before = sourceMetadata(fixture);
+  const failed = await run([...fixture.args, '--diagnostics-dir', fixture.diagnostics]), value = body(failed);
+  assert.equal(failed.code, 1); assert.equal(value.runStatus, 'unknown'); assert.equal(value.reason, 'worker_failed');
+  assert.equal(value.exitConfirmed, true); assert.equal(value.automaticRetry, false);
+  assert.equal(Object.hasOwn(value, 'sourceFailureReason'), false); assert.equal(Object.hasOwn(value, 'workerFailureCode'), false);
+  metadataOnly(failed.stdout + failed.stderr, fixture);
+  const id = value.taskId as string, record = await readCompanyV3Diagnostic(fixture.diagnostics, fixture.runtime, id);
+  assert.equal(record.version, 'company-readonly-v3-diagnostic-record-v3');
+  assert.equal(record.workerFailureCode, 'COMPANY_GIT_RANGE_INVALID_SOURCE');
+  assert.equal(record.sourceFailureReason, 'excerpt'); assert.equal(record.failure, null);
+  metadataOnly(JSON.stringify(record), fixture);
+  const inspected = success(await run(['company-readonly-v3-inspect', '--task', id, '--data-dir', fixture.runtime]), 'NOT_FOUND');
+  assert.equal(inspected.reviewAvailable, false); assert.equal(inspected.preparationRunStatus, 'unknown');
+  const stored = databaseState(fixture); assert.equal(stored.preparations, 0); assert.equal(stored.payloads, 0);
+  assert.equal(sourceMetadata(fixture), before);
+});

@@ -357,3 +357,117 @@ test('a budget diagnostic must agree with its worker code on write and on record
   value.workerFailureCode = 'COMPANY_GIT_RANGE_SOURCE_CHANGED'; fs.writeFileSync(path, resign(value));
   await assert.rejects(readCompanyV3Diagnostic(directory, runtime, run.taskId), unsafe);
 });
+
+test('a source reason creates a version-three record with only its fixed matching code and original retention', async context => {
+  const { directory, runtime, run, path } = await fixture(context);
+  await writeCompanyV3Diagnostic(directory, runtime, run,
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE', sourceFailureReason: 'tree_selection' }, null);
+  const record = await readCompanyV3Diagnostic(directory, runtime, run.taskId);
+  assert.equal(record.version, 'company-readonly-v3-diagnostic-record-v3');
+  assert.equal(record.workerFailureCode, 'COMPANY_GIT_RANGE_INVALID_SOURCE');
+  assert.equal(record.sourceFailureReason, 'tree_selection');
+  assert.equal(record.failure, null); assert.equal(record.auditExpiresAt, run.auditExpiresAt);
+  assert.deepEqual(Object.keys(record).sort(), ['version', 'taskId', 'ownerId', 'gitProfileHash', 'guardPolicyHash', 'runtimeHash',
+    'diagnosticsDirectoryHash', 'createdAt', 'auditExpiresAt', 'reason', 'exitConfirmed', 'failure', 'diagnosticHash',
+    'workerFailureCode', 'sourceFailureReason'].sort());
+  const { diagnosticHash, ...content } = record;
+  assert.equal(diagnosticHash, hashReadonlyValue(canonicalReadonlyJson(content)));
+  assert.equal(fs.statSync(path).mode & 0o777, 0o600); assert.ok(fs.statSync(path).size <= 8192);
+  for (const text of [directory, runtime, '"message"', '"stack"', '"path"']) assert.equal(fs.readFileSync(path, 'utf8').includes(text), false);
+});
+
+test('three diagnostic record versions coexist with unchanged old bytes and the same expiry rules', async context => {
+  const { directory, runtime, run, path } = await fixture(context);
+  await writeCompanyV3Diagnostic(directory, runtime, run, failedOutcome, null);
+  const legacyBytes = fs.readFileSync(path), codedRun = { ...run, taskId: randomUUID() }, detailedRun = { ...run, taskId: randomUUID() };
+  await writeCompanyV3Run(runtime, codedRun); await writeCompanyV3Run(runtime, detailedRun);
+  await writeCompanyV3Diagnostic(directory, runtime, codedRun, { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE' }, null);
+  const codedPath = join(directory, `diagnostic-v3-${codedRun.taskId}.json`), codedBytes = fs.readFileSync(codedPath);
+  await writeCompanyV3Diagnostic(directory, runtime, detailedRun,
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE', sourceFailureReason: 'head_ref' }, null);
+  assert.equal((await readCompanyV3Diagnostic(directory, runtime, run.taskId)).version, 'company-readonly-v3-diagnostic-record-v1');
+  assert.equal((await readCompanyV3Diagnostic(directory, runtime, codedRun.taskId)).version, 'company-readonly-v3-diagnostic-record-v2');
+  assert.equal((await readCompanyV3Diagnostic(directory, runtime, detailedRun.taskId)).version, 'company-readonly-v3-diagnostic-record-v3');
+  await prepCompanyV3DiagnosticsDirectory(directory, runtime, false);
+  assert.deepEqual(fs.readFileSync(path), legacyBytes); assert.deepEqual(fs.readFileSync(codedPath), codedBytes);
+  assert.equal(await pruneCompanyV3Diagnostics(directory, runtime, new Date(Date.parse(run.auditExpiresAt) - 1)), 0);
+  assert.deepEqual(fs.readFileSync(path), legacyBytes); assert.deepEqual(fs.readFileSync(codedPath), codedBytes);
+  assert.equal(await pruneCompanyV3Diagnostics(directory, runtime, new Date(run.auditExpiresAt)), 3);
+  assert.deepEqual(fs.readdirSync(directory), []);
+});
+
+test('source reason writes reject absent or conflicting codes, unknown reasons and budget diagnostics', async context => {
+  const { directory, runtime, run } = await fixture(context);
+  for (const changed of [
+    { ...failedOutcome, sourceFailureReason: 'excerpt' },
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_SOURCE_CHANGED', sourceFailureReason: 'excerpt' },
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE', sourceFailureReason: undefined },
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE', sourceFailureReason: null },
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE', sourceFailureReason: 'SYNTHETIC_PRIVATE_TEXT' },
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE', sourceFailureReason: { reason: 'excerpt' } },
+  ]) {
+    await assert.rejects(writeCompanyV3Diagnostic(directory, runtime, run,
+      changed as Parameters<typeof writeCompanyV3Diagnostic>[3], null), unsafe);
+    assert.deepEqual(fs.readdirSync(directory), []);
+  }
+  const failure = failureFixture(); assert.ok(failure);
+  await assert.rejects(writeCompanyV3Diagnostic(directory, runtime, run,
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE', sourceFailureReason: 'excerpt' }, failure), unsafe);
+  assert.deepEqual(fs.readdirSync(directory), []);
+});
+
+test('outcome and reason property hooks are rejected without evaluating or persisting them', async context => {
+  const { directory, runtime, run } = await fixture(context);
+  const valid = { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE' as const, sourceFailureReason: 'safe_view' as const };
+  let accesses = 0;
+  const hostile = (): never => { accesses++; throw new Error('SYNTHETIC_PRIVATE_HOOK'); };
+  const proxy = new Proxy(valid, { get: hostile, getPrototypeOf: hostile, getOwnPropertyDescriptor: hostile });
+  const revoked = Proxy.revocable(valid, {}); revoked.revoke();
+  const values: unknown[] = [proxy, revoked.proxy,
+    { ...valid, sourceFailureReason: { toJSON: hostile } },
+    { ...valid, sourceFailureReason: new Proxy({}, { get: hostile, getPrototypeOf: hostile }) }];
+  for (const name of ['reason', 'exitConfirmed', 'workerFailureCode', 'sourceFailureReason']) {
+    values.push(Object.defineProperty({ ...valid }, name, { enumerable: true, get: hostile }));
+  }
+  for (const changed of values) {
+    await assert.rejects(writeCompanyV3Diagnostic(directory, runtime, run,
+      changed as Parameters<typeof writeCompanyV3Diagnostic>[3], null), unsafe);
+    assert.deepEqual(fs.readdirSync(directory), []);
+  }
+  assert.equal(accesses, 0);
+});
+
+for (const change of [
+  { name: 'version one with a source reason', edit: (value: Record<string, unknown>) => { value.version = 'company-readonly-v3-diagnostic-record-v1'; } },
+  { name: 'version two with a source reason', edit: (value: Record<string, unknown>) => { value.version = 'company-readonly-v3-diagnostic-record-v2'; } },
+  { name: 'missing source reason', edit: (value: Record<string, unknown>) => { delete value.sourceFailureReason; } },
+  { name: 'missing source code', edit: (value: Record<string, unknown>) => { delete value.workerFailureCode; } },
+  { name: 'conflicting source code', edit: (value: Record<string, unknown>) => { value.workerFailureCode = 'COMPANY_GIT_RANGE_SOURCE_CHANGED'; } },
+  { name: 'unknown source reason', edit: (value: Record<string, unknown>) => { value.sourceFailureReason = 'SYNTHETIC_PRIVATE_REASON'; } },
+  { name: 'null source reason', edit: (value: Record<string, unknown>) => { value.sourceFailureReason = null; } },
+  { name: 'raw path addition', edit: (value: Record<string, unknown>) => { value.path = '/synthetic/private/source'; } },
+  { name: 'successful source failure', edit: (value: Record<string, unknown>) => { value.reason = 'completed'; } },
+  { name: 'unconfirmed source failure', edit: (value: Record<string, unknown>) => { value.exitConfirmed = false; } },
+]) {
+  test(`source diagnostics reject ${change.name} even with a recomputed hash`, async context => {
+    const { directory, runtime, run, path } = await fixture(context);
+    await writeCompanyV3Diagnostic(directory, runtime, run,
+      { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE', sourceFailureReason: 'object_lookup' }, null);
+    const value = JSON.parse(fs.readFileSync(path, 'utf8')) as Record<string, unknown>;
+    change.edit(value); fs.writeFileSync(path, resign(value));
+    await assert.rejects(readCompanyV3Diagnostic(directory, runtime, run.taskId), unsafe);
+    await assert.rejects(pruneCompanyV3Diagnostics(directory, runtime, new Date(run.auditExpiresAt)), unsafe);
+    assert.ok(fs.existsSync(path));
+  });
+}
+
+test('the stored hash binds the exact source failure reason', async context => {
+  const { directory, runtime, run, path } = await fixture(context);
+  await writeCompanyV3Diagnostic(directory, runtime, run,
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE', sourceFailureReason: 'safe_view' }, null);
+  const value = JSON.parse(fs.readFileSync(path, 'utf8')) as Record<string, unknown>;
+  fs.writeFileSync(path, JSON.stringify({ ...value, sourceFailureReason: 'excerpt' }));
+  await assert.rejects(readCompanyV3Diagnostic(directory, runtime, run.taskId), unsafe);
+  await assert.rejects(pruneCompanyV3Diagnostics(directory, runtime, new Date(run.auditExpiresAt)), unsafe);
+  assert.ok(fs.existsSync(path));
+});

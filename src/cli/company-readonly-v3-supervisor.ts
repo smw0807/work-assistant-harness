@@ -1,10 +1,11 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import type { CompanyGitRangeUnitFailure } from '../domain/company-git-range-unit.js';
+import type { CompanyGitRangeSourceFailureReason } from '../policy/company-git-range-source-failure.js';
 import { getCompanyGitRangeUnitProfile } from '../policy/company-git-range-unit-budget.js';
 import { parseCompanyV3Diagnostic } from './company-readonly-v3-diagnostic-protocol.js';
 import { parseCompanyV3Summary, type CompanyV3Command, type CompanyV3Summary } from './company-readonly-v3-protocol.js';
-import { parseCompanyV3WorkerFailure, type CompanyV3WorkerFailureCode } from './company-readonly-v3-worker-failure.js';
+import { parseCompanyV3WorkerFailureDetails, type CompanyV3WorkerFailureCode } from './company-readonly-v3-worker-failure.js';
 
 type Timer = ReturnType<typeof setTimeout>;
 export interface CompanyV3SupervisorClock {
@@ -21,6 +22,7 @@ export interface CompanyV3WorkerOutcome {
   exitConfirmed: boolean;
   failureDiagnostic?: CompanyGitRangeUnitFailure | null;
   workerFailureCode?: CompanyV3WorkerFailureCode;
+  sourceFailureReason?: CompanyGitRangeSourceFailureReason;
 }
 
 /** Only trusted harness code supplies the child and clock; no registration can choose a command or deadline. */
@@ -56,17 +58,19 @@ export const superviseCompanyV3Worker = (child: ChildProcessWithoutNullStreams, 
     if (reason === null && time.now() - startedAtMs >= limits.wallClockMs) reason = 'deadline';
     const failureDiagnostic = diagnostics && command === 'plan' && id && stderrBytes <= 65_536
       ? parseCompanyV3Diagnostic(diagnosticOutput, id) : null;
-    const workerFailureCode = diagnostics && command === 'plan' && id && stderrBytes <= 65_536
-      ? parseCompanyV3WorkerFailure(diagnosticOutput, id) : null;
+    const workerFailure = diagnostics && command === 'plan' && id && stderrBytes <= 65_536
+      ? parseCompanyV3WorkerFailureDetails(diagnosticOutput, id) : null;
     const diagnosticFields = diagnostics ? { failureDiagnostic } : {};
     if (reason !== null || code !== 0 || signal !== null) {
       // Only the worker's own exit 1 identifies this code; supervisor termination keeps its original cause.
-      const workerFields = reason === null && code === 1 && signal === null && workerFailureCode
-        && (!failureDiagnostic || failureDiagnostic.errorCode === workerFailureCode) ? { workerFailureCode } : {};
+      const workerFields = reason === null && code === 1 && signal === null && workerFailure
+        && (!failureDiagnostic || failureDiagnostic.errorCode === workerFailure.code)
+        ? { workerFailureCode: workerFailure.code,
+          ...(workerFailure.sourceFailureReason === undefined ? {} : { sourceFailureReason: workerFailure.sourceFailureReason }) } : {};
       resolve({ summary: null, reason: reason ?? 'worker_failed', exitConfirmed: true, ...diagnosticFields, ...workerFields }); return;
     }
     try {
-      if (failureDiagnostic || workerFailureCode) throw new Error('conflicting worker outputs');
+      if (failureDiagnostic || workerFailure) throw new Error('conflicting worker outputs');
       const summary = parseCompanyV3Summary(new TextDecoder('utf-8', { fatal: true }).decode(output), command, id);
       resolve({ summary, reason: 'completed', exitConfirmed: true, ...diagnosticFields });
     } catch { resolve({ summary: null, reason: 'invalid_output', exitConfirmed: true, ...diagnosticFields }); }

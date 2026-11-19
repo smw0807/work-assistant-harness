@@ -371,3 +371,73 @@ test('worker failure frames leave default and non-plan supervisor contracts unch
     }
   }
 });
+
+test('a source reason is retained with its matching code only after a clean failure close', async () => {
+  const worker = new Worker(), time = new ManualClock(); let settled = false;
+  const result = superviseCompanyV3Worker(worker.child(), 'plan', taskId, 0, time, true).then(value => { settled = true; return value; });
+  const frame = formatCompanyV3WorkerFailure(taskId, 'COMPANY_GIT_RANGE_INVALID_SOURCE', 'tree_selection');
+  worker.stderr.write(frame.slice(0, 29)); worker.stderr.write(frame.slice(29));
+  worker.emit('exit', 1, null); await Promise.resolve(); assert.equal(settled, false);
+  worker.emit('close', 1, null);
+  assert.deepEqual(await result, { summary: null, reason: 'worker_failed', exitConfirmed: true, failureDiagnostic: null,
+    workerFailureCode: 'COMPANY_GIT_RANGE_INVALID_SOURCE', sourceFailureReason: 'tree_selection' });
+  assert.equal(time.pending(), 0); assert.deepEqual(worker.signals, []);
+});
+
+test('a detailed source frame conflicts with a successful summary and never accompanies a budget failure', async () => {
+  for (const success of [true, false]) {
+    const worker = new Worker(), time = new ManualClock(), failure = diagnosticFailure();
+    const result = superviseCompanyV3Worker(worker.child(), 'plan', taskId, 0, time, true);
+    worker.stderr.write(formatCompanyV3WorkerFailure(taskId, 'COMPANY_GIT_RANGE_INVALID_SOURCE', 'source_size'));
+    if (success) write(worker, summary());
+    else worker.stderr.write(formatCompanyV3Diagnostic(taskId, failure));
+    worker.emit('close', success ? 0 : 1, null);
+    assert.deepEqual(await result, { summary: null, reason: success ? 'invalid_output' : 'worker_failed', exitConfirmed: true,
+      failureDiagnostic: success ? null : failure });
+  }
+});
+
+test('mixed, duplicate, unbound and malformed source reason frames retain neither a code nor a reason', async () => {
+  const frame = formatCompanyV3WorkerFailure(taskId, 'COMPANY_GIT_RANGE_INVALID_SOURCE', 'excerpt');
+  const legacy = formatCompanyV3WorkerFailure(taskId, 'COMPANY_GIT_RANGE_INVALID_SOURCE');
+  for (const text of [legacy + frame, frame + legacy, frame + frame, frame.trimEnd(),
+    frame.replace(taskId, '22222222-2222-4222-8222-222222222222'), frame.replace('"excerpt"', '"SYNTHETIC_PRIVATE_BODY"'),
+    frame.replace('COMPANY_GIT_RANGE_INVALID_SOURCE', 'COMPANY_GIT_RANGE_SOURCE_CHANGED')]) {
+    const worker = new Worker(), time = new ManualClock();
+    const result = superviseCompanyV3Worker(worker.child(), 'plan', taskId, 0, time, true);
+    worker.stderr.write(text); worker.emit('close', 1, null);
+    assert.deepEqual(await result, { summary: null, reason: 'worker_failed', exitConfirmed: true, failureDiagnostic: null });
+  }
+});
+
+test('source reasons cannot supersede a timeout, output limit, stream error, signal or other exit code', async () => {
+  for (const mode of ['deadline', 'late', 'stdout-limit', 'stderr-limit', 'signal', 'other-code', 'child-error', 'stdout-error', 'stderr-error'] as const) {
+    const worker = new Worker(), time = new ManualClock();
+    const result = superviseCompanyV3Worker(worker.child(), 'plan', taskId, 0, time, true);
+    worker.stderr.write(formatCompanyV3WorkerFailure(taskId, 'COMPANY_GIT_RANGE_INVALID_SOURCE', 'head_ref'));
+    if (mode === 'deadline') time.advance(limits.wallClockMs);
+    if (mode === 'late') time.jumpTo(limits.wallClockMs);
+    if (mode === 'stdout-limit') worker.stdout.write(Buffer.alloc(65_537));
+    if (mode === 'stderr-limit') worker.stderr.write(Buffer.alloc(65_537));
+    if (mode === 'child-error') worker.emit('error', new Error('SYNTHETIC_PRIVATE_ERROR'));
+    if (mode === 'stdout-error') worker.stdout.emit('error', new Error('SYNTHETIC_PRIVATE_ERROR'));
+    if (mode === 'stderr-error') worker.stderr.emit('error', new Error('SYNTHETIC_PRIVATE_ERROR'));
+    worker.emit('close', mode === 'other-code' ? 2 : mode === 'signal' ? null : 1, mode === 'signal' ? 'SIGTERM' : null);
+    assert.deepEqual(await result, { summary: null, reason: mode === 'deadline' || mode === 'late' ? 'deadline'
+      : mode === 'stdout-limit' || mode === 'stderr-limit' ? 'output_limit' : 'worker_failed', exitConfirmed: true, failureDiagnostic: null });
+    assert.equal(time.pending(), 0);
+  }
+});
+
+test('detailed source frames do not alter default or non-plan supervision', async () => {
+  for (const command of ['plan', 'inspect', 'cancel', 'prune'] as const) {
+    for (const code of [0, 1]) {
+      const worker = new Worker(), time = new ManualClock(), diagnostics = command !== 'plan';
+      const result = superviseCompanyV3Worker(worker.child(), command, command === 'prune' ? null : taskId, 0, time, diagnostics);
+      worker.stderr.write(formatCompanyV3WorkerFailure(taskId, 'COMPANY_GIT_RANGE_INVALID_SOURCE', 'object_lookup'));
+      write(worker, summary(command)); worker.emit('close', code, null);
+      assert.deepEqual(await result, { summary: code === 0 ? summary(command) : null,
+        reason: code === 0 ? 'completed' : 'worker_failed', exitConfirmed: true, ...(diagnostics ? { failureDiagnostic: null } : {}) });
+    }
+  }
+});
