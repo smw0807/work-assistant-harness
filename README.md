@@ -687,7 +687,36 @@ payload·보고서·감사의 만료는 원래 준비 시각을 상속합니다.
 
 원래 준비를 취소하면 이후 조사 계획·승인·호출이 차단됩니다. 이미 별도 조사 DB에 보관한 입력/보고서까지 즉시 제거하려면 해당 조사에도 `company-investigation-cancel`을 호출합니다. 두 DB 사이의 자동 연쇄 삭제는 제공하지 않습니다.
 
-`REPORTED`는 **고정 응답의 형식·근거 검증과 보관 성공**입니다. 보고서의 실제 모델·인증·native·외부 전송은 모두 `not_run`, 의미 정확성은 미검증입니다. 준비 자료를 실제 모델로 전송하는 명령은 아직 제공하지 않습니다. 구현·합성 검증과 남은 범위는 [4-C-18 결과](docs/stage-4c18-result.md)를 따릅니다.
+`REPORTED`는 **고정 응답의 형식·근거 검증과 보관 성공**입니다. 보고서의 실제 모델·인증·native·외부 전송은 모두 `not_run`, 의미 정확성은 미검증입니다. 이 모의 명령에는 실제 모델 전송을 연결하지 않습니다. 별도 전송 계약은 다음 절을 따릅니다. 구현·합성 검증과 남은 범위는 [4-C-18 결과](docs/stage-4c18-result.md)를 따릅니다.
+
+### 회사 전송 계획과 비공개 로컬 검토
+
+`company-relay-*`는 별도 전송 계획·승인·DB를 사용합니다. 기존 모의 승인을 승격하지 않습니다. 코드와 합성 검증은 추가했으며 **실제 회사 자료·인증·native Codex·모델 호출은 이번 단계에서 실행하지 않았습니다.** [4-C-19 결과](docs/stage-4c19-result.md)에 검증 범위를 기록합니다.
+
+[설정 예시](config/company-relay-authorization.example.json)는 기본 비활성입니다. 사용 전 미확인인 회사 전송·제공자/계정 조건을 확인하고, 실제 호출 제외를 해제하는 별도 승인이 필요합니다. 예시의 0 hash와 경로는 가짜 값입니다. 승인된 native 경로/기존 hash와 허용된 계정 ID의 UTF-8 SHA-256을 사용하며 토큰은 설정에 넣지 않습니다. 설정은 소유자 전용 디렉터리(`0700`)의 `company-relay-authorization.json`(`0600`)으로 보관합니다. 다음은 구현한 명령의 사용법이며 실행 승인을 대신하지 않습니다.
+
+```sh
+pnpm harness company-relay-plan --mode live --preparation-task <preparation-uuid> --authorization /private/review/company-relay-authorization.json --preparation-data-dir /private/review/company-runtime-v3 --data-dir /private/review/company-relay
+pnpm harness company-relay-review --task <relay-uuid> --data-dir /private/review/company-relay
+# reviews/<relay-uuid>.json에서 정확한 요청 본문·계정 hash·목적지·한도·기한을 검토한 뒤 해당 계획만 승인
+pnpm harness company-relay-approve --mode live --task <relay-uuid> --plan-hash <sha256> --expires-in-minutes 10 --authorization /private/review/company-relay-authorization.json --preparation-data-dir /private/review/company-runtime-v3 --data-dir /private/review/company-relay
+pnpm harness company-relay-run --mode live --task <relay-uuid> --plan-hash <sha256> --authorization /private/review/company-relay-authorization.json --preparation-data-dir /private/review/company-runtime-v3 --data-dir /private/review/company-relay
+pnpm harness company-relay-inspect --task <relay-uuid> --data-dir /private/review/company-relay
+# 완료 후 같은 review 명령으로 검증된 보고서도 열람
+pnpm harness company-relay-review --task <relay-uuid> --data-dir /private/review/company-relay
+pnpm harness company-relay-cancel --task <relay-uuid> --data-dir /private/review/company-relay
+pnpm harness company-relay-recover --task <relay-uuid> --data-dir /private/review/company-relay
+pnpm harness company-relay-prune --data-dir /private/review/company-relay
+```
+
+전송은 기존 relay-v3의 고정 모델·ChatGPT endpoint·계정 인증·단건 호출·재시도 0을 사용합니다. 실제 인증을 읽은 뒤 계정 hash가 일치해야 전송 예약을 확정합니다. 원본/준비·설정·본문 변경, 만료·취소·사용 승인은 호출을 차단합니다. 본문·보고서·검토 사본은 원래 준비의 `expiresAt`, 감사는 `auditExpiresAt`을 상속합니다. 새 승인으로 기간을 연장하지 않으며 백그라운드 삭제가 아닌 명령 기반 정리입니다.
+
+stdout은 상태와 집계만 표시합니다. 검토 파일은 `reviews/<task-id>.json`에 `0600`으로 보관하며 `requestEnvelope.body`가 정확한 전송 문자열입니다. 로컬 source root·파일 identity·토큰·원시 응답은 복사하지 않습니다. `REPORTED`와 `verification:live`가 실제 호출 결과이고, `verification:fake`는 합성 검증입니다. `dispatchReservations`는 전송 예약 수이므로 중단 시 실제 공급자 호출 수로 단정하지 않습니다. `unknown`이면 같은 ID를 조회하고 재실행하지 않습니다.
+
+준비/승인/검토/정리는 제한된 Node worker에서 실행합니다. 명시적 `run`은 기존 relay와 같은 신뢰하는 controller로 실행하며 OS 권한을 가집니다. 현재 Node 제한 모드에서 fsync가 차단되어 승인·native 수명 기록의 내구성을 보존하기 위한 구분입니다. native child는 기존 OS sandbox를 사용하지만 이번 단계에서는 실행 검증하지 않았습니다. 모든 worker는 최소 환경·128MiB old-space, `run` 전체125초(작업120초+정리5초)를 유지합니다. 이를 RSS 상한이나 controller의 OS 읽기/쓰기 격리로 해석하지 않습니다.
+
+정상 종료한 native 감사 파일만 기한 후 제거합니다. `preservedUncertainArtifacts`가 0보다 크면 남은 scratch·불확정 종료·변조 자료를 수동 확인해야 하며, 이를 안전하게 재귀 삭제하지 않습니다. 설정 파일 수정은 다음 명령부터 반영됩니다. 진행 중 실행은 `cancel`로 중지하며 원격 처리의 철회는 보장하지 않습니다.
+
 
 ## 모의 입력과 오류 재현
 

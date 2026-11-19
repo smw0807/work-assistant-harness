@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdtemp, open, realpath, rmdir, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, open, readdir, realpath, rmdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
@@ -74,12 +74,27 @@ export const runSandboxedCodex = (
     environment, input, maxBytes }, () => undefined);
 });
 
+/** The company parent owns one short directory and retains its identity through probe cleanup. */
+export const inspectCompanyCodexIpcDirectory = async (path: string,
+  expected?: { device: number; inode: number }): Promise<{ device: number; inode: number }> => {
+  if (typeof path !== 'string' || !/^\/private\/tmp\/hcri-[A-Za-z0-9]{6}$/u.test(path)) throw new HarnessError('READONLY_RELAY_LIFECYCLE_UNSAFE');
+  const metadata = await lstat(path);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== process.getuid?.()
+    || (metadata.mode & 0o7777) !== 0o700 || await realpath(path) !== path || (await readdir(path)).length !== 0
+    || expected && (metadata.dev !== expected.device || metadata.ino !== expected.inode)) {
+    throw new HarnessError('READONLY_RELAY_LIFECYCLE_UNSAFE');
+  }
+  return { device: metadata.dev, inode: metadata.ino };
+};
+
 /** 실제 모델 호출 전에 동일한 SBPL 생성기로 파일/쓰기/exec/network/Unix socket 경계를 시험한다. */
-export const probeCodexIsolation = async (root: string, workspace: string, brokerPort: number, signal: AbortSignal): Promise<void> => {
+export const probeCodexIsolation = async (root: string, workspace: string, brokerPort: number, signal: AbortSignal,
+  companyIpcDirectory?: string): Promise<void> => {
+  const companyIdentity = companyIpcDirectory === undefined ? null : await inspectCompanyCodexIpcDirectory(companyIpcDirectory);
   const canary = join(root, 'host-canary.txt');
   await writeFile(canary, 'synthetic isolation canary', { flag: 'wx', mode: 0o600 });
   // macOS sockaddr_un 경로 제한 때문에 긴 data directory 밖에 소유한 짧은 진단 경로를 만든다.
-  const socketDirectory = await mkdtemp('/private/tmp/harness-codex-ipc-');
+  const socketDirectory = companyIpcDirectory ?? await mkdtemp('/private/tmp/harness-codex-ipc-');
   const socketPath = join(socketDirectory, 'probe.sock');
   const server = createServer((socket) => socket.end());
   const deniedServer = createServer((socket) => socket.end());
@@ -104,6 +119,7 @@ export const probeCodexIsolation = async (root: string, workspace: string, broke
   } finally {
     await Promise.all([new Promise<void>((resolve) => server.close(() => resolve())),
       new Promise<void>((resolve) => deniedServer.close(() => resolve()))]);
-    await rmdir(socketDirectory);
+    if (companyIdentity) await inspectCompanyCodexIpcDirectory(socketDirectory, companyIdentity);
+    else await rmdir(socketDirectory);
   }
 };

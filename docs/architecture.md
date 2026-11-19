@@ -369,6 +369,10 @@ CLI는 private 설정·경로 분리 확인 후 최소 환경의 Node 권한 wor
 
 후속 [회사 모의 조사 연결](stage-4c18-result.md)은 유효한 v3 준비에서 새 회사 조사 계획을 만들고, 별도 모의 승인·단건 소비·고정 응답·근거 검증 보고서를 `company-investigation.sqlite`에 보관한다. `CompanyInvestigationService`는 준비 조회·source 재검증·model·store 포트를 분리한다. source는 기존 v3 판독기를 다시 사용하고 model은 `FixedCompanyInvestigationModel`만 CLI에 연결한다. 같은 준비 키는 같은 작업으로 유지하며 취소·만료·사용 승인을 되살리지 않는다. 원래 준비 기한을 상속하고 보고서 본문도 payload와 함께 정리한다. 기존 개인/relay/live 흐름과 회사 준비 v1/v2/v3의 권한은 변경하지 않는다. 모의 보고서와 실제 회사 AI 조사는 구분한다.
 
+후속 [회사 전송 연결](stage-4c19-result.md)은 회사 입력·전송 선언·계정 hash와 relay-v3를 별도 `CompanyRelayService`/DB에 연결한다. 계획·소스 검증과 승인 소비를 전송 포트에서 분리하고, 실제 계정 확인 후 durable dispatch 예약을 거쳐 기존 broker로 전달한다. 가짜 포트 검증은 실제 native·모델 검증과 분리한다. 로컬 review는 정확한 요청과 결과의 관리되는 사본이며 원래 본문 기한을 따른다. native 감사 산출물은 원래 감사 기한 후 종료가 확인된 알려진 파일만 정리한다.
+
+전송의 preflight 및 비실행 명령은 제한 Node child, 명시적 run은 기존 fsync 수명 기록을 보존하는 신뢰 controller로 구성한다. run controller는 OS 권한을 가지며 source는 신뢰하는 읽기 전용 코드로 접근한다. native child의 기존 OS sandbox/guardian은 유지한다. 전체125초 안에서 작업120초·정리5초를 적용하고 결과 유실은 unknown으로 남긴다. 실제 회사 전송·공급자 호환성은 아직 검증하지 않았다.
+
 ## 3. 구성 요소와 책임
 
 처음에는 단일 프로세스, SQLite, 작업 하나씩 실행하는 구조로 시작한다. NestJS는 의존성 주입과 설정을 담당하고, 도메인 규칙은 NestJS나 외부 서비스 없이도 테스트할 수 있게 둔다.

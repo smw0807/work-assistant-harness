@@ -15,13 +15,14 @@ import { loadCodexCredential } from './codex-credentials.js';
 import { probeCodexIsolation, runSandboxedCodex, verifyCodexBinary } from './codex-isolation.js';
 import { createReadonlyRelayLifecycle, readonlyRelayCleanupConfirmed, readonlyRelayScratchIdentity, removeReadonlyRelayScratch, type ReadonlyRelayScratchIdentity } from './readonly-relay-lifecycle.js';
 import { runReadonlyRelayProcess } from './readonly-relay-runner.js';
-import { sendReadonlyRelayRequest, startReadonlyRelayBroker, type ReadonlyRelayBroker, type ReadonlyRelayCredential, type ReadonlyRelayTransport, type ReadonlyRelayDispatchValidator } from './readonly-relay-broker.js';
+import { sendReadonlyRelayRequest, startReadonlyRelayBroker, type ReadonlyRelayBroker, type ReadonlyRelayCredential, type ReadonlyRelayTransport, type ReadonlyRelayDispatchValidator, type ReadonlyRelayCredentialValidator } from './readonly-relay-broker.js';
 
 export interface SyntheticConnection { credential: ReadonlyRelayCredential; transport: ReadonlyRelayTransport }
-export interface ReadonlyRelayInputContract {
+export type ReadonlyRelayInputContract = {
   policy: 'personal-readonly-investigation-v1' | 'personal-readonly-investigation-v2' | 'personal-readonly-investigation-v3';
   assertDispatch: ReadonlyRelayDispatchValidator;
-}
+} | { policy: 'company-relay-plan-v1'; assertDispatch: ReadonlyRelayDispatchValidator;
+  assertCredential: ReadonlyRelayCredentialValidator; ipcDirectory?: string };
 const fail = (suffix: string): never => { throw new HarnessError(`READONLY_RELAY_${suffix}`); };
 
 /** Only the relay gets the longer idle wait: it first buffers bounded upstream EOF. */
@@ -55,12 +56,20 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
     beforeCredentialAccess: () => void): Promise<ReadonlyRelayTransmissionResult> {
     const config = parseAnyReadonlyRelayConfig(this.config);
     if (!config.enabled) fail('DISABLED');
-    // Only a separately constructed trusted harness adapter selects a personal input policy.
-    if (this.inputContract && (!Object.isFrozen(this.inputContract)
-      || Object.keys(this.inputContract).sort().join(',') !== 'assertDispatch,policy'
-      || !['personal-readonly-investigation-v1', 'personal-readonly-investigation-v2', 'personal-readonly-investigation-v3'].includes(this.inputContract.policy)
-      || typeof this.inputContract.assertDispatch !== 'function')) fail('INVALID_TRANSPORT');
+    // Only a separately constructed trusted harness adapter selects an input/account policy.
+    if (this.inputContract) {
+      const company = this.inputContract.policy === 'company-relay-plan-v1';
+      const companyKeys = company && Object.hasOwn(this.inputContract, 'ipcDirectory') ? 'assertCredential,assertDispatch,ipcDirectory,policy'
+        : 'assertCredential,assertDispatch,policy';
+      if (!Object.isFrozen(this.inputContract)
+        || Object.keys(this.inputContract).sort().join(',') !== (company ? companyKeys : 'assertDispatch,policy')
+        || (!company && !['personal-readonly-investigation-v1', 'personal-readonly-investigation-v2', 'personal-readonly-investigation-v3'].includes(this.inputContract.policy))
+        || typeof this.inputContract.assertDispatch !== 'function'
+        || (company && (typeof this.inputContract.assertCredential !== 'function'
+          || Object.hasOwn(this.inputContract, 'ipcDirectory') && typeof this.inputContract.ipcDirectory !== 'string'))) fail('INVALID_TRANSPORT');
+    }
     const validateDispatch = this.inputContract?.assertDispatch ?? assertReadonlyRelayDispatch;
+    const validateCredential = this.inputContract?.policy === 'company-relay-plan-v1' ? this.inputContract.assertCredential : undefined;
     validateDispatch(dispatch, config);
     if (signal.aborted) fail('CANCELLED');
     if (typeof beforeTransmission !== 'function' || typeof beforeCredentialAccess !== 'function') fail('INVALID_TRANSPORT');
@@ -126,10 +135,11 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
       }, () => {
         if (!isolation || controller.signal.aborted || performance.now() >= deadline) fail('TIMEOUT');
         beforeCredentialAccess();
-      }, validateDispatch).then((startedBroker) => { connection.broker = startedBroker; return startedBroker; }));
+      }, validateDispatch, validateCredential).then((startedBroker) => { connection.broker = startedBroker; return startedBroker; }));
       const activeBroker = connection.broker;
       if (!activeBroker) return fail('BROKER_FAILED');
-      await operation(probeCodexIsolation(lifecycle.directory, workspace, activeBroker.port, controller.signal));
+      await operation(probeCodexIsolation(lifecycle.directory, workspace, activeBroker.port, controller.signal,
+        this.inputContract?.policy === 'company-relay-plan-v1' ? this.inputContract.ipcDirectory : undefined));
       const environment = { HOME: home, CODEX_HOME: home, TMPDIR: home, PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', TZ: 'UTC',
         HARNESS_CODEX_CAPABILITY: activeBroker.capability };
       const foundVersion = await operation(runSandboxedCodex(config.codexPath, ['--version'], workspace, activeBroker.port, environment, '', controller.signal, 4096));

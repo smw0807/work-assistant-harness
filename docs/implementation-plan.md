@@ -876,6 +876,14 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - `company-investigation-plan/approve/run`은 명시적인 `--mode mock`을 요구하고 `inspect/cancel/recover/prune`를 제공한다. Nest context의 제한 worker만 고정 응답을 만들며 실제 인증·native·모델·네트워크·대상 명령은 연결하지 않는다. DB 사전검사도 제한 child에서 처리하며 stdout에는 상태/집계만 노출한다.
 - 합성 수용 기준: 미승인/잘못된 plan/owner/mode 거부, 변경·만료·취소 전후 호출 차단, 호출 한 번과 중단 복구, 잘못된 JSON·중복 키·미제공 근거·권한 필드 거부, DB/경로/권한/worker 환경, 원본 전후 보존, 기존 회귀 통과. 결과와 실제 호출 미검증 범위는 [4-C-18 결과](stage-4c18-result.md)에 기록한다.
 
+##### 단계 4-C-19 회사 전송 계약·로컬 검토·합성 검증
+
+- 별도 회사 relay-v3 입력/계획/선언/DB와 소유자 단건 승인을 만든다. 기존 모의 승인을 승격하지 않고 계정 hash·본문/명세·config/profile·원래 준비와 TTL을 고정한다. 선언은 기본 비활성이며 실제 회사 정책 확인을 대신하지 않는다.
+- source/준비/설정 검증, 승인 소비, 실제 인증 구조 및 계정 확인, durable 전송 예약, 응답/근거 검증, 취소/만료/복구를 연결한다. 기존 relay-v3 한도와 구형 계약/hash를 유지한다.
+- 정확한 본문·계정 hash·목적지·한도·보고서를 private review 파일로 제공하고 원래 payload 기한을 따른다. native 감사 파일은 원래 감사 기한 후 확인된 종료와 알려진 identity만 정리하며 불확정 보존을 집계한다.
+- preflight/비실행 명령은 제한 worker, 명시적 run은 기존 fsync 기록을 보존하는 신뢰 controller와 기존 native OS sandbox를 사용한다. 전체120초 작업+5초 정리, 최소 환경·128MiB old-space를 유지하며 controller의 OS 읽기/쓰기 격리나 RSS 강제 상한을 주장하지 않는다.
+- 합성 수용: 미확인/비활성 선언, 구형 승인 혼용, source/계정/설정/본문 변조, 중복/역순 callback, 승인 전 포트 생성 차단, 취소/만료/늦은 응답, private 파일/DB/권한, 정확한 검토 및 원래 기한 정리, uncertain 산출물 보존, IPC와 supervisor 종료를 검증한다. 실제 회사 자료·인증·native·모델·Slack은 제외한다. 결과는 [4-C-19](stage-4c19-result.md)에 기록한다.
+
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.
 - 4-D 후보: Gmail·Calendar·Drive를 서비스별 읽기와 변경 기능으로 나누고 인증·자료·전송·보관 정책을 정한다.
 

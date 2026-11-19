@@ -17,6 +17,8 @@ export type ReadonlyRelayTransport = (dispatch: ReadonlyRelayDispatch, credentia
   observeHeaders: (value: ReadonlyRelayHttpObservation) => void) => Promise<Response>;
 /** A trusted harness input policy; never supplied by configuration, target files or model output. */
 export type ReadonlyRelayDispatchValidator = (dispatch: ReadonlyRelayDispatch, config: ReadonlyRelayConfig) => void;
+/** Trusted account binding, applied only after the credential has passed its structural checks. */
+export type ReadonlyRelayCredentialValidator = (credential: ReadonlyRelayCredential) => void;
 const fail = (suffix: string): never => { throw new HarnessError(`READONLY_RELAY_${suffix}`); };
 
 /** Cookies are counted and discarded; no upstream header is relayed to the child. */
@@ -68,8 +70,9 @@ export const startReadonlyRelayBroker = async (
   config: ReadonlyRelayConfig, dispatch: ReadonlyRelayDispatch, loadCredential: () => Promise<ReadonlyRelayCredential>,
   signal: AbortSignal, transport: ReadonlyRelayTransport, beforeTransmission: () => void, beforeCredentialAccess: () => void,
   validateDispatch: ReadonlyRelayDispatchValidator = assertReadonlyRelayDispatch,
+  validateCredential?: ReadonlyRelayCredentialValidator,
 ): Promise<ReadonlyRelayBroker> => {
-  if (typeof validateDispatch !== 'function') fail('INVALID_TRANSPORT');
+  if (typeof validateDispatch !== 'function' || (validateCredential !== undefined && typeof validateCredential !== 'function')) fail('INVALID_TRANSPORT');
   config = parseAnyReadonlyRelayConfig(config);
   validateDispatch(dispatch, config);
   const budget = getReadonlyRelayExecutionBudget(config);
@@ -124,6 +127,7 @@ export const startReadonlyRelayBroker = async (
         || kind?.value !== 'chatgpt' || typeof token?.value !== 'string' || typeof account?.value !== 'string'
         || !/^[a-zA-Z0-9_.-]{12,16384}$/u.test(token.value) || !/^[a-zA-Z0-9_-]{12,128}$/u.test(account.value)) fail('INVALID_CREDENTIAL');
       const credential: ReadonlyRelayCredential = Object.freeze({ kind: 'chatgpt', accessToken: token!.value as string, accountId: account!.value as string });
+      validateCredential?.(credential);
       finalTextGuard = (text) => assertReadonlyRelayCredentialText(text, credential);
       if (controller.signal.aborted) fail('CANCELLED');
       beforeTransmission(); calls++;
