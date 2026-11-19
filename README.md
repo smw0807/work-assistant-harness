@@ -662,6 +662,8 @@ pnpm harness company-readonly-v3-prune --data-dir /private/review/company-runtim
 
 `COMPANY_GIT_RANGE_INVALID_SOURCE`는 Git 객체뿐 아니라 안전 view와 발췌 거부도 포함하므로 코드만으로 원본 손상을 단정하지 않습니다. 판독기가 직접 발행한 해당 오류는 새 진단 record-v3의 `sourceFailureReason`으로 HEAD/ref·delta base·객체 조회/타입·tree 선택·원본 크기·safe view·excerpt·unexpected 중 고정 분기 하나를 구분합니다. 경로·OID·본문·행번호를 기록하지 않고 기존 오류 코드와 한도를 유지합니다. 기존 record-v1/v2는 그대로 읽고 정리하며, 새 record-v3는 최신 reader가 필요합니다. [소스 거부 분기 검증](docs/stage-4c22-result.md)을 참고하세요.
 
+후속 [객체 조회 대조](docs/stage-4c23-result.md)에서는 index 경계와 여러 pack의 검색을 합성 검증하고, 별도로 허용된 로컬 관찰에서 선택 blob의 부재와 작업 파일을 통한 복구 조건을 확인했습니다. 프로덕션 판독기·기존 한도는 변경하지 않았으며 자동 복구 명령은 제공하지 않습니다. Git 객체 쓰기는 읽기 전용 준비와 별도 승인 범위입니다.
+
 회사 준비 명령의 `v3`는 `company-git-range-reader-v2`를 선택하며, 위 회사 준비 `v2`는 계속 `company-git-range-reader-v1`을 사용합니다. 새 방식은 부모 경로를 열기·읽기 단위 경계·최종 pass에 검사하고 chunk마다 leaf/FD를 검사합니다. **단위 내부의 일시적 조상 변경 후 복원을 놓칠 수 있으며 구형과 동등한 검증은 아닙니다.** 이 차이는 별도 guard hash와 로컬 검토 자료에 포함됩니다. 수집·읽기·metadata·메모리·시간 한도는 높이지 않았습니다.
 
 v3 준비 명령은 `AWAITING_APPROVAL`까지만 제공하며 승인 생성·전송·실행은 `false`입니다. 준비 명령 자체에는 `approve/run`이 없습니다. worker 권한, 30초·250ms 종료 정책, RSS 관찰 목표, 본문 최대24시간·감사 최대30일과 명시적 정리는 v2와 같습니다. [v3 통합 결과](docs/stage-4c17-company-v3-result.md)는 당시 합성 검증 기록이며, 이후 별도로 허용된 실제 준비에서 8파일·2pass·metadata7816/8192·같은 ID 조회와 검토 대기 저장을 확인했습니다. 이는 실제 AI 답변 생성 성공이 아닙니다.
