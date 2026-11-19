@@ -509,6 +509,8 @@ preflight·비실행 명령은 최소 환경과 Node 권한 모델을 유지한�
 
 원래 payload/audit 기한과 relay-v3 예산을 유지한다. 관리되는 review 사본에는 정확한 요청과 검증된 결과만 쓰며 fsync를 요구하는 승인 원장은 SQLite에 둔다. 비실행 명령도 만료된 사본과 종료된 감사 파일을 정리한다. scratch·종료 불확정·알 수 없는 산출물은 감사 기한 이후에도 보존할 수 있으며 `preservedUncertainArtifacts`로 알린다. 백그라운드 삭제, 강제 RSS 상한, 원자적 source snapshot, 원격 처리 취소를 보장하지 않는다. 실행 중 JSON 설정 수정은 즉시 취소가 아니므로 cancel을 사용한다. 실제 인증/native/모델과 회사 자료를 제외한 이번 검증의 상세 범위는 [4-C-19 결과](stage-4c19-result.md)를 따른다.
 
+인증 반사 진단 보완은 기존 차단 조건을 완화하지 않는다. relay-v3의 `call-report.json`에만 선택적으로 `reflectionDiagnostic`의 고정 version/scope/match/credential enum을 남긴다. 값·조각·길이·위치·원시 응답은 보관하지 않으며 현재 동기 검사 오류의 내부 결합만 인정한다. 기존 reception 11필드, 공개 오류, 구형 보고서·hash·예산·64상태 한도와 EOF/반사 검사 전 자식 전달 금지는 유지한다. 조각 누적 진단만으로 오탐이나 실제 노출을 확정하지 않는다. 합성 재현과 검증 범위는 [4-C-20 결과](stage-4c20-result.md)를 따른다.
+
 ## 7. 회사 자료와 비밀정보
 
 회사 계정·저장소 연결 전에 AI 제공자, 모델, 실행 위치, 전송 가능 자료, 보관 기간과 감사 요구를 회사 정책에 따라 확인한다. 회사 승인이 없으면 합성 데이터로 계속 개발한다.

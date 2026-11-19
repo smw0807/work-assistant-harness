@@ -180,6 +180,7 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
         if (!cleanupConfirmed) fail('LIFECYCLE_UNSAFE');
       } finally {
         clearTimeout(timer); signal.removeEventListener('abort', abort);
+        const reflectionDiagnostic = broker?.reflectionDiagnostic() ?? null;
         await writeFile(join(lifecycle.directory, 'call-report.json'), JSON.stringify({ policy: this.inputContract?.policy ?? 'synthetic-readonly-relay-v1',
           model: config.model, authMode: config.authMode, binaryHash: config.codexSha256, phase,
           requestBodyHash: dispatch.requestBodyHash, requestEnvelopeHash: dispatch.requestEnvelopeHash,
@@ -190,6 +191,7 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
           http: broker?.httpObservation() ?? null, relay: broker?.result() ?? null, finalTextHash,
           ...(dispatch.requestEnvelope.profileId === 'codex-chatgpt-relay-v2' || dispatch.requestEnvelope.profileId === 'codex-chatgpt-relay-v3'
             ? { reception: broker?.receptionDiagnostic() ?? null } : {}),
+          ...(dispatch.requestEnvelope.profileId === 'codex-chatgpt-relay-v3' && reflectionDiagnostic ? { reflectionDiagnostic } : {}),
           ...(selectedBudget ? { executionBudget: selectedBudget, executionBudgetHash: getReadonlyRelayExecutionBudgetHash(selectedBudget) } : {}),
           failureCode: cleanupConfirmed ? broker?.failure() ?? failureCode : 'READONLY_RELAY_LIFECYCLE_UNSAFE',
         }, null, 2), { flag: 'wx', mode: 0o600 });

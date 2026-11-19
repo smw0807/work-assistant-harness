@@ -9,6 +9,7 @@ import { assertReadonlyRelayDispatch, getReadonlyRelayLimits } from '../policy/r
 import { getReadonlyRelayExecutionBudget, parseAnyReadonlyRelayConfig } from '../policy/readonly-relay-budget-policy.js';
 import { assertReadonlyRelayCredentialText, collectReadonlyRelayResponse, type ReadonlyRelayReceptionOptions } from '../policy/readonly-relay-protocol.js';
 import { copyReadonlyRelayReceptionDiagnostic, type ReadonlyRelayReceptionDiagnostic } from '../policy/readonly-relay-reception-diagnostics.js';
+import { copyReadonlyRelayReflectionDiagnostic, type ReadonlyRelayReflectionDiagnostic } from '../policy/readonly-relay-reflection-diagnostics.js';
 import type { CodexCredential } from './codex-credentials.js';
 
 export type ReadonlyRelayCredential = Extract<CodexCredential, { kind: 'chatgpt' }>;
@@ -62,6 +63,7 @@ export interface ReadonlyRelayBroker {
   result(): { responseHash: string; bodyBytes: number; relayCompleted: true; credentialReflection: 'passed' } | null;
   httpObservation(): ReadonlyRelayHttpObservation | null;
   receptionDiagnostic(): ReadonlyRelayReceptionDiagnostic | null;
+  reflectionDiagnostic(): ReadonlyRelayReflectionDiagnostic | null;
   verifyFinalText(text: string): void;
   close(): Promise<void>;
 }
@@ -86,6 +88,11 @@ export const startReadonlyRelayBroker = async (
   let finalTextGuard: ((text: string) => void) | null = null;
   let result: ReturnType<ReadonlyRelayBroker['result']> = null; let observation: ReadonlyRelayHttpObservation | null = null;
   let reception: ReadonlyRelayReceptionDiagnostic | null = null;
+  let reflection: ReadonlyRelayReflectionDiagnostic | null = null;
+  const observeReflection = (value: ReadonlyRelayReflectionDiagnostic): void => {
+    if (reflection === null) reflection = copyReadonlyRelayReflectionDiagnostic(value);
+  };
+  const reflectionObserver = approved.requestEnvelope.profileId === 'codex-chatgpt-relay-v3' ? observeReflection : undefined;
   const active = new Set<Promise<void>>();
   const observeHeaders = (value: ReadonlyRelayHttpObservation): void => {
     if (!value || Object.keys(value).sort().join(',') !== 'headerBytes,headerCount,status' || observation !== null
@@ -128,14 +135,14 @@ export const startReadonlyRelayBroker = async (
         || !/^[a-zA-Z0-9_.-]{12,16384}$/u.test(token.value) || !/^[a-zA-Z0-9_-]{12,128}$/u.test(account.value)) fail('INVALID_CREDENTIAL');
       const credential: ReadonlyRelayCredential = Object.freeze({ kind: 'chatgpt', accessToken: token!.value as string, accountId: account!.value as string });
       validateCredential?.(credential);
-      finalTextGuard = (text) => assertReadonlyRelayCredentialText(text, credential);
+      finalTextGuard = (text) => assertReadonlyRelayCredentialText(text, credential, reflectionObserver);
       if (controller.signal.aborted) fail('CANCELLED');
       beforeTransmission(); calls++;
       const upstream = await transport(approved, credential, controller.signal, observeHeaders);
       // Full bounded EOF and reflection checks precede the first byte sent to the uncredentialed child.
       const observeDiagnostic = (value: ReadonlyRelayReceptionDiagnostic): void => { reception = copyReadonlyRelayReceptionDiagnostic(value); };
       const receptionOptions: ReadonlyRelayReceptionOptions | undefined = approved.requestEnvelope.profileId === 'codex-chatgpt-relay-v3'
-        ? { executionBudget: budget, observeDiagnostic }
+        ? { executionBudget: budget, observeDiagnostic, observeReflectionDiagnostic: observeReflection }
         : approved.requestEnvelope.profileId === 'codex-chatgpt-relay-v2'
           ? { responseBytes: getReadonlyRelayLimits(approved.requestEnvelope.profileId).responseBytes as NonNullable<ReadonlyRelayReceptionOptions['responseBytes']>, observeDiagnostic }
           : undefined;
@@ -174,6 +181,7 @@ export const startReadonlyRelayBroker = async (
   return { port: (server.address() as AddressInfo).port, capability, calls: () => calls, failure: () => failure,
     result: () => result ? { ...result } : null, httpObservation: () => observation ? { ...observation } : null,
     receptionDiagnostic: () => copyReadonlyRelayReceptionDiagnostic(reception),
+    reflectionDiagnostic: () => copyReadonlyRelayReflectionDiagnostic(reflection),
     verifyFinalText: (text) => { if (!result || !finalTextGuard) fail('INVALID_RESPONSE'); finalTextGuard!(text); },
     close: async () => {
       signal.removeEventListener('abort', abort); abort();

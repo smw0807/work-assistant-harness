@@ -4,17 +4,32 @@ import type { ReadonlyRelayExecutionBudget } from '../domain/readonly-relay-budg
 import { copyReadonlyRelayExecutionBudget } from './readonly-relay-budget-policy.js';
 import { HarnessError } from '../domain/errors.js';
 import { copyReadonlyRelayReceptionDiagnostic, type ReadonlyRelayReceptionDiagnostic } from './readonly-relay-reception-diagnostics.js';
+import { copyReadonlyRelayReflectionDiagnostic, type ReadonlyRelayReflectionDiagnostic } from './readonly-relay-reflection-diagnostics.js';
 
 export const READONLY_RELAY_RESPONSE_LIMITS = Object.freeze({ responseBytes: 256 * 1024, frameBytes: 64 * 1024,
   frames: 2048, jsonDepth: 16, headers: 64, headerBytes: 16 * 1024, outputBytes: 16 * 1024,
   cliBytes: 128 * 1024, workTimeoutMs: 55_000, cleanupTimeoutMs: 5_000 });
 const localErrors = new WeakSet<object>();
+const reflectionDiagnostics = new WeakMap<object, ReadonlyRelayReflectionDiagnostic>();
+type ReflectionObserver = (snapshot: ReadonlyRelayReflectionDiagnostic) => void;
 class RelayProtocolError extends HarnessError {
   constructor(code: string) { super(code); localErrors.add(this); }
 }
 const isLocalError = (error: unknown): error is RelayProtocolError =>
   error !== null && typeof error === 'object' && localErrors.has(error);
 const fail: (suffix: string) => never = (suffix) => { throw new RelayProtocolError(`READONLY_RELAY_${suffix}`); };
+const failReflection = (scope: ReadonlyRelayReflectionDiagnostic['scope'], match: ReadonlyRelayReflectionDiagnostic['match'], index: number): never => {
+  const error = new RelayProtocolError('READONLY_RELAY_CREDENTIAL_REFLECTION');
+  reflectionDiagnostics.set(error, Object.freeze({ version: 'readonly-relay-reflection-diagnostic-v1', scope, match,
+    credential: index === 0 ? 'accessToken' : 'accountId' }));
+  throw error;
+};
+const deliverReflectionDiagnostic = (observer: ReflectionObserver | undefined, diagnostic: ReadonlyRelayReflectionDiagnostic | null): void => {
+  try {
+    const snapshot = copyReadonlyRelayReflectionDiagnostic(diagnostic);
+    if (snapshot && observer) void Promise.resolve(observer(snapshot)).catch(() => {});
+  } catch { /* Observation cannot replace the original rejection. */ }
+};
 const validUnicode = (value: string): boolean => Buffer.from(value).toString('utf8') === value;
 
 /** Syntax and decoded strings only; provider event names, metadata and sequence values have no meaning here. */
@@ -78,38 +93,39 @@ const credentialStrings = (value: { accessToken: string; accountId: string }): r
     });
   } catch { return fail('INVALID_CREDENTIAL'); }
 };
-const assertNoReflection = (value: string, credentials: readonly string[]): void => {
-  if (credentials.some((credential) => value.includes(credential))) fail('CREDENTIAL_REFLECTION');
+const assertNoReflection = (value: string, credentials: readonly string[], scope: ReadonlyRelayReflectionDiagnostic['scope'],
+  match: 'raw-exact' | 'decoded-exact'): void => {
+  for (const [index, credential] of credentials.entries()) if (value.includes(credential)) failReflection(scope, match, index);
 };
-const reflectionScanner = (credentials: readonly string[]): ((value: string) => void) => {
-  const tracked = credentials.map((secret) => {
+const reflectionScanner = (credentials: readonly string[], scope: ReadonlyRelayReflectionDiagnostic['scope']): ((value: string) => void) => {
+  const tracked = credentials.map((secret, credentialIndex) => {
     const prefix = Array<number>(secret.length).fill(0);
     for (let index = 1, length = 0; index < secret.length; index++) {
       while (length > 0 && secret[index] !== secret[length]) length = prefix[length - 1]!;
       if (secret[index] === secret[length]) length++;
       prefix[index] = length;
     }
-    return { secret, prefix, positions: new Set<number>() };
+    return { secret, credentialIndex, prefix, positions: new Set<number>() };
   });
   const remember = (positions: Set<number>, length: number): void => {
     positions.add(length);
     if (tracked.reduce((total, entry) => total + entry.positions.size, 0) > 64) fail('CREDENTIAL_REFLECTION_LIMIT');
   };
   return (value) => {
-    assertNoReflection(value, credentials);
-    for (const { secret, prefix, positions } of tracked) {
+    assertNoReflection(value, credentials, scope, 'decoded-exact');
+    for (const { secret, credentialIndex, prefix, positions } of tracked) {
       // Unrelated strings may intervene between fragments. A partial match advances only over a whole string prefix.
       for (const position of [...positions]) {
         let length = 0;
         while (length < value.length && position + length < secret.length && value[length] === secret[position + length]) length++;
-        if (position + length === secret.length) fail('CREDENTIAL_REFLECTION');
+        if (position + length === secret.length) failReflection(scope, 'ordered-fragment', credentialIndex);
         if (length > 0 && length === value.length) remember(positions, position + length);
       }
       let length = 0;
       for (let index = 0; index < value.length; index++) {
         while (length > 0 && value[index] !== secret[length]) length = prefix[length - 1]!;
         if (value[index] === secret[length]) length++;
-        if (length === secret.length) fail('CREDENTIAL_REFLECTION');
+        if (length === secret.length) failReflection(scope, 'decoded-exact', credentialIndex);
       }
       while (length > 0) { remember(positions, length); length = prefix[length - 1]!; }
     }
@@ -117,16 +133,22 @@ const reflectionScanner = (credentials: readonly string[]): ((value: string) => 
 };
 
 /** Final investigation JSON gets the same exact-credential and ordered-fragment guard before it can be stored. */
-export const assertReadonlyRelayCredentialText = (text: string, credential: { accessToken: string; accountId: string }): void => {
+export const assertReadonlyRelayCredentialText = (text: string, credential: { accessToken: string; accountId: string },
+  observeReflectionDiagnostic?: ReflectionObserver): void => {
   if (typeof text !== 'string' || !validUnicode(text) || Buffer.byteLength(text) > READONLY_RELAY_RESPONSE_LIMITS.outputBytes) fail('OUTPUT_LIMIT');
   const credentials = credentialStrings(credential);
-  assertNoReflection(text, credentials);
-  parseJson(text, READONLY_RELAY_RESPONSE_LIMITS.outputBytes, reflectionScanner(credentials));
+  try {
+    assertNoReflection(text, credentials, 'final-json', 'raw-exact');
+    parseJson(text, READONLY_RELAY_RESPONSE_LIMITS.outputBytes, reflectionScanner(credentials, 'final-json'));
+  } catch (error) {
+    if (isLocalError(error)) deliverReflectionDiagnostic(observeReflectionDiagnostic, reflectionDiagnostics.get(error) ?? null);
+    throw error;
+  }
 };
 
 /** Every data frame is bounded JSON or the exact opaque [DONE] sentinel; no completion claim is inferred. */
 const inspectSse = (raw: string, credentials: readonly string[], maximumFrames: number = READONLY_RELAY_RESPONSE_LIMITS.frames): void => {
-  const inspectString = reflectionScanner(credentials);
+  const inspectString = reflectionScanner(credentials, 'upstream-sse');
   const text = raw.startsWith('\uFEFF') ? raw.slice(1) : raw;
   const lines = /[^\r\n]*(?:\r\n|\r|\n|$)/gu;
   let frameBytes = 0; let frames = 0; let dataFrames = 0; let data: string[] = [];
@@ -168,6 +190,7 @@ const validateHeaders = (response: Response, reject: (suffix: string) => never =
 export interface ReadonlyRelayReceptionOptions {
   responseBytes?: 262144 | 1048576 | 2097152 | 4194304;
   observeDiagnostic?: (snapshot: ReadonlyRelayReceptionDiagnostic) => void;
+  observeReflectionDiagnostic?: ReflectionObserver;
   executionBudget?: ReadonlyRelayExecutionBudget;
 }
 const responseBudgets = [262144, 1048576, 2097152, 4194304] as const;
@@ -243,7 +266,7 @@ export const inspectReadonlyRelayExecutionBudgetFixture = (body: Uint8Array,
   const credentials = credentialStrings(credential);
   let raw: string;
   try { raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body); } catch { return fail('INVALID_UTF8'); }
-  assertNoReflection(raw, credentials); inspectSse(raw, credentials, candidate);
+  assertNoReflection(raw, credentials, 'upstream-sse', 'raw-exact'); inspectSse(raw, credentials, candidate);
 };
 
 /** Nothing is returned to the child until EOF, framing and credential checks all finish successfully. */
@@ -258,6 +281,8 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
   let workTimeoutMs: number = READONLY_RELAY_RESPONSE_LIMITS.workTimeoutMs;
   let cleanupTimeoutMs: number = READONLY_RELAY_RESPONSE_LIMITS.cleanupTimeoutMs;
   let observer: ReadonlyRelayReceptionOptions['observeDiagnostic'];
+  let reflectionObserver: ReflectionObserver | undefined;
+  let reflectionDiagnostic: ReadonlyRelayReflectionDiagnostic | null = null;
   let receivedBytes = 0; let bufferedBytes = 0; let inspectedBytes = 0; let chunks = 0; let maxChunkBytes = 0;
   let termination: ReadonlyRelayReceptionDiagnostic['termination'] = 'invalid-response';
   let failedLimit: ReadonlyRelayReceptionDiagnostic['failedLimit'] = 'none';
@@ -303,7 +328,7 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
         if (!options || typeof options !== 'object' || Array.isArray(options)
           || ![Object.prototype, null].includes(Object.getPrototypeOf(options))) rejectCurrent('INVALID_OPTIONS');
         const keys = Reflect.ownKeys(options);
-        if (keys.some((key) => !['responseBytes', 'observeDiagnostic', 'executionBudget'].includes(key as string))) rejectCurrent('INVALID_OPTIONS');
+        if (keys.some((key) => !['responseBytes', 'observeDiagnostic', 'observeReflectionDiagnostic', 'executionBudget'].includes(key as string))) rejectCurrent('INVALID_OPTIONS');
         const fields: Record<string, unknown> = Object.create(null);
         for (const key of keys) {
           const descriptor = Object.getOwnPropertyDescriptor(options, key);
@@ -313,6 +338,10 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
         if (Object.hasOwn(fields, 'observeDiagnostic')) {
           if (typeof fields.observeDiagnostic !== 'function') rejectCurrent('INVALID_OPTIONS');
           observer = fields.observeDiagnostic as ReadonlyRelayReceptionOptions['observeDiagnostic'];
+        }
+        if (Object.hasOwn(fields, 'observeReflectionDiagnostic')) {
+          if (typeof fields.observeReflectionDiagnostic !== 'function') rejectCurrent('INVALID_OPTIONS');
+          reflectionObserver = fields.observeReflectionDiagnostic as ReflectionObserver;
         }
         if (Object.hasOwn(fields, 'responseBytes')) {
           if (!(responseBudgets as readonly unknown[]).includes(fields.responseBytes)) rejectCurrent('INVALID_OPTIONS');
@@ -361,9 +390,11 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
     const body = storage.subarray(0, bufferedBytes);
     let raw: string;
     try { raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body); } catch { return rejectCurrent('INVALID_UTF8'); }
-    try { assertNoReflection(raw, credentials); inspectSse(raw, credentials, maximumFrames); }
+    try { assertNoReflection(raw, credentials, 'upstream-sse', 'raw-exact'); inspectSse(raw, credentials, maximumFrames); }
     catch (error) {
       if (isLocalError(error)) {
+        // Only errors thrown by this synchronous validation can attest the current response; stream replays cannot.
+        reflectionDiagnostic = reflectionDiagnostics.get(error) ?? null;
         termination = terminationFor(error.code.slice('READONLY_RELAY_'.length)); failedLimit = failedLimitFor(termination);
       }
       throw error;
@@ -386,6 +417,7 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
         ...counters, eof, termination, failedLimit });
       if (snapshot && observer) void Promise.resolve(observer(snapshot)).catch(() => {});
     } catch { /* Diagnostic delivery cannot change the original collector result. */ }
+    deliverReflectionDiagnostic(reflectionObserver, reflectionDiagnostic);
   }
 };
 
