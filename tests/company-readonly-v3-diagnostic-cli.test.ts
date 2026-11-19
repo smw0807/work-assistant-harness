@@ -7,6 +7,8 @@ import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test, type TestContext } from 'node:test';
 import { readCompanyV3Diagnostic } from '../src/cli/company-readonly-v3-diagnostic-files.js';
+import { COMPANY_V3_DIAGNOSTIC_VERSION } from '../src/cli/company-readonly-v3-diagnostic-protocol.js';
+import { parseCompanyV3WorkerFailure } from '../src/cli/company-readonly-v3-worker-failure.js';
 import { getCompanyGitRangeUnitProfile } from '../src/policy/company-git-range-unit-budget.js';
 import { createCompanyReadonlyV3Fixture } from './company-readonly-v3-fixture.js';
 
@@ -116,6 +118,8 @@ test('opt-in v3 diagnostics capture a real oversized synthetic pack rejection wi
   const id = value.taskId as string, path = join(fixture.diagnostics, `diagnostic-v3-${id}.json`);
   const record = await readCompanyV3Diagnostic(fixture.diagnostics, fixture.runtime, id);
   assert.equal(record.reason, 'worker_failed'); assert.equal(record.exitConfirmed, true); assert.ok(record.failure);
+  assert.equal(record.version, 'company-readonly-v3-diagnostic-record-v2');
+  assert.equal(record.workerFailureCode, 'COMPANY_GIT_RANGE_LIMIT');
   assert.equal(record.failure.stage, 'pack_inventory'); assert.equal(record.failure.phase, 'inspect');
   assert.deepEqual(record.failure.limit, { name: 'packBytes', current: 0, requested: maximum + 1, maximum });
   assert.equal(record.failure.counters.readCalls, 1); assert.equal(record.failure.counters.readBytesReturned, 41);
@@ -146,6 +150,8 @@ test('successful diagnostic opt-in preserves public schemas and unexpired diagno
   assert.deepEqual(fs.readdirSync(fixture.diagnostics), [`diagnostic-v3-${id}.json`]);
   const record = await readCompanyV3Diagnostic(fixture.diagnostics, fixture.runtime, id);
   assert.equal(record.failure, null); assert.equal(record.reason, 'completed'); assert.equal(record.exitConfirmed, true);
+  assert.equal(record.version, 'company-readonly-v3-diagnostic-record-v1');
+  assert.equal(Object.hasOwn(record, 'workerFailureCode'), false);
   const path = join(fixture.diagnostics, `diagnostic-v3-${id}.json`), diagnosticBytes = fs.readFileSync(path, 'utf8');
   metadataOnly(diagnosticBytes, fixture);
   const prune = success(await run(['company-readonly-v3-prune', '--data-dir', fixture.runtime]), 'PRUNED');
@@ -218,4 +224,55 @@ test('copied or tampered diagnostic records reject a new plan before creating it
   }
   assert.equal(fs.readFileSync(join(copied, `diagnostic-v3-${id}.json`), 'utf8'), original);
   assert.equal(fixture.snapshot(), before);
+});
+
+test('a synthetic worktree mismatch retains only its fixed code and remains absent on same-ID inspection', { timeout: 30_000 }, async context => {
+  const fixture = await setup(context), changedPath = join(fixture.root, fixture.selectedPaths[0]!);
+  const changedText = 'export const syntheticChangedValue = 123;\n';
+  fs.writeFileSync(changedPath, changedText);
+  const before = sourceMetadata(fixture), audit = auditPreload(fixture);
+  const failed = await run([...fixture.args, '--diagnostics-dir', fixture.diagnostics], audit.preload), value = body(failed);
+  assert.equal(failed.code, 1); assert.equal(value.runStatus, 'unknown'); assert.equal(value.reason, 'worker_failed');
+  assert.equal(value.exitConfirmed, true); assert.equal(value.automaticRetry, false); assert.equal(audit.read().spawns, 1);
+  assert.equal(Object.hasOwn(value, 'workerFailureCode'), false); metadataOnly(failed.stdout + failed.stderr, fixture);
+  const id = value.taskId as string, path = join(fixture.diagnostics, `diagnostic-v3-${id}.json`);
+  const record = await readCompanyV3Diagnostic(fixture.diagnostics, fixture.runtime, id);
+  assert.equal(record.version, 'company-readonly-v3-diagnostic-record-v2');
+  assert.equal(record.workerFailureCode, 'COMPANY_GIT_RANGE_SOURCE_CHANGED'); assert.equal(record.failure, null);
+  assert.equal(record.auditExpiresAt, receipt(fixture, id, 'run').auditExpiresAt);
+  assert.equal(receipt(fixture, id, 'result').status, 'unknown');
+  const diagnosticBytes = fs.readFileSync(path, 'utf8'); metadataOnly(diagnosticBytes, fixture);
+  assert.equal((diagnosticBytes + failed.stdout + failed.stderr).includes(changedText.trim()), false);
+  const inspected = success(await run(['company-readonly-v3-inspect', '--task', id, '--data-dir', fixture.runtime]), 'NOT_FOUND');
+  assert.equal(inspected.preparationRunStatus, 'unknown'); assert.equal(inspected.reviewAvailable, false);
+  assert.equal(Object.hasOwn(inspected, 'workerFailureCode'), false);
+  const stored = databaseState(fixture); assert.equal(stored.preparations, 0); assert.equal(stored.payloads, 0);
+  assert.equal(fs.readFileSync(path, 'utf8'), diagnosticBytes); assert.equal(sourceMetadata(fixture), before);
+});
+
+test('an unsafe synthetic worker emits a bound fixed code before receipt access only with diagnostics enabled', { timeout: 30_000 }, async context => {
+  const fixture = await setup(context), before = fixture.snapshot(), taskId = randomUUID();
+  for (const diagnostics of [false, true]) {
+    const options = { version: 'company-readonly-v3-worker-input-v1', command: 'plan',
+      gitProfileHash: fixture.registration.gitProfileHash, guardPolicyHash: fixture.registration.guardPolicyHash,
+      sourceDirectory: resolve('.'), runtimeDirectory: fixture.runtime, taskId, startedAt: new Date().toISOString(),
+      policyFile: fixture.policyFile, registrationFile: fixture.registrationFile,
+      policyHash: 'a'.repeat(64), registrationHash: 'b'.repeat(64),
+      ...(diagnostics ? { diagnosticsVersion: COMPANY_V3_DIAGNOSTIC_VERSION } : {}) };
+    const result = await new Promise<CommandResult>((done, reject) => {
+      // Deliberately omit Node permissions; the worker must reject before touching its synthetic receipt or source.
+      const child = spawn(process.execPath, [resolve('dist/src/cli/company-readonly-v3-worker.js'), JSON.stringify(options)],
+        { env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', TZ: 'UTC' } });
+      let stdout = '', stderr = '';
+      child.stdout.on('data', chunk => { stdout += String(chunk); }); child.stderr.on('data', chunk => { stderr += String(chunk); });
+      child.once('error', reject); child.once('close', code => done({ code, stdout, stderr }));
+    });
+    assert.equal(result.code, 1); assert.equal(result.stdout, '');
+    assert.match(result.stderr, /COMPANY_READONLY_V3_UNSAFE_WORKER\n$/u);
+    assert.equal(parseCompanyV3WorkerFailure(Buffer.from(result.stderr), taskId), diagnostics ? 'COMPANY_READONLY_V3_UNSAFE_WORKER' : null);
+    if (!diagnostics) assert.equal(result.stderr, 'COMPANY_READONLY_V3_UNSAFE_WORKER\n');
+    metadataOnly(result.stderr, fixture);
+    assert.equal(fs.existsSync(fixture.runtime), false); assert.equal(fs.existsSync(fixture.diagnostics), false);
+    assert.equal(fixture.snapshot(), before);
+  }
 });

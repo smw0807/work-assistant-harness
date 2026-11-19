@@ -17,6 +17,7 @@ import { companyPath, companyPathsOverlap, readCompanyPrivateJson } from './comp
 import { companyV3FileExists, prepareCompanyV3Directory, readCompanyV3Registration, readCompanyV3Run } from './company-readonly-v3-files.js';
 import { companyV3Disabled, parseCompanyV3WorkerOptions, type CompanyV3Summary } from './company-readonly-v3-protocol.js';
 import { formatCompanyV3Diagnostic } from './company-readonly-v3-diagnostic-protocol.js';
+import { companyV3WorkerFailureCode, formatCompanyV3WorkerFailure } from './company-readonly-v3-worker-failure.js';
 
 @Module({})
 class CompanyReadonlyV3Module {}
@@ -30,6 +31,7 @@ const snapshotSummary = (snapshot: CompanyReadonlySnapshotV3) => ({
 const run = async (): Promise<void> => {
   process.umask(0o077);
   const options = parseCompanyV3WorkerOptions(process.argv[2] ?? '');
+  if (options.command === 'plan' && options.diagnosticsVersion) diagnosticTaskId = options.taskId!;
   const sourceDirectory = await realpath(resolve(dirname(fileURLToPath(import.meta.url)), '../../..'));
   const runtime = companyPath(options.runtimeDirectory), storeDirectory = join(runtime, 'store');
   const permissions = process.permission;
@@ -67,7 +69,6 @@ const run = async (): Promise<void> => {
       throw new HarnessError('COMPANY_READONLY_V3_INPUT_CHANGED');
     }
     context.now = new Date(receipt.startedAt);
-    if (options.diagnosticsVersion) diagnosticTaskId = options.taskId!;
   }
   let summary: CompanyV3Summary = {
     version: 'company-readonly-v3-result-v1', command: options.command, taskId: options.taskId ?? null,
@@ -114,12 +115,15 @@ const run = async (): Promise<void> => {
   process.stdout.write(`${JSON.stringify(summary)}\n`);
 };
 void run().catch((error: unknown) => {
+  const code = companyV3WorkerFailureCode(error);
   const failure = extractCompanyGitRangeUnitFailure(error);
   if (diagnosticTaskId && failure) {
     try { process.stderr.write(formatCompanyV3Diagnostic(diagnosticTaskId, failure)); }
     catch { /* Diagnostic formatting cannot change the original worker failure. */ }
   }
-  const code = error instanceof HarnessError && /^COMPANY_(READONLY|GIT_RANGE)_[A-Z0-9_]+$/.test(error.code)
-    ? error.code : 'COMPANY_READONLY_V3_PREPARATION_FAILED';
+  if (diagnosticTaskId) {
+    try { process.stderr.write(formatCompanyV3WorkerFailure(diagnosticTaskId, code)); }
+    catch { /* A diagnostic cannot replace or expose the underlying failure. */ }
+  }
   process.stderr.write(`${code}\n`); process.exitCode = 1;
 });

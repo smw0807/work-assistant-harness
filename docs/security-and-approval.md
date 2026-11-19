@@ -489,6 +489,8 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 공통 경로 순회 개선은 같은 pathname prefix의 반복 Git tree 요청을 묶는다. 기존 parser가 선택 항목 뒤의 잘못된 entry까지 전체 tree를 검사하며, 반환하는 OID/mode metadata 외에 본문은 즉시 해제한다. 각 실제 I/O의 open/unit/chunk/final guard와 매 pass의 새 읽기를 유지하고 기존 profile/guard hash·수치 상한을 바꾸지 않는다. 반복 호출이 줄어 syscall 순서·일시적 변경을 우연히 관찰하는 횟수까지 동일하지는 않으며 연속적 경로 동일성이나 원자적 snapshot을 주장하지 않는다. 회사 자료 재접근 없이 독립 합성 검증만 수행한다. [개선 결과와 한계](stage-4c17-tree-traversal-result.md)를 따른다.
 
+회사 준비 v3의 일반 실패 진단은 53개 고정 오류 코드만 허용한다. task ID에 결합된 단일 완결 프레임을 기존 64KiB stderr 한도 안에서 해석하며, supervisor가 중단하지 않은 worker의 종료 코드 1·signal 없음·close를 확인한 때만 `workerFailureCode`를 보관한다. 성공 출력과의 충돌은 거절하고 budget 진단의 오류 코드와 다르면 새 코드를 버린다. getter·proxy·오류 message/stack·임의 코드 문자열은 기록하지 않는다. 새 코드가 있는 진단 record-v2와 없는 기존 record-v1을 엄격히 구분하며 원래 audit 기한·0700/0600·위치와 hash 결합·명령 기반 정리를 유지한다. 일반 오류 진단은 정책 승인·자료 무결성 증명·재시도 근거가 아니며 과거 원인을 소급 복원하지 않는다. 합성 검증 범위는 [4-C-21 결과](stage-4c21-result.md)를 따른다.
+
 ### 회사 준비에서 모의 조사로 넘어가는 경계
 
 `company-investigation-*`는 회사 v3 준비와 분리한 모의 조사 계약이다. 준비 중인 자료의 상태는 전송 승인이 아니며 새로운 계획 hash·OS 소유자·명시 TTL에 대해 별도의 **모의 호출만** 승인한다. 계획과 승인에는 `mode:mock`, `local:fixed-response`, `authentication:none`, 전송·실행 false가 고정된다. live 설정이나 임의 모델/목적지를 받지 않으며 기존 개인 승인·DB·전송 입력으로 변환하지 않는다.

@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import type { CompanyGitRangeUnitFailure } from '../src/domain/company-git-range-unit.js';
 import { COMPANY_V3_DIAGNOSTIC_VERSION, formatCompanyV3Diagnostic } from '../src/cli/company-readonly-v3-diagnostic-protocol.js';
 import { superviseCompanyV3Worker, type CompanyV3SupervisorClock } from '../src/cli/company-readonly-v3-supervisor.js';
+import { formatCompanyV3WorkerFailure } from '../src/cli/company-readonly-v3-worker-failure.js';
 import { companyV3Disabled, parseCompanyV3Summary, parseCompanyV3WorkerOptions,
   type CompanyV3Command, type CompanyV3Summary } from '../src/cli/company-readonly-v3-protocol.js';
 import { CompanyGitRangeUnitBudget, extractCompanyGitRangeUnitFailure, getCompanyGitRangeUnitProfile,
@@ -290,5 +291,83 @@ test('worker diagnostics option is exact, optional and allowed only on plan with
     assert.deepEqual(parseCompanyV3WorkerOptions(JSON.stringify(other)), other);
     assert.throws(() => parseCompanyV3WorkerOptions(JSON.stringify({ ...other, diagnosticsVersion: COMPANY_V3_DIAGNOSTIC_VERSION })),
       { code: 'COMPANY_READONLY_V3_INVALID_WORKER_INPUT' });
+  }
+});
+
+test('a task-bound worker failure code is exposed only after a clean failure close', async () => {
+  const worker = new Worker(), time = new ManualClock(); let settled = false;
+  const result = superviseCompanyV3Worker(worker.child(), 'plan', taskId, 0, time, true).then(value => { settled = true; return value; });
+  const frame = formatCompanyV3WorkerFailure(taskId, 'COMPANY_GIT_RANGE_SOURCE_CHANGED');
+  worker.stderr.write(frame.slice(0, 19)); worker.stderr.write(frame.slice(19));
+  worker.stderr.write('COMPANY_GIT_RANGE_SOURCE_CHANGED\n');
+  worker.emit('exit', 1, null); await Promise.resolve(); assert.equal(settled, false);
+  worker.emit('close', 1, null);
+  assert.deepEqual(await result, { summary: null, reason: 'worker_failed', exitConfirmed: true,
+    failureDiagnostic: null, workerFailureCode: 'COMPANY_GIT_RANGE_SOURCE_CHANGED' });
+  assert.equal(time.pending(), 0); assert.deepEqual(worker.signals, []);
+});
+
+test('a matching worker code coexists with the original budget diagnostic but a conflicting code is omitted', async () => {
+  for (const matches of [true, false]) {
+    const worker = new Worker(), time = new ManualClock(), failure = diagnosticFailure();
+    const result = superviseCompanyV3Worker(worker.child(), 'plan', taskId, 0, time, true);
+    worker.stderr.write(formatCompanyV3Diagnostic(taskId, failure));
+    worker.stderr.write(formatCompanyV3WorkerFailure(taskId, matches ? 'COMPANY_GIT_RANGE_LIMIT' : 'COMPANY_GIT_RANGE_SOURCE_CHANGED'));
+    worker.emit('close', 1, null);
+    assert.deepEqual(await result, { summary: null, reason: 'worker_failed', exitConfirmed: true,
+      failureDiagnostic: failure, ...(matches ? { workerFailureCode: 'COMPANY_GIT_RANGE_LIMIT' } : {}) });
+  }
+});
+
+test('a worker failure code cannot turn a successful summary into completion', async () => {
+  const worker = new Worker(), time = new ManualClock();
+  const result = superviseCompanyV3Worker(worker.child(), 'plan', taskId, 0, time, true);
+  worker.stderr.write(formatCompanyV3WorkerFailure(taskId, 'COMPANY_READONLY_V3_PREPARATION_FAILED'));
+  write(worker, summary()); worker.emit('close', 0, null);
+  assert.deepEqual(await result, { summary: null, reason: 'invalid_output', exitConfirmed: true, failureDiagnostic: null });
+});
+
+test('termination, stream errors and other exit codes never retain a worker failure code', async () => {
+  for (const mode of ['deadline', 'late', 'stdout-limit', 'stderr-limit', 'signal', 'other-code', 'child-error', 'stdout-error', 'stderr-error'] as const) {
+    const worker = new Worker(), time = new ManualClock();
+    const result = superviseCompanyV3Worker(worker.child(), 'plan', taskId, 0, time, true);
+    worker.stderr.write(formatCompanyV3WorkerFailure(taskId, 'COMPANY_GIT_RANGE_SOURCE_CHANGED'));
+    if (mode === 'deadline') time.advance(limits.wallClockMs);
+    if (mode === 'late') time.jumpTo(limits.wallClockMs);
+    if (mode === 'stdout-limit') worker.stdout.write(Buffer.alloc(65_537));
+    if (mode === 'stderr-limit') worker.stderr.write(Buffer.alloc(65_537));
+    if (mode === 'child-error') worker.emit('error', new Error('SYNTHETIC_PRIVATE_ERROR'));
+    if (mode === 'stdout-error') worker.stdout.emit('error', new Error('SYNTHETIC_PRIVATE_ERROR'));
+    if (mode === 'stderr-error') worker.stderr.emit('error', new Error('SYNTHETIC_PRIVATE_ERROR'));
+    worker.emit('close', mode === 'other-code' ? 2 : mode === 'signal' ? null : 1, mode === 'signal' ? 'SIGTERM' : null);
+    const value = await result;
+    assert.deepEqual(value, { summary: null, reason: mode === 'deadline' || mode === 'late' ? 'deadline'
+      : mode === 'stdout-limit' || mode === 'stderr-limit' ? 'output_limit' : 'worker_failed', exitConfirmed: true, failureDiagnostic: null });
+    assert.equal(JSON.stringify(value).includes('SYNTHETIC_PRIVATE_ERROR'), false);
+    assert.equal(time.pending(), 0);
+  }
+});
+
+test('unbound, duplicate, malformed and raw worker errors never become a persisted code', async () => {
+  const frame = formatCompanyV3WorkerFailure(taskId, 'COMPANY_GIT_RANGE_SOURCE_CHANGED');
+  for (const text of [frame + frame, frame.trimEnd(), frame.replace(taskId, '22222222-2222-4222-8222-222222222222'),
+    frame.replace('COMPANY_GIT_RANGE_SOURCE_CHANGED', 'COMPANY_GIT_RANGE_PRIVATE_BODY'), 'COMPANY_GIT_RANGE_SOURCE_CHANGED\n']) {
+    const worker = new Worker(), time = new ManualClock();
+    const result = superviseCompanyV3Worker(worker.child(), 'plan', taskId, 0, time, true);
+    worker.stderr.write(text); worker.emit('close', 1, null);
+    assert.deepEqual(await result, { summary: null, reason: 'worker_failed', exitConfirmed: true, failureDiagnostic: null });
+  }
+});
+
+test('worker failure frames leave default and non-plan supervisor contracts unchanged', async () => {
+  for (const command of ['plan', 'inspect', 'cancel', 'prune'] as const) {
+    for (const code of [0, 1]) {
+      const worker = new Worker(), time = new ManualClock(), diagnostics = command !== 'plan';
+      const result = superviseCompanyV3Worker(worker.child(), command, command === 'prune' ? null : taskId, 0, time, diagnostics);
+      worker.stderr.write(formatCompanyV3WorkerFailure(taskId, 'COMPANY_GIT_RANGE_SOURCE_CHANGED'));
+      write(worker, summary(command)); worker.emit('close', code, null);
+      assert.deepEqual(await result, { summary: code === 0 ? summary(command) : null,
+        reason: code === 0 ? 'completed' : 'worker_failed', exitConfirmed: true, ...(diagnostics ? { failureDiagnostic: null } : {}) });
+    }
   }
 });

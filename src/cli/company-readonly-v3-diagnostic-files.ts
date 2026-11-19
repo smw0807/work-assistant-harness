@@ -10,9 +10,9 @@ import { parseReadonlyTransportJson } from '../policy/readonly-transport-protoco
 import { companyDirectoryChain, companyPath, companyPathsOverlap } from './company-readonly-files.js';
 import { companyV3FileExists, companyV3RuntimeHash, readCompanyV3Run, type CompanyV3Run } from './company-readonly-v3-files.js';
 import type { CompanyV3WorkerOutcome } from './company-readonly-v3-supervisor.js';
+import { isCompanyV3WorkerFailureCode, type CompanyV3WorkerFailureCode } from './company-readonly-v3-worker-failure.js';
 
-export interface CompanyV3DiagnosticRecord {
-  version: 'company-readonly-v3-diagnostic-record-v1';
+interface CompanyV3DiagnosticContent {
   taskId: string;
   ownerId: string;
   gitProfileHash: string;
@@ -26,6 +26,10 @@ export interface CompanyV3DiagnosticRecord {
   failure: CompanyGitRangeUnitFailure | null;
   diagnosticHash: string;
 }
+export type CompanyV3DiagnosticRecord = CompanyV3DiagnosticContent & (
+  { version: 'company-readonly-v3-diagnostic-record-v1'; workerFailureCode?: never }
+  | { version: 'company-readonly-v3-diagnostic-record-v2'; workerFailureCode: CompanyV3WorkerFailureCode }
+);
 interface DiagnosticFile {
   path: string;
   metadata: Stats;
@@ -74,14 +78,19 @@ const diagnosticPath = (directory: string, taskId: string): string => {
 };
 const parseRecord = (input: unknown, directory: string, runtimeDirectory: string, taskId: string): CompanyV3DiagnosticRecord => {
   const value = input as CompanyV3DiagnosticRecord;
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== fields.length
-    || Object.keys(value).some(key => !fields.includes(key)) || value.version !== 'company-readonly-v3-diagnostic-record-v1'
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return reject();
+  const expectedFields = value.version === 'company-readonly-v3-diagnostic-record-v2' ? [...fields, 'workerFailureCode'] : fields;
+  if (Object.keys(value).length !== expectedFields.length || Object.keys(value).some(key => !expectedFields.includes(key))
+    || !['company-readonly-v3-diagnostic-record-v1', 'company-readonly-v3-diagnostic-record-v2'].includes(value.version)
     || value.taskId !== taskId || !isReadonlyId(value.taskId) || value.ownerId !== ownerId()
     || value.gitProfileHash !== getCompanyGitRangeUnitProfileHash() || value.guardPolicyHash !== getCompanyGitRangeUnitGuardPolicyHash()
     || value.runtimeHash !== companyV3RuntimeHash(runtimeDirectory, value.ownerId)
     || value.diagnosticsDirectoryHash !== directoryHash(directory) || !validDate(value.createdAt) || !validDate(value.auditExpiresAt)
     || !reasons.includes(value.reason) || typeof value.exitConfirmed !== 'boolean') reject();
   if (value.failure !== null) parseCompanyGitRangeUnitFailure(value.failure);
+  if (value.version === 'company-readonly-v3-diagnostic-record-v2'
+    && (!isCompanyV3WorkerFailureCode(value.workerFailureCode) || value.reason !== 'worker_failed' || !value.exitConfirmed
+      || value.failure !== null && value.failure.errorCode !== value.workerFailureCode)) reject();
   const { diagnosticHash, ...content } = value;
   if (typeof diagnosticHash !== 'string' || !/^[a-f0-9]{64}$/.test(diagnosticHash)
     || diagnosticHash !== hashReadonlyValue(canonicalReadonlyJson(content))) reject();
@@ -154,14 +163,17 @@ export const readCompanyV3Diagnostic = async (directory: string, runtimeDirector
   } catch { return reject(); }
 };
 export const writeCompanyV3Diagnostic = async (directory: string, runtimeDirectory: string, run: CompanyV3Run,
-  outcome: Pick<CompanyV3WorkerOutcome, 'reason' | 'exitConfirmed'>, failure: CompanyGitRangeUnitFailure | null): Promise<void> => {
+  outcome: Pick<CompanyV3WorkerOutcome, 'reason' | 'exitConfirmed' | 'workerFailureCode'>, failure: CompanyGitRangeUnitFailure | null): Promise<void> => {
   try {
     const files = await inspectDirectory(directory, runtimeDirectory, false);
     if (files.length >= maximumFiles) reject();
     const storedRun = await readCompanyV3Run(runtimeDirectory, run.taskId);
     if (canonicalReadonlyJson(storedRun) !== canonicalReadonlyJson(run)) reject();
-    const content: Omit<CompanyV3DiagnosticRecord, 'diagnosticHash'> = {
-      version: 'company-readonly-v3-diagnostic-record-v1', taskId: run.taskId, ownerId: run.ownerId,
+    const workerFields = Object.hasOwn(outcome, 'workerFailureCode')
+      ? { version: 'company-readonly-v3-diagnostic-record-v2' as const, workerFailureCode: outcome.workerFailureCode }
+      : { version: 'company-readonly-v3-diagnostic-record-v1' as const };
+    const content = {
+      ...workerFields, taskId: run.taskId, ownerId: run.ownerId,
       gitProfileHash: run.gitProfileHash, guardPolicyHash: run.guardPolicyHash,
       runtimeHash: run.runtimeHash, diagnosticsDirectoryHash: directoryHash(directory), createdAt: new Date().toISOString(),
       auditExpiresAt: run.auditExpiresAt, reason: outcome.reason, exitConfirmed: outcome.exitConfirmed,

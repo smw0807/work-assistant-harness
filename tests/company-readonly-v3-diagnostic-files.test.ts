@@ -260,3 +260,100 @@ test('v3 diagnostic names reject the old namespace and v2 cannot accept a v3 dir
   assert.deepEqual(fs.readFileSync(oldName), original);
   assert.equal(fs.existsSync(path), false);
 });
+
+test('a fixed worker failure creates a version-two record with the original retention and no raw error', async context => {
+  const { directory, runtime, run, path } = await fixture(context);
+  await writeCompanyV3Diagnostic(directory, runtime, run,
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_SOURCE_CHANGED' }, null);
+  const record = await readCompanyV3Diagnostic(directory, runtime, run.taskId);
+  assert.equal(record.version, 'company-readonly-v3-diagnostic-record-v2');
+  assert.equal(record.workerFailureCode, 'COMPANY_GIT_RANGE_SOURCE_CHANGED');
+  assert.equal(record.failure, null); assert.equal(record.auditExpiresAt, run.auditExpiresAt);
+  assert.equal(record.reason, 'worker_failed'); assert.equal(record.exitConfirmed, true);
+  const { diagnosticHash, ...content } = record;
+  assert.equal(diagnosticHash, hashReadonlyValue(canonicalReadonlyJson(content)));
+  assert.equal(fs.statSync(path).mode & 0o777, 0o600); assert.ok(fs.statSync(path).size <= 8192);
+  for (const value of [directory, runtime, '"stack"', '"message"']) assert.equal(fs.readFileSync(path, 'utf8').includes(value), false);
+  await assert.rejects(writeCompanyV3Diagnostic(directory, runtime, run, failedOutcome, null), unsafe);
+});
+
+test('legacy and coded diagnostic records coexist without rewriting old hashes and prune at the same expiry', async context => {
+  const { directory, runtime, run, path } = await fixture(context);
+  await writeCompanyV3Diagnostic(directory, runtime, run, failedOutcome, null);
+  const legacyBytes = fs.readFileSync(path), codedRun = { ...run, taskId: randomUUID() };
+  await writeCompanyV3Run(runtime, codedRun);
+  await writeCompanyV3Diagnostic(directory, runtime, codedRun,
+    { ...failedOutcome, workerFailureCode: 'COMPANY_READONLY_V3_PREPARATION_FAILED' }, null);
+  const legacy = await readCompanyV3Diagnostic(directory, runtime, run.taskId);
+  assert.equal(legacy.version, 'company-readonly-v3-diagnostic-record-v1');
+  assert.equal(Object.hasOwn(legacy, 'workerFailureCode'), false);
+  assert.equal((await readCompanyV3Diagnostic(directory, runtime, codedRun.taskId)).version, 'company-readonly-v3-diagnostic-record-v2');
+  await prepCompanyV3DiagnosticsDirectory(directory, runtime, false);
+  assert.deepEqual(fs.readFileSync(path), legacyBytes);
+  assert.equal(await pruneCompanyV3Diagnostics(directory, runtime, new Date(Date.parse(run.auditExpiresAt) - 1)), 0);
+  assert.deepEqual(fs.readFileSync(path), legacyBytes);
+  assert.equal(await pruneCompanyV3Diagnostics(directory, runtime, new Date(run.auditExpiresAt)), 2);
+  assert.deepEqual(fs.readdirSync(directory), []);
+});
+
+test('worker failure writes reject unknown codes or a non-failure outcome before creating a record', async context => {
+  const { directory, runtime, run } = await fixture(context);
+  for (const changed of [
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_PRIVATE_BODY' },
+    { ...failedOutcome, workerFailureCode: null },
+    { ...failedOutcome, workerFailureCode: '/synthetic/private/source.ts' },
+    { reason: 'completed', exitConfirmed: true, workerFailureCode: 'COMPANY_GIT_RANGE_SOURCE_CHANGED' },
+    { reason: 'deadline', exitConfirmed: true, workerFailureCode: 'COMPANY_GIT_RANGE_SOURCE_CHANGED' },
+    { reason: 'invalid_output', exitConfirmed: true, workerFailureCode: 'COMPANY_GIT_RANGE_SOURCE_CHANGED' },
+    { reason: 'worker_failed', exitConfirmed: false, workerFailureCode: 'COMPANY_GIT_RANGE_SOURCE_CHANGED' },
+  ]) {
+    await assert.rejects(writeCompanyV3Diagnostic(directory, runtime, run,
+      changed as Parameters<typeof writeCompanyV3Diagnostic>[3], null), unsafe);
+    assert.deepEqual(fs.readdirSync(directory), []);
+  }
+});
+
+for (const change of [
+  { name: 'legacy version with a new code', edit: (value: Record<string, unknown>) => { value.version = 'company-readonly-v3-diagnostic-record-v1'; } },
+  { name: 'new version missing its code', edit: (value: Record<string, unknown>) => { delete value.workerFailureCode; } },
+  { name: 'null worker code', edit: (value: Record<string, unknown>) => { value.workerFailureCode = null; } },
+  { name: 'unknown worker code', edit: (value: Record<string, unknown>) => { value.workerFailureCode = 'COMPANY_GIT_RANGE_PRIVATE_BODY'; } },
+  { name: 'raw worker message', edit: (value: Record<string, unknown>) => { value.message = 'SYNTHETIC_PRIVATE_MESSAGE'; } },
+  { name: 'successful worker code', edit: (value: Record<string, unknown>) => { value.reason = 'completed'; } },
+  { name: 'unconfirmed worker code', edit: (value: Record<string, unknown>) => { value.exitConfirmed = false; } },
+]) {
+  test(`coded diagnostics reject ${change.name} even with a recomputed hash`, async context => {
+    const { directory, runtime, run, path } = await fixture(context);
+    await writeCompanyV3Diagnostic(directory, runtime, run,
+      { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_SOURCE_CHANGED' }, null);
+    const value = JSON.parse(fs.readFileSync(path, 'utf8')) as Record<string, unknown>;
+    change.edit(value); fs.writeFileSync(path, resign(value));
+    await assert.rejects(readCompanyV3Diagnostic(directory, runtime, run.taskId), unsafe);
+    await assert.rejects(pruneCompanyV3Diagnostics(directory, runtime, new Date(run.auditExpiresAt)), unsafe);
+    assert.ok(fs.existsSync(path));
+  });
+}
+
+test('the content hash binds the worker failure code and rejects a replacement from the allowlist', async context => {
+  const { directory, runtime, run, path } = await fixture(context);
+  await writeCompanyV3Diagnostic(directory, runtime, run,
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_SOURCE_CHANGED' }, null);
+  const value = JSON.parse(fs.readFileSync(path, 'utf8')) as Record<string, unknown>;
+  fs.writeFileSync(path, JSON.stringify({ ...value, workerFailureCode: 'COMPANY_READONLY_V3_PREPARATION_FAILED' }));
+  await assert.rejects(readCompanyV3Diagnostic(directory, runtime, run.taskId), unsafe);
+  await assert.rejects(pruneCompanyV3Diagnostics(directory, runtime, new Date(run.auditExpiresAt)), unsafe);
+  assert.ok(fs.existsSync(path));
+});
+
+test('a budget diagnostic must agree with its worker code on write and on record read', async context => {
+  const { directory, runtime, run, path } = await fixture(context), failure = failureFixture();
+  assert.ok(failure);
+  await assert.rejects(writeCompanyV3Diagnostic(directory, runtime, run,
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_SOURCE_CHANGED' }, failure), unsafe);
+  assert.equal(fs.existsSync(path), false);
+  await writeCompanyV3Diagnostic(directory, runtime, run,
+    { ...failedOutcome, workerFailureCode: 'COMPANY_GIT_RANGE_LIMIT' }, failure);
+  const value = JSON.parse(fs.readFileSync(path, 'utf8')) as Record<string, unknown>;
+  value.workerFailureCode = 'COMPANY_GIT_RANGE_SOURCE_CHANGED'; fs.writeFileSync(path, resign(value));
+  await assert.rejects(readCompanyV3Diagnostic(directory, runtime, run.taskId), unsafe);
+});
