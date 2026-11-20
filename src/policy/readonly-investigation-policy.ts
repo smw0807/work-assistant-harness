@@ -240,7 +240,7 @@ export const parseReadonlyJson = (raw: string): unknown => {
   catch (error) { if (error instanceof HarnessError) throw error; return fail('READONLY_INVALID_RESPONSE'); }
 };
 /** Shared report checks depend only on the explicitly supplied evidence, not its repository type. */
-export const parseReadonlyEvidenceReport = (raw: string, selected: readonly ReadonlyEvidence[]): ReadonlyReport => {
+export const parseReadonlyEvidenceReport = (raw: string, selected: readonly Pick<ReadonlyEvidence, 'evidenceId' | 'path' | 'startLine' | 'endLine'>[]): ReadonlyReport => {
   const output = parseReadonlyJson(raw);
   if (containsSensitiveText(raw) || containsSensitiveText(canonicalReadonlyJson(output))
     || !readonlyExactKeys(output, ['classification', 'summary', 'facts', 'hypotheses', 'answerDraft', 'questions', 'suggestions', 'limitations'])) fail('READONLY_INVALID_RESPONSE');

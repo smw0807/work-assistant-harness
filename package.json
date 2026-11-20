@@ -11,7 +11,7 @@
     "test": "tsc && node --test dist/tests/*.test.js",
     "test:migration": "tsc && node --test dist/tests/migration-check-*.test.js",
     "test:company": "tsc && node --test dist/tests/company-readonly-*.test.js",
-    "harness": "tsc && node dist/src/cli/main.js"
+    "harness": "tsc && node -- dist/src/cli/main.js"
   },
   "dependencies": {
     "@nestjs/common": "12.4.2",

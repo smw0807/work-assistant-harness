@@ -559,6 +559,10 @@ Slack의 `app_mention`은 **앱의 봇 사용자**가 언급된 이벤트다. **
 
 Slack 재시도, 빠른 ACK와 후속 처리, 속도 제한, 봇·자기 메시지 루프, 편집·삭제를 처리한다. 요청 내용이 바뀌면 연결된 계획과 승인을 다시 검증한다. 내 ID 멘션이나 이모지 반응을 자동으로 실행 승인으로 해석하지 않는다. MVP의 승인은 로컬 CLI에서만 받는다.
 
+후속 Slack 자동 분석은 `slack-listen --env/--env-file`에서 명시적으로 켠다. 부모가 기존 runtime lease를 유지하고 수신 worker와 분석 controller를 함께 감독한다. 분석 controller의 설정·native 바이너리 정적 검사가 끝난 뒤 수신을 시작하며, Slack 토큰은 수신 worker에만 전달한다. 분석은 inbox의 읽기 전용 연결로 현재 세션의 완전한 문맥을 읽고 별도 `slack-analysis.sqlite`에서 revision별 단건 claim·하루 시도 한도·보고서·무효화를 관리한다. ACK 경로와 모델 호출은 분리된다.
+
+새 `slack-mention-analysis-v1` 입력 계약은 Slack 메시지·timestamp 근거만 전달한다. 기존 Codex relay의 고정 profile·예산·native sandbox·broker를 재사용하고 기존 회사/합성 입력 계약은 변경하지 않는다. native 전용 환경에 Slack 토큰을 넘기지 않으며 모델에게 회사 경로·도구·실행·Slack 답장 권한을 주지 않는다. 로컬 조회는 Codex 없이 저장된 결과를 현재 수신 기록과 대조한다. 이 연결의 검증과 미실행 범위는 [Slack 자동 분석 결과](slack-mention-analysis-result.md)에 둔다.
+
 ## 7. 첫 완료를 판단하는 기준
 
 실제 외부 연결보다 경계를 먼저 검증한다. 합성 데이터로 문의·변경 요청·불명확을 재현하고, 대상 저장소 전후 상태를 비교하며, 승인 전 파일 변경과 승인 없는 외부 전송이 모두 0임을 확인한다.

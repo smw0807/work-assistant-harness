@@ -26,6 +26,8 @@ const run = async (): Promise<void> => {
   assertSlackReceiverPermissions(options.sourceRoot, options.dataDirectory, options.command === 'slack-listen');
   const live = options.command === 'slack-listen';
   const controller = new AbortController();
+  const parentDisconnected = (): void => controller.abort();
+  if (process.connected) process.on('disconnect', parentDisconnected);
   if (live && !options.config.liveReadEnabled) throw new HarnessError('SLACK_LIVE_READ_DISABLED');
   const client = live ? new SlackReadClient({
     appToken: process.env['SLACK_APP_TOKEN'] ?? '', webToken: process.env['SLACK_WEB_TOKEN'] ?? '',
@@ -135,6 +137,7 @@ const run = async (): Promise<void> => {
       if (drainFailure) throw drainFailure;
     } else throw new HarnessError('UNKNOWN_COMMAND');
   } finally {
+    process.off('disconnect', parentDisconnected);
     tasks.close();
     inbox.close();
     await application.close();

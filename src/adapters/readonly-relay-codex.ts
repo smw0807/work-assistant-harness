@@ -19,7 +19,7 @@ import { sendReadonlyRelayRequest, startReadonlyRelayBroker, type ReadonlyRelayB
 
 export interface SyntheticConnection { credential: ReadonlyRelayCredential; transport: ReadonlyRelayTransport }
 export type ReadonlyRelayInputContract = {
-  policy: 'personal-readonly-investigation-v1' | 'personal-readonly-investigation-v2' | 'personal-readonly-investigation-v3';
+  policy: 'personal-readonly-investigation-v1' | 'personal-readonly-investigation-v2' | 'personal-readonly-investigation-v3' | 'slack-mention-analysis-v1';
   assertDispatch: ReadonlyRelayDispatchValidator;
 } | { policy: 'company-relay-plan-v1'; assertDispatch: ReadonlyRelayDispatchValidator;
   assertCredential: ReadonlyRelayCredentialValidator; ipcDirectory?: string };
@@ -63,7 +63,7 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
         : 'assertCredential,assertDispatch,policy';
       if (!Object.isFrozen(this.inputContract)
         || Object.keys(this.inputContract).sort().join(',') !== (company ? companyKeys : 'assertDispatch,policy')
-        || (!company && !['personal-readonly-investigation-v1', 'personal-readonly-investigation-v2', 'personal-readonly-investigation-v3'].includes(this.inputContract.policy))
+        || (!company && !['personal-readonly-investigation-v1', 'personal-readonly-investigation-v2', 'personal-readonly-investigation-v3', 'slack-mention-analysis-v1'].includes(this.inputContract.policy))
         || typeof this.inputContract.assertDispatch !== 'function'
         || (company && (typeof this.inputContract.assertCredential !== 'function'
           || Object.hasOwn(this.inputContract, 'ipcDirectory') && typeof this.inputContract.ipcDirectory !== 'string'))) fail('INVALID_TRANSPORT');

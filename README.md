@@ -806,7 +806,7 @@ Node 권한 모델은 신뢰하는 하네스 코드의 실수를 제한하는 �
 
 ## 단계 2 Slack 읽기 수신
 
-수신 경로는 `Socket Mode → 허용 범위 검사 → SQLite commit → ACK → 제한된 스레드 조회 → 로컬 기록`입니다. 이 경로는 모델을 호출하거나 대상 저장소를 읽지 않습니다. 결과의 `analysis`는 `not_run`이며, 고정 모델의 답변을 실제 요청의 답변으로 만들지 않습니다.
+기본 수신 경로는 `Socket Mode → 허용 범위 검사 → SQLite commit → ACK → 제한된 스레드 조회 → 로컬 기록`입니다. 수신 프로세스는 모델을 호출하거나 대상 저장소를 읽지 않습니다. 수신 프로세스의 `checks.analysis`는 `not_run`이며, 자동 분석은 아래의 명시적 환경 설정으로 별도 연결합니다.
 
 토큰 없이 합성 Socket Mode envelope를 재생할 수 있습니다.
 
@@ -842,6 +842,42 @@ pnpm harness slack-list --config /absolute/path/to/approved-slack.json --data-di
 `tasks.sqlite`의 `slack_*` 테이블에 이벤트·요청·연결 이력을 저장합니다. 이벤트 ID는 중복 제거용이고 원본 메시지는 workspace·채널·message ts로 식별합니다. 편집·삭제·멘션 제거는 이전 문맥과 연계된 계획을 무효화합니다. 기존 조사 계획이 같은 메시지에 연결되어 있으면 DB에서 취소하고 로컬 보고서도 취소 상태로 다시 씁니다. DB가 원본이며, 보고서 쓰기 중 종료되면 다음 명령에서 복구합니다. 진행 중 중단된 수집은 `BLOCKED`로 보존하고 자동 재수집하지 않습니다.
 
 본문과 스레드는 비밀 패턴, 지원 이메일·국내 휴대전화 패턴을 마스킹한 뒤 보관합니다. 보관 기간은 1~168시간이며 예시는 24시간입니다. 명령 시작·수신·처리 시점과 실수신 중 매분 만료 본문을 제거합니다. 중지된 앱의 DB는 다음 실행 전까지 남습니다. 최소 event ID·메시지 revision·삭제 marker는 오래된 이벤트의 부활을 막기 위해 DB 수명 동안 남고 저장량이 늘어날 수 있습니다. 삭제는 백업·로그·파일시스템의 물리적 완전 삭제를 보장하지 않습니다. 모든 개인정보·비밀 형식을 판별하는 기능도 아닙니다.
+
+## Slack 본인 멘션 자동 분석
+
+`slack-listen --env-file <private-env>`로 본인 멘션과 해당 스레드만 기존 Codex relay에 연결할 수 있습니다. 새 설정 예시는 [.env.example](.env.example)입니다. 파일은 저장소 밖의 소유자 전용 0600 파일로 준비합니다. 채널 이름 대신 **채널 ID**를 쉼표로 구분하고 Slack의 workspace ID·본인 사용자 ID도 지정합니다. `.env`를 자동 탐색하지 않으며 `--env`는 현재 프로세스 환경만, `--env-file`은 지정한 파일만 사용합니다. 둘과 기존 `--config`는 함께 사용할 수 없습니다.
+
+```dotenv
+SLACK_WORKSPACE_ID=T_EXAMPLE
+SLACK_TARGET_USER_ID=U_EXAMPLE
+SLACK_CHANNEL_IDS=C_EXAMPLE,C_SECOND_EXAMPLE
+SLACK_LIVE_READ_ENABLED=true
+SLACK_APP_TOKEN=<Socket Mode app token>
+SLACK_WEB_TOKEN=<thread read token>
+SLACK_ANALYSIS_ENABLED=true
+SLACK_ANALYSIS_CODEX_CONFIG=/absolute/private/path/codex-relay.json
+```
+
+위 값들은 자리표시자입니다. `SLACK_ANALYSIS_CODEX_CONFIG`에는 기존 private Codex relay 설정의 절대 경로를 넣습니다. 연결 설정에는 검증한 native 바이너리 경로·SHA-256, `enabled:true`, 기존 모델 `gpt-6.1-sol`·`authMode:chatgpt`가 필요합니다. [v3 예시](config/readonly-relay-budget.example.json)는 고정 125초 계약이며 v1/v2 설정의 기존 한도도 지원합니다. 바이너리 버전·hash 검사를 생략하거나 모델/한도를 자동 변경하지 않습니다. 기존 ChatGPT 인증은 relay controller가 호출 시에만 사용하고 native 자식에는 실제 토큰을 전달하지 않습니다.
+
+아래 `pnpm harness`는 Node 옵션 경계를 `node --`로 고정합니다. 컴파일된 CLI를 직접 실행할 때도 `node -- dist/src/cli/main.js ...`를 사용합니다. `--` 없이 실행하면 Node 자체가 `--env-file`을 하네스보다 먼저 처리할 수 있습니다.
+
+```sh
+pnpm harness slack-listen --env-file /absolute/private/path/slack.env --data-dir /absolute/private/path/slack-data
+# 다른 터미널에서 상태와 한 요청의 분석 결과를 조회합니다.
+pnpm harness slack-list --env-file /absolute/private/path/slack.env --data-dir /absolute/private/path/slack-data
+pnpm harness slack-inspect <channel-id> <message-ts> --env-file /absolute/private/path/slack.env --data-dir /absolute/private/path/slack-data
+```
+
+분석 설정과 native 바이너리의 정적 준비 검사를 마친 후 수신을 시작합니다. foreground로 동작하므로 터미널의 `Ctrl+C`로 종료할 수 있습니다. Slack 앱의 Socket Mode·읽기 scope·대상 채널 접근은 준비되어 있어야 합니다. 공개 채널 메시지는 `message.channels`를 구독하고 본인 `<@사용자ID>`를 필터링합니다. 앱 멘션인 `app_mention`과 구분합니다. [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/), [채널 메시지 이벤트](https://docs.slack.dev/reference/events/message.channels/), [스레드 읽기 권한](https://docs.slack.dev/reference/methods/conversations.replies/)
+
+자동 분석은 이번 실행이 시작된 뒤 수신하고 완전하게 수집한 멘션/스레드만 처리합니다. 부분 스레드, 재연결 이전 문맥, 과거 수신 기록은 자동 전송하지 않습니다. 중복 요청·같은 revision은 한 번만 시도하고 실패/중단 뒤 자동 재시도하지 않습니다. 자동 분석 전용 추가 한도는 동시 1건·runtime별 UTC 하루 20시도이며 불완전/잘못된 입력의 차단도 시도에 포함합니다. 일일 한도에 아직 진입하지 못한 현재 세션 요청은 다음 UTC 날짜에 다시 선택될 수 있습니다. 기존 스레드 상한과 모델별 입력·응답·시간·정리 한도는 유지합니다.
+
+수신 worker에는 Slack 토큰만, 분석 controller에는 최소 환경만 전달합니다. 기존 native sandbox·고정 목적지 broker·빈 tools·단건 호출 계약을 재사용하며 회사 코드·다른 파일·제품 명령·Slack 답장은 분석에 포함되지 않습니다. 요청자의 메시지는 분석 자료이며 실행 권한이 아닙니다. 설정의 `SLACK_ANALYSIS_ENABLED=true`와 명시적인 listen 실행은 이 한정된 자동 분석을 켜는 조작이며 기존 회사 수정 승인이나 단건 조사 승인을 재사용하지 않습니다.
+
+표준 출력의 `slack-analysis` 이벤트에서 진행 상태를 확인하고, `slack-inspect`의 `analysis.results`에서 한국어 요약·근거·불확실성·답변 초안·추가 질문을 검토합니다. `slack-list`는 보고서 본문 없이 상태만 표시합니다. 결과는 private `slack-analysis.sqlite`에 보관하며 원래 Slack 본문을 분석 DB에 추가 복제하지 않습니다. 보고서 본문은 원본 보관 기한과 분석 시작 후 24시간 중 먼저 도래하는 때 제거하고, 중복 방지 metadata는 유지합니다. 실행 중 편집·삭제·멘션 제거·연결 공백은 진행 중 호출의 취소를 요청하고 오래된 결과의 게시를 막습니다. 이미 외부 전송한 내용을 되돌리지는 못합니다. 수신하지 못한 변경이나 의미적 정답까지 검증했다는 뜻은 아닙니다.
+
+조회 명령은 모델 설정 파일이나 Codex 인증을 열지 않고 현재 수신 기록과 기존 결과를 대조합니다. 재시작 시 중단된 분석은 `INTERRUPTED`로 남고 재전송하지 않습니다. native 정리 여부가 불확실하면 다음 분석을 시작하지 않고 수신과 분석을 종료합니다. 호출 중 hard kill로 남은 `slack-analysis-active.json`도 다음 시작을 차단합니다. 남은 프로세스와 실행 기록의 로컬 확인 없이 이 marker를 자동 삭제하지 않습니다. 합성 검증과 실제 연결 여부는 [Slack 자동 분석 결과](docs/slack-mention-analysis-result.md)에 구분해 기록합니다.
 
 ## 합성 레포의 다중 파일 적용 엔진
 
