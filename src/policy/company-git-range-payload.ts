@@ -128,8 +128,8 @@ const compareTreeNames = (left: Buffer, leftMode: CompanyGitTreeMode, right: Buf
 };
 
 /** Validate the entire tree, including entries after the match. Only one small, immutable selected entry leaves the parser. */
-export const findCompanyGitTreeEntry = (input: Uint8Array, name: string, budget: CompanyGitRangeBudgetOperations,
-  nowMs: number): CompanyGitTreeEntry | undefined => parse(input, limits.objectBytes, budget, nowMs, bytes => {
+const findTreeEntry = (input: Uint8Array, name: string, budget: CompanyGitRangeBudgetOperations,
+  nowMs: number, rejectCaseAliases: boolean): CompanyGitTreeEntry | undefined => parse(input, limits.objectBytes, budget, nowMs, bytes => {
   if (typeof name !== 'string' || name.length > limits.objectBytes || !safeName(name)) return reject();
   let cursor = 0, previousName: Buffer | undefined, previousMode: CompanyGitTreeMode = '100644';
   let selected: CompanyGitTreeEntry | undefined;
@@ -143,6 +143,7 @@ export const findCompanyGitTreeEntry = (input: Uint8Array, name: string, budget:
     if (!modes.has(mode)) return reject();
     const rawName = bytes.subarray(space + 1, end), entryName = utf8(rawName);
     if (!safeName(entryName) || names.has(entryName) || previousName && compareTreeNames(previousName, previousMode, rawName, mode) >= 0) return reject();
+    if (rejectCaseAliases && entryName !== name && entryName.toLowerCase() === name.toLowerCase()) return reject();
     names.add(entryName); previousName = rawName; previousMode = mode;
     if (entryName === name) selected = Object.freeze({ mode, oid: bytes.toString('hex', end + 1, end + 21) });
     cursor = end + 21;
@@ -150,8 +151,15 @@ export const findCompanyGitTreeEntry = (input: Uint8Array, name: string, budget:
   return selected;
 });
 
-const selectionSnapshot = (value: readonly CompanyGitWorkingSelection[]): Map<string, CompanyGitWorkingSelection> => {
-  if (!Array.isArray(value) || types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype || !value.length
+export const findCompanyGitTreeEntry = (input: Uint8Array, name: string, budget: CompanyGitRangeBudgetOperations,
+  nowMs: number): CompanyGitTreeEntry | undefined => findTreeEntry(input, name, budget, nowMs, false);
+
+/** New write-proof lookup rejects case aliases without changing the older read-only lookup contract. */
+export const findCompanyGitTreeEntryForChange = (input: Uint8Array, name: string, budget: CompanyGitRangeBudgetOperations,
+  nowMs: number): CompanyGitTreeEntry | undefined => findTreeEntry(input, name, budget, nowMs, true);
+
+const selectionSnapshot = (value: readonly CompanyGitWorkingSelection[], allowEmpty = false): Map<string, CompanyGitWorkingSelection> => {
+  if (!Array.isArray(value) || types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype || !allowEmpty && !value.length
     || value.length > getPersonalCollectionProfile().limits.files || Reflect.ownKeys(value).length !== value.length + 1) return reject();
   const selected = new Map<string, CompanyGitWorkingSelection>();
   for (let index = 0; index < value.length; index++) {
@@ -177,9 +185,26 @@ const selectionSnapshot = (value: readonly CompanyGitWorkingSelection[]): Map<st
  * Validate index-v2/v3 entries and optional extension envelopes. Optional payloads are inert hints, never evidence.
  * Unselected conflict stages/known extended bits may exist; selected entries must match stage zero with no extension flags.
  */
-export const assertCompanyGitWorkingIndex = (input: Uint8Array, selection: readonly CompanyGitWorkingSelection[],
-  budget: CompanyGitRangeBudgetOperations, nowMs: number): void => parse(input, limits.gitFileBytes, budget, nowMs, bytes => {
-  const selected = selectionSnapshot(selection), found = new Set<string>();
+const workingIndex = (input: Uint8Array, selection: readonly CompanyGitWorkingSelection[],
+  budget: CompanyGitRangeBudgetOperations, nowMs: number, absence?: readonly string[]): void => parse(input, limits.gitFileBytes, budget, nowMs, bytes => {
+  const selected = selectionSnapshot(selection, absence !== undefined), found = new Set<string>();
+  const absent = new Set<string>();
+  if (absence !== undefined) {
+    if (!Array.isArray(absence) || types.isProxy(absence) || Object.getPrototypeOf(absence) !== Array.prototype
+      || Reflect.ownKeys(absence).length !== absence.length + 1 || absence.length + selected.size < 1
+      || absence.length + selected.size > getPersonalCollectionProfile().limits.files) return reject();
+    for (let index = 0; index < absence.length; index++) {
+      const descriptor = Object.getOwnPropertyDescriptor(absence, String(index));
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) return reject();
+      const path: unknown = descriptor.value;
+      if (typeof path !== 'string' || path.length > 512 || !safePath(path) || path.split('/').length > 16 || absent.has(path)) return reject();
+      absent.add(path);
+    }
+    const paths = [...selected.keys(), ...absent].map(path => path.toLowerCase());
+    for (let index = 0; index < paths.length; index++) for (let other = index + 1; other < paths.length; other++) {
+      if (paths[index] === paths[other] || paths[index]!.startsWith(`${paths[other]!}/`) || paths[other]!.startsWith(`${paths[index]!}/`)) return reject();
+    }
+  }
   const bodyEnd = bytes.length - 20;
   if (bytes.length < 32 || bytes[0] !== 68 || bytes[1] !== 73 || bytes[2] !== 82 || bytes[3] !== 67
     || !createHash('sha1').update(bytes.subarray(0, bodyEnd)).digest().equals(bytes.subarray(bodyEnd))) return reject();
@@ -210,6 +235,17 @@ export const assertCompanyGitWorkingIndex = (input: Uint8Array, selection: reado
     for (let padding = end; padding < next; padding++) if (bytes[padding] !== 0) return reject();
     cursor = next;
     const expected = selected.get(path);
+    if (absence !== undefined) {
+      const folded = path.toLowerCase();
+      for (const missing of absent) {
+        const target = missing.toLowerCase();
+        if (folded === target || folded.startsWith(`${target}/`) || target.startsWith(`${folded}/`)) return reject();
+      }
+      for (const target of selected.keys()) {
+        const selectedPath = target.toLowerCase();
+        if (path !== target && (folded === selectedPath || folded.startsWith(`${selectedPath}/`) || selectedPath.startsWith(`${folded}/`))) return reject();
+      }
+    }
     if (expected) {
       if (found.has(path) || stage !== 0 || flags & 0x4000 || expected.oid !== oid || expected.mode !== mode) return reject();
       found.add(path);
@@ -226,3 +262,11 @@ export const assertCompanyGitWorkingIndex = (input: Uint8Array, selection: reado
   }
   if (cursor !== bodyEnd || found.size !== selected.size) return reject();
 });
+
+export const assertCompanyGitWorkingIndex = (input: Uint8Array, selection: readonly CompanyGitWorkingSelection[],
+  budget: CompanyGitRangeBudgetOperations, nowMs: number): void => workingIndex(input, selection, budget, nowMs);
+
+/** Creates require absence at every index stage, including conflicting case or ancestor/descendant entries. */
+export const assertCompanyGitWorkingIndexForChanges = (input: Uint8Array, selection: readonly CompanyGitWorkingSelection[],
+  absentPaths: readonly string[], budget: CompanyGitRangeBudgetOperations, nowMs: number): void =>
+  workingIndex(input, selection, budget, nowMs, absentPaths);

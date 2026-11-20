@@ -891,7 +891,32 @@ pnpm harness company-write-check --data-dir "$WRITE_CHECK_PARENT/run"
 
 private 결과 디렉터리에 `registration.json`, 합성 `draft.json`, 본문 없는 `plan.json`·`approval.json`, `execution/claim.json`·`journal.jsonl`·단건 worker marker와 `result.json`을 보관합니다. 디렉터리는 0700, 파일은 0600이며 자동 만료 삭제는 없습니다. 표준 출력에는 공유 가능한 상태·hash·개수만 표시합니다. 중단 후 소비 marker와 부분 변경을 보존하며 같은 실행을 재개하거나 잠금을 자동 제거하지 않습니다. 불완전 journal은 오류로 남고 성공으로 해석하지 않습니다.
 
-현재는 일반 회사 레포 실행 명령이 없습니다. `packed-refs`가 존재하거나 worktree·submodule·merge/rebase 등이 있는 Git 상태는 거부하며 선택 파일의 tracked/staged 상태나 기준 commit blob과의 일치를 판정하지 않습니다. 실제 회사 적용에는 지원 가능한 Git 상태 확인과 별도의 구체적인 새 적용 승인이 필요합니다. 검증 결과와 한계는 [4-C-33 결과](docs/stage-4c33-result.md)를 따릅니다.
+위 4-C-33 합성 명령은 기존 계약을 유지합니다. 회사 적용 명령과 `packed-refs`·기존 변경 보호는 아래 별도 `company-apply-*` 경로에 연결했습니다. 합성 명령의 검증 결과와 한계는 [4-C-33 결과](docs/stage-4c33-result.md)를 따릅니다.
+
+## 원본 회사 레포의 승인된 파일 적용
+
+`company-apply-*`는 회사 로컬 적용용 `company-apply-plan-v1`과 `company-apply-approval-v1`을 사용합니다. 기존 검토/합성 승인은 사용할 수 없습니다. `plan → approve → run`을 분리하고 원본 레포에서 새 브랜치로 전환한 뒤 승인된 파일만 수정합니다. 회사용 연결의 구현과 합성 수용 검증은 완료했으며, 실제 회사 업무의 적용 결과는 각 실행에서 별도로 확인합니다.
+
+입력은 기존 `company-write-registration-v1`과 `company-change-draft-v1` JSON입니다. 회사가 허용한 private 위치에 저장하고 파일 0600·직접 부모 0700·canonical 경로를 사용합니다. 실제 경로는 등록의 `sourceRoot`에 두며 `.env`는 필요하지 않습니다. `enabled:true`·읽기/쓰기 허용 선언은 확인된 정책을 기록하는 조건이고 단건 실행 승인을 대신하지 않습니다. 실제 수정할 파일의 정확한 허용 목록·현재 기준 브랜치/commit/index hash와 before hash, 새 본문을 먼저 검토합니다. 입력 파일·runtime·대상 레포·하네스 경로는 겹칠 수 없습니다.
+
+```sh
+# 회사가 허용한 private 부모 아래 준비한 registration.json과 draft.json을 사용합니다.
+pnpm harness company-apply-plan --registration /private/tmp/company-task/registration.json --draft /private/tmp/company-task/draft.json --data-dir /private/tmp/company-task/runtime
+pnpm harness company-apply-inspect --task <task-id> --data-dir /private/tmp/company-task/runtime
+pnpm harness company-apply-approve --task <task-id> --plan-hash <plan-hash> --expires-in-minutes 10 --registration /private/tmp/company-task/registration.json --draft /private/tmp/company-task/draft.json --data-dir /private/tmp/company-task/runtime
+pnpm harness company-apply-run --task <task-id> --plan-hash <plan-hash> --registration /private/tmp/company-task/registration.json --draft /private/tmp/company-task/draft.json --data-dir /private/tmp/company-task/runtime
+pnpm harness company-apply-cancel --task <task-id> --data-dir /private/tmp/company-task/runtime
+```
+
+`plan`만 새 runtime을 만들 수 있고 결과는 `AWAITING_APPROVAL`입니다. 계획에는 본문 대신 원본/Git proof·등록/draft hash·파일별 전후 hash·소유자·기간을 보관합니다. 상세 계획은 `runtime/tasks/<task-id>/plan.json`에서 입력 draft와 함께 검토합니다. `approve`와 `run`은 같은 등록/수정안과 현재 원본을 재검증합니다. `inspect`와 `cancel`에는 회사 경로나 입력 파일이 필요 없습니다. 출력에는 상태·hash·파일 수만 포함합니다.
+
+수정할 기존 파일은 기준 commit blob·index stage 0·현재 bytes/mode가 같아야 합니다. 이미 수정하거나 staged한 대상 파일은 거부합니다. 새 파일은 기준 tree·모든 index stage·현재 작업 파일에 없어야 하며 대소문자/상하위 경로 충돌도 거부합니다. 선택하지 않은 작업과 index bytes는 보존하며 레포 전체가 clean하다고 판정하지 않습니다. `packed-refs`와 loose ref 양쪽의 새 브랜치 충돌을 검사하고 packed-only 기준 ref도 지원합니다. 기준 ref의 부모와 대상 파일의 부모 디렉터리는 이미 존재해야 합니다. worktree·submodule·merge/rebase 등의 미지원 상태는 계속 거부합니다.
+
+`run`은 현재 macOS `sandbox-exec`에서 실행을 지원합니다. 동일한 OS 허용 경로의 별도 worker에서 합성 canary 읽기/쓰기·추가 exec·TCP 차단을 확인한 후 승인을 한 번 소비합니다. 적용 worker가 Git proof를 다시 확인하고 branch/file INTENT·DONE을 fsync합니다. index 1MiB·packed-refs 1MiB·파일 8개/개별64KiB/합계128KiB, 기존 Git 판독기의 고정 공유 예산과 worker 30초·250ms 종료 유예·출력16KiB·old-space128MiB를 유지합니다. 원본 Git 명령·hooks·repack·제품 코드·모델·원격 작업은 실행하지 않습니다.
+
+`APPLIED`는 승인된 파일 적용의 완료이며 제품 검사 상태는 `not_run`입니다. 중간 실패는 이미 게시한 변경을 보존합니다. claim/journal이 부분 기록되거나 손상된 경우, 또는 강제 종료 후 최종 journal 기록이 없으면 `UNKNOWN`과 승인 소비 상태를 표시하며 같은 task를 재실행할 수 없습니다. 계획·승인·위치 binding 손상은 고정 오류로 거부합니다. 오류 후에는 `inspect`로 확인하고 남은 파일/잠금은 로컬에서 검토합니다. 자동 rollback·resume·기존 잠금 삭제는 없습니다. controller가 control lease를 유지하는 동안 같은 runtime의 다른 명령은 진입하지 않으며 취소는 적용 전에만 가능합니다.
+
+runtime에는 private control DB와 task별 본문 없는 계획·위치 binding·승인·claim·journal·worker marker를 보관합니다. 단건 적용 기한은 계획24시간/승인1~60분이고 기록을 자동 삭제하지 않습니다. 파일/위치 hash는 로컬 일관성 검사이며 OS 사용자 본인의 악의적 변조에 대한 서명이 아닙니다. 선택 Git 객체의 부수 delta base 읽기·전체 pack checksum 미검증과 경합/종료 보증의 한계는 [4-C-34 결과](docs/stage-4c34-result.md)를 따릅니다.
 
 ## 개발 검증
 

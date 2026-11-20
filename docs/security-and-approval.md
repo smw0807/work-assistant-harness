@@ -26,6 +26,10 @@
 
 macOS SBPL은 exact 파일/임시/Git 경로와 명시한 private 실행 journal/시작 marker만 쓰기 허용하고 미선택 본문·합성 credential canary·TCP/Unix·추가 exec를 차단한다. 필요한 디렉터리 fsync 권한은 그 디렉터리의 이름 열거까지 허용할 수 있다. 신뢰하는 하네스와 OS runtime 읽기 범위, 부모 controller의 권한은 worker 격리와 구분한다. guardian은 부모 단절·30초·출력 16KiB·취소 때 TERM 뒤 250ms KILL을 요청하고 close를 관찰한다. worker도 stdin EOF·자체 watchdog을 확인하고 새 mutation 전에 이벤트루프에 양보하지만 이미 시작된 syscall을 되돌리거나 비협조적인 동일 사용자와의 모든 경합을 막는다고 주장하지 않는다. 제품 검사·실제 회사/인증/모델·외부 전송은 이번 합성 명령에 없다.
 
+단계 4-C-34의 새 `company-local-write` 승인만 `company-apply-run`에 사용할 수 있다. 기존 review/synthetic 승인은 승격하지 않는다. 선택 replace는 HEAD blob/index stage0/working 일치, create는 HEAD/index/working 부재를 새 Git proof로 결합한다. 기존 v2 입력/결과/profile/공유 예산은 유지한다. packed refs·packed-only 기준 ref·선택 Git 객체는 읽기 전용이고 원본 repack·Git CLI·제품 실행 포트는 없다. 필요한 선택 객체의 delta base 부수 읽기와 pack 디렉터리 이름 열거는 허용된 Git 판독 범위이며 전체 pack checksum 검증이나 미선택 작업 파일 읽기와 구분한다.
+
+plan/approval/task binding과 claim/journal은 별도 private runtime에 저장한다. 모든 CLI 명령은 새 위치/소유자 결합 control lease를 사용하며, task 복사·입력 변조·원본 drift·소비/만료·잘못된 hash는 적용 전에 거부한다. 적용 전 동일 profile의 합성 canary/exec/TCP probe를 통과해야 소비하며, 소비 뒤 worker가 같은 원본을 다시 증명한다. 부분/손상 claim 또는 journal은 UNKNOWN으로 관찰하고 소비를 되돌리지 않는다. UNKNOWN은 프로세스가 반드시 끝났다는 증명이 아니며 복구 명령·lock stealing·resume을 제공하지 않는다. 명시적으로 승인된 소규모 파일 적용 외 인증·native Codex·모델·외부 전송·자동 commit/push 권한은 추가하지 않았다.
+
 - **소유자:** 로컬 CLI에서 표시된 계획을 검토하고 실행을 승인하는 사람.
 - **요청자:** Slack에서 문의나 변경 요청을 보낸 사람. 요청은 조사 대상이며 소유자의 실행 승인이 아니다.
 - **모델:** 분류·설명·계획을 제안한다. 권한을 만들거나 변경하지 못한다.

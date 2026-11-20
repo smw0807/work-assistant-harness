@@ -989,6 +989,14 @@ codex-execution-run → 유형별 브랜치 선택·승인 patch·읽기 전용 
 - 선택 파일과 명시된 HEAD/index/loose ref만 관찰하는 원본 adapter를 구현하고 branch-first 순차 atomic file 적용을 macOS SBPL worker에 연결한다. 정확한 선택 파일·Git lock/temp·필요 디렉터리·명시한 private claim/journal/시작 marker로 접근을 제한하고 모든 네트워크/추가 실행을 차단한다. 회사 Git 전체 clean 판정이나 commit blob 검증으로 확대하지 않는다.
 - `company-write-check`는 새 합성 fixture만 만들며 실제 회사 경로 옵션을 받지 않는다. 단건 claim과 worker marker를 먼저 fsync하고 branch/file INTENT/DONE을 본문 없는 journal로 저장한다. guardian·EOF·timeout·출력 중단 후 승인 소비와 부분 변경을 보존하며 자동 재개·rollback·기존 lock 제거를 하지 않는다.
 - 수용 검사: 잘못된 등록·구형 승인·만료·경합·재사용·경로/링크/바이트 상한, 승인 전 무변경·branch-first·파일/기준/index 보존, journal 변조/불완전 기록·SIGKILL, 실제 OS 파일/credential canary/TCP/Unix/exec 거부와 종료 예산, 새 CLI 통합 및 기존 회귀. 결과와 회사 적용 전 남은 범위는 [4-C-33 결과](stage-4c33-result.md)에 기록한다.
+
+##### 단계 4-C-34 회사 적용 CLI·packed refs·기존 변경 보호 연결
+
+- 별도 `company-apply-plan-v1`/`company-apply-approval-v1`, scope `company-local-write`에 등록/draft·workspace·packed refs·기준 ref 종류·Git proof·owner/TTL/한도를 결합한다. 기존 검토/합성 승인은 혼용하지 않는다.
+- 기존 Git 단위 판독기의 예산·profile·v2 경로를 보존하면서 새 mixed 입력으로 replace의 HEAD/index/working 일치와 create의 tree/index/working 부재를 검사한다. 새 분기에서만 case/prefix 충돌을 보수적으로 거부하며 packed parser의 추가 backing allocation을 만들지 않는다.
+- 원본 adapter의 packed/loose ref 충돌·packed-only 기준·index/base/packed 보존을 연결한다. 부모 디렉터리 존재 조건과 unsupported Git 상태는 명시하며 repack·한도 확대·원본 명령을 실행하지 않는다.
+- plan/approve/run/inspect/cancel, private 입력/runtime/새 control lease·task 위치 binding·단건 claim·본문 없는 journal을 연결한다. probe 실패 전 미소비, claim 후 원본 재검증, branch-first 적용, 실패/UNKNOWN 후 재개·자동 정리 금지를 검증한다.
+- 합성 CLI 전체 흐름과 입력·승인·원본 변경·staged/dirty·packed/index/tree 충돌·경로/권한·복제/중단·OS 격리/종료 한도 및 전체 회귀를 수행한다. 회사 적용 기능 구현 완료와 실제 회사 업무 미실행을 구분해 [4-C-34 결과](stage-4c34-result.md)에 기록한다.
 - 신규 41개를 포함한 집중 검사 93개와 lint·typecheck·build를 통과했다. 전체 회귀는 총 2,142개 중 2,106개 통과·실패 0개·native opt-in 36개 미실행이다. 실제 회사 적용과 OS 격리 검증을 대신하지 않는다.
 
 - 4-C 후속 후보: 4-C-8의 합성 다중 파일 단건 live 조사의 실제 검증 상태를 먼저 확인하고, 등록한 실제 대상 저장소의 읽기 전용 조사와 Codex 직접 수정 방식을 각각 별도 범위로 설계한다. 실제 모델의 인증·전송 범위·공급자 호환성·격리 검증은 4-C-7 오프라인 완료에도 포함되지 않는다. commit 준비와 push는 구분하며 원격·브랜치·커밋·diff의 별도 승인을 설계한다. PR/MR 생성은 포함하지 않는다.

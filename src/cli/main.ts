@@ -35,6 +35,7 @@ import { companyRelayUsage, runCompanyRelayCommand } from './company-relay.js';
 import { companyChangeUsage, runCompanyChangeCommand } from './company-change.js';
 import { syntheticCompanyChangeUsage, runSyntheticCompanyChangeCommand } from './synthetic-company-change.js';
 import { companyWriteUsage, runCompanyWriteCommand } from './company-write.js';
+import { companyApplyUsage, runCompanyApplyCommand } from './company-apply.js';
 
 const scenarios = new Set([
   'inquiry', 'change', 'unclear', 'invalid-json', 'invalid-summary', 'hallucinated-file',
@@ -168,8 +169,9 @@ const run = async (): Promise<void> => {
   }
 };
 
-if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${branchExecutionUsage}\n${codexProposalUsage}\n${codexExecutionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n${readonlyInvestigationUsage}\n${readonlyTransportUsage}\n${readonlyModelPreflightUsage}\n${readonlyLiveUsage}\n${readonlyRelayUsage}\n${personalReadonlyUsage}\n${migrationCheckUsage}\n${companyReadonlyUsage}\n${companyReadonlyV2Usage}\n${companyReadonlyV3Usage}\n${companyInvestigationUsage}\n${companyRelayUsage}\n${companyChangeUsage}\n${syntheticCompanyChangeUsage}\n${companyWriteUsage}\n`);
-else (process.argv[2]?.startsWith('company-write-') ? runCompanyWriteCommand(process.argv.slice(2))
+if (process.argv.includes('--help')) process.stdout.write(`${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${branchExecutionUsage}\n${codexProposalUsage}\n${codexExecutionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n${readonlyInvestigationUsage}\n${readonlyTransportUsage}\n${readonlyModelPreflightUsage}\n${readonlyLiveUsage}\n${readonlyRelayUsage}\n${personalReadonlyUsage}\n${migrationCheckUsage}\n${companyReadonlyUsage}\n${companyReadonlyV2Usage}\n${companyReadonlyV3Usage}\n${companyInvestigationUsage}\n${companyRelayUsage}\n${companyChangeUsage}\n${syntheticCompanyChangeUsage}\n${companyWriteUsage}\n${companyApplyUsage}\n`);
+else (process.argv[2]?.startsWith('company-apply-') ? runCompanyApplyCommand(process.argv.slice(2))
+  : process.argv[2]?.startsWith('company-write-') ? runCompanyWriteCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('synthetic-change-') ? runSyntheticCompanyChangeCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('company-change-') ? runCompanyChangeCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('company-relay-') ? runCompanyRelayCommand(process.argv.slice(2))
@@ -195,6 +197,6 @@ else (process.argv[2]?.startsWith('company-write-') ? runCompanyWriteCommand(pro
   : process.argv[2]?.startsWith('execution-') ? runExecutionCommand(process.argv.slice(2))
   : process.argv[2] === 'sandbox-check' ? runSandboxCheckCommand(process.argv.slice(2))
   : process.argv[2]?.startsWith('slack-') ? runSlackCommand(process.argv.slice(2)) : run()).catch((error: unknown) => {
-  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${branchExecutionUsage}\n${codexProposalUsage}\n${codexExecutionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n${readonlyInvestigationUsage}\n${readonlyTransportUsage}\n${readonlyModelPreflightUsage}\n${readonlyLiveUsage}\n${readonlyRelayUsage}\n${personalReadonlyUsage}\n${migrationCheckUsage}\n${companyReadonlyUsage}\n${companyReadonlyV2Usage}\n${companyReadonlyV3Usage}\n${companyInvestigationUsage}\n${companyRelayUsage}\n${companyChangeUsage}\n${syntheticCompanyChangeUsage}\n${companyWriteUsage}\n`);
+  process.stderr.write(`${error instanceof HarnessError ? error.code : 'HARNESS_FAILED'}\n${usage}\n${slackUsage}\n${sandboxUsage}\n${executionUsage}\n${branchExecutionUsage}\n${codexProposalUsage}\n${codexExecutionUsage}\n${replyUsage}\n${slackPostUsage}\n${liveSlackUsage}\n${branchUsage}\n${localBranchUsage}\n${readonlyInvestigationUsage}\n${readonlyTransportUsage}\n${readonlyModelPreflightUsage}\n${readonlyLiveUsage}\n${readonlyRelayUsage}\n${personalReadonlyUsage}\n${migrationCheckUsage}\n${companyReadonlyUsage}\n${companyReadonlyV2Usage}\n${companyReadonlyV3Usage}\n${companyInvestigationUsage}\n${companyRelayUsage}\n${companyChangeUsage}\n${syntheticCompanyChangeUsage}\n${companyWriteUsage}\n${companyApplyUsage}\n`);
   process.exitCode = 1;
 });

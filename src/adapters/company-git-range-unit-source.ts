@@ -11,7 +11,9 @@ import { parseCompanyGitRangeIndex, validateCompanyGitRangePackHeader,
   type CompanyGitRangeIndex, type CompanyGitRangeIndexEntry, type CompanyGitRangePackMetadata } from '../policy/company-git-range-index.js';
 import { applyCompanyGitPackedDelta, decodeCompanyGitLooseObject, decodeCompanyGitPackedObject,
   type CompanyGitDecodedObject, type CompanyGitVerifiedObject } from '../policy/company-git-range-object-codec.js';
-import { assertCompanyGitWorkingIndex, findCompanyGitTreeEntry, parseCompanyGitCommitTree } from '../policy/company-git-range-payload.js';
+import { assertCompanyGitWorkingIndex, assertCompanyGitWorkingIndexForChanges, findCompanyGitTreeEntry,
+  findCompanyGitTreeEntryForChange, parseCompanyGitCommitTree } from '../policy/company-git-range-payload.js';
+import { COMPANY_APPLY_PACKED_REFS_MAX_BYTES, parseCompanyApplyPackedRefs } from '../policy/company-apply-packed-refs.js';
 import { createCompanyGitRangeUnitByteProof, type CompanyGitRangeUnitByteProof } from '../policy/company-git-range-unit-proof.js';
 import type { CompanyGitRangeObjectProof } from '../policy/company-git-range-proof.js';
 import { derivePersonalSourceView, extractPersonalCollectionEvidence, getPersonalCollectionProfile } from '../policy/personal-readonly-collection.js';
@@ -70,6 +72,19 @@ export interface CompanyGitRangeUnitSource {
   snapshot(): CompanyGitRangeUnitBudgetSnapshot;
   close(): void;
 }
+interface ApplySelection { readonly absentPaths: readonly string[]; readonly baseBranch: string; readonly targetBranch: string }
+interface ApplyRefProof { readonly packedRefsHash: string | null; readonly baseRefKind: 'loose' | 'packed' }
+export interface CompanyGitRangeApplySourceObservation extends Omit<CompanyGitRangeUnitSourceObservation, 'version'>, ApplyRefProof {
+  readonly version: 'company-git-range-apply-observation-v1';
+  readonly absentPaths: readonly string[];
+  readonly workingIndexHash: string;
+}
+export interface CompanyGitRangeApplySource {
+  inspect(): CompanyGitRangeApplySourceObservation;
+  verify(): CompanyGitRangeApplySourceObservation;
+  snapshot(): CompanyGitRangeUnitBudgetSnapshot;
+  close(): void;
+}
 export interface CompanyGitRangeUnitCollectionSource {
   inspect(): { observation: CompanyGitRangeUnitSourceObservation; collected: PersonalCollectionEvidence };
   verify(): { observation: CompanyGitRangeUnitSourceObservation; budget: CompanyGitRangeUnitBudgetSnapshot };
@@ -105,6 +120,40 @@ const parseRequest = (value: unknown): CompanyGitRangeUnitSourceRequest => {
     if (new Set(selectedPaths).size !== selectedPaths.length) return fail('INVALID_SOURCE_INPUT');
     return Object.freeze({ version: 'company-git-range-source-v2', profileHash: fields.profileHash, guardPolicyHash: fields.guardPolicyHash,
       sourceRoot: fields.sourceRoot, baseCommit: fields.baseCommit, selectedPaths: Object.freeze(selectedPaths) });
+  } catch { return fail('INVALID_SOURCE_INPUT'); }
+};
+
+/** Separate apply input; it does not widen the version-two read-only input or profile. */
+const parseApplyRequest = (value: unknown): { request: CompanyGitRangeUnitSourceRequest; selection: ApplySelection } => {
+  try {
+    const keys = [...inputKeys, 'absentPaths', 'baseBranch', 'targetBranch'];
+    if (!value || typeof value !== 'object' || types.isProxy(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+      || Reflect.ownKeys(value).length !== keys.length) return fail('INVALID_SOURCE_INPUT');
+    const fields = Object.fromEntries(keys.map(key => {
+      const property = Object.getOwnPropertyDescriptor(value, key);
+      if (!property?.enumerable || !Object.hasOwn(property, 'value')) return fail('INVALID_SOURCE_INPUT');
+      return [key, property.value];
+    }));
+    if (fields.version !== 'company-git-range-apply-source-v1' || typeof fields.baseBranch !== 'string'
+      || typeof fields.targetBranch !== 'string' || !validRef(`refs/heads/${fields.baseBranch}`)
+      || !validRef(`refs/heads/${fields.targetBranch}`) || fields.baseBranch.toLowerCase() === fields.targetBranch.toLowerCase()) return fail('INVALID_SOURCE_INPUT');
+    const paths = (input: unknown): string[] => {
+      if (!Array.isArray(input) || types.isProxy(input) || Object.getPrototypeOf(input) !== Array.prototype
+        || input.length > collectionLimits.files || Reflect.ownKeys(input).length !== input.length + 1) return fail('INVALID_SOURCE_INPUT');
+      return Array.from({ length: input.length }, (_, position) => {
+        const property = Object.getOwnPropertyDescriptor(input, String(position));
+        if (!property?.enumerable || !Object.hasOwn(property, 'value')) return fail('INVALID_SOURCE_INPUT');
+        return assertCompanyGitRangeUnitSourcePath(property.value);
+      });
+    };
+    const selectedPaths = paths(fields.selectedPaths), absentPaths = paths(fields.absentPaths).sort();
+    const combined = [...selectedPaths, ...absentPaths], folded = combined.map(path => path.toLowerCase());
+    for (let index = 0; index < folded.length; index++) for (let other = index + 1; other < folded.length; other++) {
+      if (folded[index] === folded[other] || folded[index]!.startsWith(`${folded[other]!}/`) || folded[other]!.startsWith(`${folded[index]!}/`)) return fail('INVALID_SOURCE_INPUT');
+    }
+    const request = parseRequest({ version: 'company-git-range-source-v2', profileHash: fields.profileHash, guardPolicyHash: fields.guardPolicyHash,
+      sourceRoot: fields.sourceRoot, baseCommit: fields.baseCommit, selectedPaths: combined });
+    return { request, selection: Object.freeze({ absentPaths: Object.freeze(absentPaths), baseBranch: fields.baseBranch, targetBranch: fields.targetBranch }) };
   } catch { return fail('INVALID_SOURCE_INPUT'); }
 };
 
@@ -240,6 +289,22 @@ const verifyHead = (files: Files, budget: CompanyGitRangeUnitBudget, baseCommit:
   });
 };
 
+const verifyApplyHead = (files: Files, budget: CompanyGitRangeUnitBudget, baseCommit: string, selection: ApplySelection): ApplyRefProof => {
+  const base = `refs/heads/${selection.baseBranch}`, target = `refs/heads/${selection.targetBranch}`;
+  const head = withFileBytes(files, budget, '.git/HEAD', 1024, bytes => bytes.toString('utf8'));
+  if (head !== `ref: ${base}\n`) return fail('INVALID_SOURCE', 'head_ref');
+  const loose = withFileBytes(files, budget, `.git/${base}`, 1024, bytes => bytes.toString('utf8'), true);
+  const packed = withFileBytes(files, budget, '.git/packed-refs', COMPANY_APPLY_PACKED_REFS_MAX_BYTES,
+    bytes => ({ entries: parseCompanyApplyPackedRefs(bytes), hash: hashReadonlyValue(bytes) }), true);
+  const folded = target.toLowerCase();
+  if (packed?.entries.some(entry => entry.ref.toLowerCase() === folded || entry.ref.toLowerCase().startsWith(`${folded}/`)
+    || folded.startsWith(`${entry.ref.toLowerCase()}/`))) return fail('INVALID_SOURCE', 'head_ref');
+  const targetFile = files.open(`.git/${target}`, 1024, true);
+  if (targetFile) { targetFile.close(); return fail('INVALID_SOURCE', 'head_ref'); }
+  if (loose !== undefined ? loose !== `${baseCommit}\n` : packed?.entries.find(entry => entry.ref === base)?.oid !== baseCommit) return fail('INVALID_SOURCE', 'head_ref');
+  return Object.freeze({ packedRefsHash: packed?.hash ?? null, baseRefKind: loose === undefined ? 'packed' : 'loose' });
+};
+
 const openPacks = (files: Files, budget: CompanyGitRangeUnitBudget, now: () => number, packs: Pack[]): void => {
   budget.setStage('pack_inventory');
   for (const name of files.listPacks()) {
@@ -311,10 +376,12 @@ const loadPacked = (pack: Pack, entry: CompanyGitRangeIndexEntry, budget: Compan
  * The company v3 adapter selects this read-unit contract; older company paths retain their original reader.
  * The trusted clock is sampled at I/O/codec boundaries; a synchronous operation is not forcibly preempted here.
  */
-const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => number, collection?: CollectionSelection) => {
+const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => number, collection?: CollectionSelection, apply?: ApplySelection) => {
   const now = (): number => { try { return clock(); } catch { return fail(); } };
   const budget = new CompanyGitRangeUnitBudget(now());
   let firstProof: string | undefined, firstCollectionHash: string | undefined;
+  let applyRefProof: ApplyRefProof | undefined;
+  let applyIndexHash: string | undefined;
   const runPass = (pass: 'inspect' | 'verify', sources: Map<string, RetainedSource>): CompanyGitRangeUnitSourceObservation => {
     let files: Files | undefined;
     let failed = false;
@@ -323,7 +390,8 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
       budget.setStage('budget'); budget.beginPass(pass, now());
       budget.setStage('head');
       files = createCompanyGitRangeUnitFiles(request.sourceRoot, request.selectedPaths, budget, now);
-      verifyHead(files, budget, request.baseCommit);
+      if (apply) applyRefProof = verifyApplyHead(files, budget, request.baseCommit, apply);
+      else verifyHead(files, budget, request.baseCommit);
       openPacks(files, budget, now, packs);
       const looseObjects = new Map<string, LooseProof>();
       const load = (wanted: string): CompanyGitVerifiedObject => {
@@ -356,6 +424,7 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
       };
       const rootTree = consume(request.baseCommit, 'commit', object => parseCompanyGitCommitTree(object.bytes, budget, now()));
       const selectedEntries = new Map<string, { oid: string; mode: '100644' | '100755' }>();
+      const absent = new Set(apply?.absentPaths ?? []);
       const selectedPaths = request.selectedPaths.map(path => ({ path, parts: path.split('/') }));
       const resolveTree = (treeOid: string, paths: typeof selectedPaths, depth: number): void => {
         const children = new Map<string, typeof selectedPaths>();
@@ -368,12 +437,16 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
         // The parser still validates the whole tree for every name. Only small mode/OID metadata
         // survives the release; no body, parsed-tree cache or cross-path OID cache is retained.
         const resolved = consume(treeOid, 'tree', object => [...children].map(([name, group]) => ({
-          group, entry: findCompanyGitTreeEntry(object.bytes, name, budget, now()),
+          group, entry: (apply ? findCompanyGitTreeEntryForChange : findCompanyGitTreeEntry)(object.bytes, name, budget, now()),
         })));
         for (const { group, entry } of resolved) {
-          if (!entry) return fail('INVALID_SOURCE', 'tree_selection');
+          if (!entry) {
+            if (apply && group.every(selected => absent.has(selected.path))) continue;
+            return fail('INVALID_SOURCE', 'tree_selection');
+          }
           const leaf = group.find(selected => selected.parts.length === depth + 1);
           if (leaf) {
+            if (absent.has(leaf.path)) return fail('INVALID_SOURCE', 'tree_selection');
             if (group.length !== 1 || entry.mode !== '100644' && entry.mode !== '100755') return fail('INVALID_SOURCE', 'tree_selection');
             selectedEntries.set(leaf.path, { oid: entry.oid, mode: entry.mode });
           } else {
@@ -386,11 +459,18 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
       // The same bounded traversal starts from fresh objects again in the verification pass.
       resolveTree(rootTree, selectedPaths, 0);
       const selectedFiles: CompanyGitRangeSelectedFile[] = [];
+      let applySourceBytes = 0;
       for (const path of request.selectedPaths) {
+        if (absent.has(path)) {
+          const existing = files.open(path, collectionLimits.sourceFileBytes, true);
+          if (existing) { existing.close(); return fail('SOURCE_CHANGED'); }
+          continue;
+        }
         const selected = selectedEntries.get(path);
         if (!selected) return fail('INVALID_SOURCE', 'tree_selection');
         consume(selected.oid, 'blob', object => {
           if (object.bytes.length > collectionLimits.sourceFileBytes) return fail('INVALID_SOURCE', 'source_size');
+          if (apply && (applySourceBytes += object.bytes.length) > 131_072) return fail('INVALID_SOURCE', 'source_size');
           withFileBytes(files!, budget, path, collectionLimits.sourceFileBytes, (bytes, fileMode, memoryLease) => {
             if (!bytes.equals(object.bytes) || Boolean(fileMode & 0o111) !== (selected.mode === '100755')) return fail('SOURCE_CHANGED');
             selectedFiles.push(Object.freeze({ path, oid: selected.oid, mode: selected.mode, sha256: hashReadonlyValue(bytes), bytes: bytes.length }));
@@ -399,8 +479,13 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
         });
       }
       budget.setStage('working_index');
-      withFileBytes(files, budget, '.git/index', limits.gitFileBytes, bytes =>
-        assertCompanyGitWorkingIndex(bytes, selectedFiles.map(({ path, oid, mode }) => ({ path, oid, mode })), budget, now()));
+      withFileBytes(files, budget, '.git/index', apply ? 1_048_576 : limits.gitFileBytes, bytes => {
+        if (apply) {
+          applyIndexHash = hashReadonlyValue(bytes);
+          return assertCompanyGitWorkingIndexForChanges(bytes, selectedFiles.map(({ path, oid, mode }) => ({ path, oid, mode })), apply.absentPaths, budget, now());
+        }
+        return assertCompanyGitWorkingIndex(bytes, selectedFiles.map(({ path, oid, mode }) => ({ path, oid, mode })), budget, now());
+      });
       budget.setStage('final_guard');
       files.assertUnchanged();
       const packProofs = packs.map(pack => Object.freeze({ path: pack.path, metadata: pack.metadata,
@@ -454,7 +539,21 @@ const createSource = (request: CompanyGitRangeUnitSourceRequest, clock: () => nu
     }
   };
   return Object.freeze({ inspect: () => execute('inspect'), verify: () => execute('verify'), snapshot: () => budget.snapshot(),
+    applyRefs: (): ApplyRefProof => applyRefProof ?? fail(),
+    applyIndexHash: (): string => applyIndexHash ?? fail(),
     close: () => { firstProof = undefined; firstCollectionHash = undefined; if (budget.snapshot().phase !== 'complete') budget.abort(); } });
+};
+
+/** New mixed replace/create proof uses the unchanged reader budget and fresh two-pass verification. */
+export const createCompanyGitRangeApplySource = (input: unknown, clock: () => number = () => performance.now()): CompanyGitRangeApplySource => {
+  const { request, selection } = parseApplyRequest(input), source = createSource(request, clock, undefined, selection);
+  const observation = (value: CompanyGitRangeUnitSourceObservation): CompanyGitRangeApplySourceObservation => {
+    const fields = { ...value, version: 'company-git-range-apply-observation-v1' as const,
+      absentPaths: selection.absentPaths, workingIndexHash: source.applyIndexHash(), ...source.applyRefs() };
+    return Object.freeze({ ...fields, proofHash: digest(Object.fromEntries(Object.entries(fields).filter(([key]) => key !== 'proofHash'))) });
+  };
+  return Object.freeze({ inspect: () => observation(source.inspect().observation), verify: () => observation(source.verify().observation),
+    snapshot: source.snapshot, close: source.close });
 };
 
 /** Metadata-only reader entry point; company v3 uses the separate fixed safe-collection entry point below. */

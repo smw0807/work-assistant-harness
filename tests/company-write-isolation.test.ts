@@ -127,7 +127,7 @@ ${kind === 'output' ? "process.stderr.write('X'.repeat(16385));" : ''}setInterva
       const controller = new AbortController(), result = bundle.runner({ repositoryRoot: h.repositoryRoot, readPaths: [], writePaths: [marker],
         input: '{}', signal: controller.signal });
       const assertion = assert.rejects(result, { code: kind === 'output' ? 'COMPANY_WRITE_WORKER_OUTPUT_LIMIT' : 'COMPANY_WRITE_WORKER_ABORTED' });
-      if (kind === 'cancel') { await waitFor(() => fs.existsSync(marker)); controller.abort(); }
+      if (kind === 'cancel') { await waitFor(() => { try { return fs.readFileSync(marker, 'utf8') === 'PARTIAL'; } catch { return false; } }); controller.abort(); }
       await assertion; assert.equal(fs.readFileSync(marker, 'utf8'), 'PARTIAL');
     } finally { h.close(); }
   }
@@ -138,16 +138,21 @@ test('parent SIGKILL disconnects guardian and kills a TERM-resistant worker whil
   let parent: ReturnType<typeof spawn> | null = null, exited: Promise<unknown> | null = null;
   try {
     const bundle = await testBundle(h.root, `import fs from 'node:fs';process.on('SIGTERM',()=>{});
-process.stdin.once('data',()=>{fs.writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000);});`);
+process.stdin.once('data',()=>{fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,ready:true}));setInterval(()=>{},1000);});`);
     const script = `import {runIsolatedCompanyWriteWorker as run} from ${JSON.stringify(bundle.url)};
 await run(${JSON.stringify({ repositoryRoot: h.repositoryRoot, readPaths: [], writePaths: [marker], input: '{}' })});`;
     parent = spawn(process.execPath, ['--input-type=module', '-e', script], { cwd: dirname(h.repositoryRoot),
       env: { LANG: 'C.UTF-8', TZ: 'UTC', NODE_NO_WARNINGS: '1' }, stdio: 'ignore' });
     exited = new Promise(resolve => parent!.once('close', resolve));
-    await waitFor(() => fs.existsSync(marker)); const pid = Number(fs.readFileSync(marker, 'utf8'));
+    let pid = 0;
+    await waitFor(() => {
+      try { const ready = JSON.parse(fs.readFileSync(marker, 'utf8')) as { pid: number; ready: boolean };
+        if (ready.ready !== true || !Number.isSafeInteger(ready.pid) || ready.pid <= 1) return false;
+        pid = ready.pid; return true; } catch { return false; }
+    });
     assert.ok(Number.isSafeInteger(pid) && pid > 1); parent.kill('SIGKILL'); await exited;
     await waitFor(() => { try { process.kill(pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; } });
-    assert.equal(fs.readFileSync(marker, 'utf8'), String(pid));
+    assert.deepEqual(JSON.parse(fs.readFileSync(marker, 'utf8')), { pid, ready: true });
   } finally { parent?.kill('SIGKILL'); if (exited) await exited; h.close(); }
 });
 
@@ -156,14 +161,14 @@ test('the fixed 30-second watchdog kills a TERM-resistant worker and confirms cl
     const h = fixture(), marker = join(h.repositoryRoot, 'partial');
     try {
       const bundle = await testBundle(h.root, `import fs from 'node:fs';process.on('SIGTERM',()=>{});
-process.stdin.once('data',()=>{fs.writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000);});`);
+process.stdin.once('data',()=>{fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,ready:true}));setInterval(()=>{},1000);});`);
       const start = performance.now();
       await assert.rejects(bundle.runner({ repositoryRoot: h.repositoryRoot, readPaths: [], writePaths: [marker], input: '{}' }),
         { code: 'COMPANY_WRITE_WORKER_TIMEOUT' });
-      const elapsed = performance.now() - start, pid = Number(fs.readFileSync(marker, 'utf8'));
+      const elapsed = performance.now() - start, pid = (JSON.parse(fs.readFileSync(marker, 'utf8')) as { pid: number }).pid;
       assert.ok(elapsed >= companyWriteIsolationLimits.timeoutMs - 100 && elapsed < companyWriteIsolationLimits.timeoutMs + 5000);
       assert.ok(Number.isSafeInteger(pid) && pid > 1);
       assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
-      assert.equal(fs.readFileSync(marker, 'utf8'), String(pid));
+      assert.deepEqual(JSON.parse(fs.readFileSync(marker, 'utf8')), { pid, ready: true });
     } finally { h.close(); }
   });
