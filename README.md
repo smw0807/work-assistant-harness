@@ -851,7 +851,7 @@ factory가 전용 임시 경로에 만든 합성 Git 레포만 사용합니다. 
 
 SQLite에는 본문 없이 계획·파일별 hash·승인·`INTENT/DONE` 진행 기록을 저장합니다. 제안 본문은 호출자가 매번 제공하고 계획 hash와 다시 대조합니다. 적용 결과 `APPLIED`는 파일·브랜치 검증 결과이며 제품 검사 상태는 `not_run`입니다. 부분 실패는 `FAILED`, 결과 기록까지 실패하면 `APPLYING`에 남을 수 있습니다. 자동 재실행·되돌리기·기존 잠금 제거는 하지 않습니다.
 
-현재는 신뢰하는 하네스의 합성 검증용 엔진이며 실제 회사 레포 등록·OS 격리된 적용 worker·제품 검사 실행·모델 연결은 후속 작업입니다. 엔진 검증은 [4-C-31 결과](docs/stage-4c31-result.md), CLI·중단 복구와 보관 범위는 [4-C-32 결과](docs/stage-4c32-result.md)를 따릅니다.
+이 명령은 신뢰하는 하네스의 합성 검증용 엔진입니다. 별도 등록 계약과 OS 격리 worker의 합성 검증은 아래 `company-write-check`로 분리했습니다. 실제 회사 적용·제품 검사 실행·모델 연결은 후속 작업입니다. 엔진 검증은 [4-C-31 결과](docs/stage-4c31-result.md), CLI·중단 복구와 보관 범위는 [4-C-32 결과](docs/stage-4c32-result.md)를 따릅니다.
 
 사용하지 않은 canonical 임시 경로의 private 부모 디렉터리에서 시작합니다. 아래 경로는 예시이며 `init`은 이미 있는 runtime을 덮어쓰지 않습니다.
 
@@ -873,6 +873,25 @@ pnpm harness synthetic-change-recover --task <task-id> --plan-hash <plan-hash> -
 모든 CLI 명령은 runtime 제어 잠금을 사용하므로 실행 중인 적용과 복구가 겹치지 않습니다. 프로세스 종료 시 SQLite 잠금은 해제되지만 남은 workspace/Git 잠금·임시 파일은 자동 삭제하지 않습니다. 기존 승인·원본 baseline을 재사용해 새로운 적용을 시작하지 않으며 다음 합성 실험은 새 runtime으로 구분합니다.
 
 CLI 자식은 최소 환경의 신뢰하는 controller입니다. Node old-space 128MiB, 부모의 30초 종료 요청·250ms 후 강제 종료 요청과 출력 16KiB 한도가 있으나 OS 파일/네트워크 격리나 독립 guardian은 아닙니다. 기존 제한 worker의 권한과 한도는 유지합니다. 오류나 응답 유실 뒤에는 같은 task를 조회하며 자동 재시도하지 않습니다.
+
+## 회사 쓰기 등록 계약과 격리된 합성 검증
+
+회사 레포 위치를 `.env`에 넣을 필요는 없습니다. 읽기 등록과 같은 방식으로 별도 private JSON의 `sourceRoot`에 명시합니다. 새 쓰기 등록 예시는 [company-write-registration.example.json](config/company-write-registration.example.json)입니다. 경로 외에 `repoId`, 기준 브랜치·커밋·index hash, 정확한 `writeAllowedFiles`, 읽기·쓰기 허용 선언을 함께 묶습니다. 예시는 `enabled:false`와 `unconfirmed`가 기본이며 실제 회사 경로를 Git에 기록하지 않습니다. 등록 JSON의 선언 자체가 실행 승인은 아닙니다.
+
+단계 4-C-33의 `company-write-plan-v1`은 등록·제안·선택 원본 identity/hash·새 브랜치·소유자·한도를 결합합니다. 별도 `company-write-approval-v1`은 정확한 계획 hash에만 유효하며 기존 검토 승인이나 `synthetic-apply` 승인을 전환할 수 없습니다. 현재 계약의 범위는 `synthetic-validation`입니다.
+
+아래 명령은 새 합성 레포를 직접 만들고, 그 합성 변경만 승인·소비하여 macOS OS 격리 worker에서 적용합니다. 회사 경로·외부 draft·승인 파일을 받는 옵션은 없습니다. 설치된 pnpm을 그대로 사용합니다.
+
+```sh
+WRITE_CHECK_PARENT="$(mktemp -d /private/tmp/harness-company-write.XXXXXX)"
+pnpm harness company-write-check --data-dir "$WRITE_CHECK_PARENT/run"
+```
+
+원본 합성 레포에서 새 브랜치로 전환한 후 최대 8개 파일을 수정합니다. 파일별 64KiB·선택 파일 총합 128KiB, worker 30초·종료 요청 뒤 250ms 강제 종료 요청, 출력 합계 16KiB·Node old-space 128MiB를 유지합니다. old-space는 프로세스 전체 메모리나 CPU의 강제 상한이 아닙니다. 정확한 대상/임시 파일·필요한 Git metadata·명시한 private 실행 journal/시작 marker만 OS 쓰기 허용 경로에 포함하며 제품 코드 실행·추가 프로그램 실행·네트워크는 열지 않습니다. fsync를 위한 정확한 부모 디렉터리 접근은 이름 열거를 허용할 수 있으나 미선택 파일 본문은 허용하지 않습니다.
+
+private 결과 디렉터리에 `registration.json`, 합성 `draft.json`, 본문 없는 `plan.json`·`approval.json`, `execution/claim.json`·`journal.jsonl`·단건 worker marker와 `result.json`을 보관합니다. 디렉터리는 0700, 파일은 0600이며 자동 만료 삭제는 없습니다. 표준 출력에는 공유 가능한 상태·hash·개수만 표시합니다. 중단 후 소비 marker와 부분 변경을 보존하며 같은 실행을 재개하거나 잠금을 자동 제거하지 않습니다. 불완전 journal은 오류로 남고 성공으로 해석하지 않습니다.
+
+현재는 일반 회사 레포 실행 명령이 없습니다. `packed-refs`가 존재하거나 worktree·submodule·merge/rebase 등이 있는 Git 상태는 거부하며 선택 파일의 tracked/staged 상태나 기준 commit blob과의 일치를 판정하지 않습니다. 실제 회사 적용에는 지원 가능한 Git 상태 확인과 별도의 구체적인 새 적용 승인이 필요합니다. 검증 결과와 한계는 [4-C-33 결과](docs/stage-4c33-result.md)를 따릅니다.
 
 ## 개발 검증
 

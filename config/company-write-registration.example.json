@@ -1,0 +1,12 @@
+{
+  "version": "company-write-registration-v1",
+  "repoId": "synthetic-company-write-example",
+  "sourceRoot": "/private/tmp/company-write-example/repository",
+  "baseBranch": "main",
+  "baseCommit": "1111111111111111111111111111111111111111",
+  "baseIndexHash": "2222222222222222222222222222222222222222222222222222222222222222",
+  "writeAllowedFiles": ["src/value.ts", "tests/value.spec.ts"],
+  "enabled": false,
+  "localRead": "unconfirmed",
+  "localWrite": "unconfirmed"
+}

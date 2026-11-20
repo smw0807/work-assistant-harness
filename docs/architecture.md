@@ -34,6 +34,8 @@
 
 단계 4-C-32의 `synthetic-change-*` CLI는 합성 factory 등록을 프로세스 사이에 보존하고 4-C-31의 계획·새 실행 승인·적용·조회·취소를 연결한다. 모든 명령의 runtime 제어 lease는 SQLite의 프로세스 잠금으로 직렬화한다. 명시적 복구는 남은 브랜치·파일·index를 읽고 소비된 승인과 journal을 보존한 채 `FAILED / INTERRUPTED`로 마무리한다. 재실행·rollback·stale lock 제거는 하지 않는다. 등록 파일은 private 임시 runtime의 합성 fixture만 다시 열며 실제 회사 경로 등록은 없다. 실행 코드의 경계와 검증은 [4-C-32 결과](stage-4c32-result.md)를 따른다.
 
+단계 4-C-33은 별도 회사 쓰기 등록/계획/승인 계약과 원본 선택 파일 adapter, macOS SBPL worker를 추가한다. 경로는 `.env`가 아닌 private 등록 JSON의 `sourceRoot`에 명시하며 실제 filesystem 관찰과 실행 승인은 별도로 검증한다. `company-write-check`는 새 합성 fixture만 생성한다. 부모가 단건 claim을 fsync한 뒤 guardian이 최소 환경으로 OS 격리 worker를 실행하고, worker가 branch/file `INTENT → mutation → DONE`을 순서대로 fsync한다. EOF·취소·시간·출력 한도로 중단하며 부분 변경·소비 marker를 보존한다. 전체 레포를 복사하거나 Git CLI/제품 코드를 실행하지 않는다. 실제 회사 실행 CLI와 제품 검사는 아직 연결하지 않았다. 상세 지원 범위는 [4-C-33 결과](stage-4c33-result.md)를 따른다.
+
 하네스는 모델 주변에서 입력, 문맥, 도구, 승인과 결과 보관을 관리하는 프로그램이다. 모델은 요청을 해석하고 설명이나 계획을 제안한다. 일반 코드와 실행 환경이 접근 가능한 자료와 실행 가능한 동작을 제한한다.
 
 이 프로젝트의 목표는 승인된 Slack 채널에서 **내 사용자 ID를 멘션한 요청**을 모아 관련 코드를 조사하고, 답변 초안이나 수정 계획을 나에게 먼저 보여 주는 것이다. 다른 사람이 수정을 요청했다는 사실만으로 코드가 바뀌지 않는다.

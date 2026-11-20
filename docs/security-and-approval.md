@@ -22,6 +22,10 @@
 
 단계 4-C-32의 합성 CLI는 이전 제한 worker를 변경하지 않고 별도의 최소 환경 trusted controller를 사용한다. 기존 적용 엔진의 fsync와 전체 조상 검사를 수행하며 Node permission mode나 OS 격리 worker로 표현하지 않는다. 합성 등록 경로·파일/명령 allowlist·실행 포트 부재는 신뢰하는 코드로 강제한다. runtime 제어 lease를 가진 CLI만 중단 상태를 관찰·확정하며 live writer의 잠금을 훔치거나 PID만으로 종료를 추정하지 않는다. 등록 receipt의 hash는 변조·위치 변경 검사이며 같은 OS 사용자를 상대로 한 전자서명이 아니다.
 
+단계 4-C-33은 위 CLI를 확장하지 않고 `company-write-*` 새 계약의 격리된 합성 검증을 분리한다. 등록의 원본 경로·허용 파일·기준 상태·권한 선언, 선택 파일 identity/hash, 제안 hash와 소유자·TTL·한도를 결합한다. 새 계약은 `synthetic-validation`이며 실제 회사 적용 승인으로 사용할 수 없다. 별도 claim과 worker marker는 exclusive create·fsync로 단건을 보존하고, JSONL journal에는 본문 없이 각 경계의 hash와 상태를 남긴다. 모든 marker/hash는 로컬 일관성 검사이며 같은 OS 사용자에 대한 서명이나 전역 재생 방지 장치가 아니다.
+
+macOS SBPL은 exact 파일/임시/Git 경로와 명시한 private 실행 journal/시작 marker만 쓰기 허용하고 미선택 본문·합성 credential canary·TCP/Unix·추가 exec를 차단한다. 필요한 디렉터리 fsync 권한은 그 디렉터리의 이름 열거까지 허용할 수 있다. 신뢰하는 하네스와 OS runtime 읽기 범위, 부모 controller의 권한은 worker 격리와 구분한다. guardian은 부모 단절·30초·출력 16KiB·취소 때 TERM 뒤 250ms KILL을 요청하고 close를 관찰한다. worker도 stdin EOF·자체 watchdog을 확인하고 새 mutation 전에 이벤트루프에 양보하지만 이미 시작된 syscall을 되돌리거나 비협조적인 동일 사용자와의 모든 경합을 막는다고 주장하지 않는다. 제품 검사·실제 회사/인증/모델·외부 전송은 이번 합성 명령에 없다.
+
 - **소유자:** 로컬 CLI에서 표시된 계획을 검토하고 실행을 승인하는 사람.
 - **요청자:** Slack에서 문의나 변경 요청을 보낸 사람. 요청은 조사 대상이며 소유자의 실행 승인이 아니다.
 - **모델:** 분류·설명·계획을 제안한다. 권한을 만들거나 변경하지 못한다.
