@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=26.12.1 <27" },
+  "engines": {
+    "node": ">=26.12.1 <27"
+  },
   "scripts": {
     "build": "tsc",
+    "start": "pnpm harness slack-listen --env-file /Users/songmin-u/.config/work-assistant-harness/slack.env --data-dir /Users/songmin-u/.config/work-assistant-harness/slack-data",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests",
     "test": "tsc && node --test dist/tests/*.test.js",
