@@ -69,7 +69,7 @@ test('synthetic apply ledger persists metadata only in a separate private FULL-s
     } finally { database.close(); }
     h.reopen(); assert.deepEqual(h.store.inspect(h.id, h.context), snapshot);
     snapshot.plan.changes[0]!.path = 'changed.ts'; assert.deepEqual(h.store.inspect(h.id, h.context).plan, h.plan);
-    for (const method of ['prune', 'recover', 'run', 'apply', 'transmit']) assert.equal(method in h.store, false);
+    for (const method of ['prune', 'run', 'apply', 'transmit']) assert.equal(method in h.store, false);
   } finally { h.close(); }
 });
 
@@ -405,4 +405,84 @@ test('a copied valid database cannot move its location binding, and closed insta
     assert.throws(() => h.store.record(h.id, { kind: 'branch', path: null, state: 'INTENT' }, h.context), { code: 'SYNTHETIC_COMPANY_CHANGE_STORE_CLOSED' });
     h.reopen(); assert.equal(h.store.inspect(h.id, h.context).status, 'APPLYING');
   } finally { h.close(); destination.close(); }
+});
+
+test('metadata recovery marks both partial and complete interrupted journals FAILED without restoring approval', () => {
+  for (const complete of [false, true]) {
+    const h = setup();
+    try {
+      prepare(h); h.store.claim(h.request(), h.context);
+      if (complete) completeJournal(h); else h.store.record(h.id, { kind: 'branch', path: null, state: 'INTENT' }, h.context);
+      const interrupted = h.store.inspect(h.id, h.context), lock = join(h.directory, 'workspace.lock');
+      fs.writeFileSync(lock, 'SYNTHETIC_STALE_LOCK_DO_NOT_REMOVE', { mode: 0o600 }); const lockBefore = preserved(lock);
+      h.reopen(); const later = h.at(Date.parse(h.plan.expiresAt) + 1000);
+      const recovered = h.store.recover(h.request(), later);
+      assert.equal(recovered.status, 'FAILED'); assert.equal(recovered.failureCode, 'SYNTHETIC_COMPANY_CHANGE_INTERRUPTED');
+      assert.deepEqual(recovered.plan, interrupted.plan); assert.deepEqual(recovered.approval, interrupted.approval);
+      assert.deepEqual(recovered.journal, interrupted.journal); assert.equal(recovered.updatedAt, later.now.toISOString());
+      assert.deepEqual(preserved(lock), lockBefore);
+      assert.deepEqual(h.store.recover(h.request(), later), recovered); h.reopen();
+      assert.deepEqual(h.store.inspect(h.id, later), recovered); assert.deepEqual(h.store.recover(h.request(), later), recovered);
+      assert.throws(() => h.store.claim(h.request(), later), { code: 'SYNTHETIC_COMPANY_CHANGE_APPROVAL_UNAVAILABLE' });
+      assert.throws(() => h.store.record(h.id, { kind: 'branch', path: null, state: 'DONE' }, later), { code: 'SYNTHETIC_COMPANY_CHANGE_CLAIM_NOT_OWNED' });
+      assert.throws(() => h.store.finish(h.id, 'APPLIED', null, later), { code: 'SYNTHETIC_COMPANY_CHANGE_CLAIM_NOT_OWNED' });
+    } finally { h.close(); }
+  }
+});
+
+test('recovery cannot take an active claim from its live controller instance', () => {
+  const h = setup();
+  try {
+    prepare(h); h.store.claim(h.request(), h.context); const before = preserved(h.file);
+    assert.throws(() => h.store.recover(h.request(), h.context), { code: 'SYNTHETIC_COMPANY_CHANGE_CLAIM_STILL_ACTIVE' });
+    assert.deepEqual(preserved(h.file), before);
+    assert.equal(h.store.record(h.id, { kind: 'branch', path: null, state: 'INTENT' }, h.context).status, 'APPLYING');
+  } finally { h.close(); }
+});
+
+test('recovery refuses noninterrupted states instead of inventing consumption or replacing terminal evidence', () => {
+  for (const state of ['AWAITING_APPROVAL', 'APPROVED', 'CANCELLED', 'EXPIRED', 'APPLIED', 'FAILED'] as const) {
+    const h = setup();
+    try {
+      h.store.create(h.plan, h.context); let now = h.context;
+      if (['APPROVED', 'APPLIED', 'FAILED'].includes(state)) h.store.approve(h.approval(), h.context);
+      if (['APPLIED', 'FAILED'].includes(state)) h.store.claim(h.request(), h.context);
+      if (state === 'APPLIED') { completeJournal(h); h.store.finish(h.id, 'APPLIED', null, h.context); }
+      if (state === 'FAILED') h.store.finish(h.id, 'FAILED', 'SYNTHETIC_COMPANY_CHANGE_APPLY_FAILED', h.context);
+      if (state === 'CANCELLED') h.store.cancel(h.id, h.context);
+      if (state === 'EXPIRED') { now = h.at(h.plan.expiresAt); h.store.inspect(h.id, now); }
+      h.reopen(); const before = preserved(h.file), snapshot = h.store.inspect(h.id, now);
+      assert.throws(() => h.store.recover(h.request(), now), { code: 'SYNTHETIC_COMPANY_CHANGE_RECOVERY_UNAVAILABLE' });
+      assert.deepEqual(preserved(h.file), before); assert.deepEqual(h.store.inspect(h.id, now), snapshot);
+    } finally { h.close(); }
+  }
+});
+
+test('recovery validates owner, exact plan, request namespace and monotonic time before changing evidence', () => {
+  const h = setup();
+  try {
+    prepare(h); h.store.claim(h.request(), h.context); h.reopen(); const before = preserved(h.file);
+    assert.throws(() => h.store.recover(h.request(), { ...h.context, ownerId: 'os-user:999999999' }), { code: 'SYNTHETIC_COMPANY_CHANGE_OWNER_MISMATCH' });
+    assert.throws(() => h.store.recover({ ...h.request(), planHash: '0'.repeat(64) }, h.context), { code: 'SYNTHETIC_COMPANY_CHANGE_PLAN_MISMATCH' });
+    assert.throws(() => h.store.recover({ ...h.request(), scope: 'review-only' } as ReturnType<typeof h.request>, h.context), { code: 'SYNTHETIC_COMPANY_CHANGE_INVALID_REQUEST' });
+    assert.throws(() => h.store.recover(h.request(), h.at(h.context.now.getTime() - 1)), { code: 'SYNTHETIC_COMPANY_CHANGE_TIME_REVERSED' });
+    assert.deepEqual(preserved(h.file), before); assert.equal(h.store.inspect(h.id, h.context).status, 'APPLYING');
+  } finally { h.close(); }
+});
+
+test('a recovery persistence failure preserves APPLYING, exact journal and used approval for a later explicit recovery', context => {
+  const h = setup();
+  try {
+    prepare(h); h.store.claim(h.request(), h.context); h.store.record(h.id, { kind: 'branch', path: null, state: 'INTENT' }, h.context);
+    const prior = h.store.inspect(h.id, h.context); h.reopen(); const before = preserved(h.file), original = DatabaseSync.prototype.exec;
+    const mock = context.mock.method(DatabaseSync.prototype, 'exec', function (this: DatabaseSync, sql: string) {
+      if (sql === 'COMMIT') throw new Error('SYNTHETIC_RECOVERY_COMMIT_FAILURE'); return original.call(this, sql);
+    });
+    try { assert.throws(() => h.store.recover(h.request(), h.context), { code: 'SYNTHETIC_COMPANY_CHANGE_INVALID_RECORD' }); }
+    finally { mock.mock.restore(); }
+    assert.deepEqual(preserved(h.file), before); h.reopen(); assert.deepEqual(h.store.inspect(h.id, h.context), prior);
+    const recovered = h.store.recover(h.request(), h.context);
+    assert.equal(recovered.failureCode, 'SYNTHETIC_COMPANY_CHANGE_INTERRUPTED'); assert.deepEqual(recovered.journal, prior.journal);
+    assert.deepEqual(recovered.approval, prior.approval);
+  } finally { h.close(); }
 });

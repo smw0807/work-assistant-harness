@@ -7,7 +7,7 @@ import type { SyntheticCompanyChangeApproval, SyntheticCompanyChangeApprovalRequ
   SyntheticCompanyChangeSnapshot, SyntheticCompanyChangeStatus } from '../domain/synthetic-company-change.js';
 import { HarnessError } from '../domain/errors.js';
 import type { ReadonlyContext } from '../domain/readonly-investigation.js';
-import type { SyntheticCompanyChangeStore } from '../ports/synthetic-company-change.js';
+import type { RecoverableSyntheticCompanyChangeStore } from '../ports/synthetic-company-change.js';
 import { assertSyntheticCompanyChangeApproval, assertSyntheticCompanyChangeApprovalRequest,
   assertSyntheticCompanyChangeContext, assertSyntheticCompanyChangePlan, assertSyntheticCompanyChangeRequest,
   copySyntheticCompanyChangeData, getSyntheticCompanyChangeLimits, hashSyntheticCompanyChangeValue } from '../policy/synthetic-company-change.js';
@@ -61,7 +61,7 @@ const recordHash = (record: RecordState): string => hashSyntheticCompanyChangeVa
 const started = (status: SyntheticCompanyChangeStatus): boolean => ['APPLYING', 'APPLIED', 'FAILED'].includes(status);
 
 /** A metadata-only ledger consumes synthetic approval once and durably records each write boundary. */
-export class SqliteSyntheticCompanyChangeStore implements SyntheticCompanyChangeStore {
+export class SqliteSyntheticCompanyChangeStore implements RecoverableSyntheticCompanyChangeStore {
   private readonly database: DatabaseSync;
   private readonly parents: { path: string; metadata: Stats }[] = [];
   private readonly sidecars = new Map<string, Stats>();
@@ -210,6 +210,21 @@ export class SqliteSyntheticCompanyChangeStore implements SyntheticCompanyChange
       }
       return this.snapshot(record);
     });
+  }
+
+  /** The runtime control lease excludes live controllers; recovery never resumes file or Git writes. */
+  recover(request: SyntheticCompanyChangeRequest, context: ReadonlyContext): SyntheticCompanyChangeSnapshot {
+    try {
+      assertSyntheticCompanyChangeRequest(request);
+      return this.operation(request.taskId, context, (record, now) => {
+        this.assertPlanHash(record, request.planHash);
+        if (this.activeClaims.has(request.taskId)) fail('CLAIM_STILL_ACTIVE');
+        if (record.status === 'FAILED' && record.failureCode === 'SYNTHETIC_COMPANY_CHANGE_INTERRUPTED') return this.snapshot(record);
+        if (record.status !== 'APPLYING' || !record.approval?.usedAt) fail('RECOVERY_UNAVAILABLE');
+        record.status = 'FAILED'; record.failureCode = 'SYNTHETIC_COMPANY_CHANGE_INTERRUPTED'; record.updatedAt = now;
+        this.writeRecord(record); return this.snapshot(record);
+      });
+    } catch (error) { throw safeError(error); }
   }
 
   close(): void {

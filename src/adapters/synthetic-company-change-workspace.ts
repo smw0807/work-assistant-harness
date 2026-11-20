@@ -1,15 +1,17 @@
 import fs, { constants, type Stats } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import git from 'isomorphic-git';
 import type { CompanyChangeDraft } from '../domain/company-change.js';
 import type { SyntheticCompanyChangePlan, SyntheticCompanyChangeSource } from '../domain/synthetic-company-change.js';
+import type { SyntheticCompanyChangeObservation } from '../domain/synthetic-company-change-recovery.js';
 import { HarnessError } from '../domain/errors.js';
 import type { SyntheticCompanyChangeWorkspacePort } from '../ports/synthetic-company-change.js';
 import { hashCompanyChangeValue, parseCompanyChangeDraft } from '../policy/company-change.js';
-import { canonicalReadonlyJson } from '../policy/readonly-investigation-policy.js';
-import { assertSyntheticCompanyChangeDraftForPlan, getSyntheticCompanyChangeLimits } from '../policy/synthetic-company-change.js';
+import { canonicalReadonlyJson, readonlyExactKeys } from '../policy/readonly-investigation-policy.js';
+import { parseReadonlyTransportJson } from '../policy/readonly-transport-protocol.js';
+import { assertSyntheticCompanyChangeDraftForPlan, assertSyntheticCompanyChangePlan, getSyntheticCompanyChangeLimits } from '../policy/synthetic-company-change.js';
 
 export const SYNTHETIC_COMPANY_CHANGE_FILES: Readonly<Record<string, string>> = Object.freeze({
   'README.md': '# Synthetic company change repository\n\nNo company data, credentials or executable checks.\n',
@@ -17,6 +19,9 @@ export const SYNTHETIC_COMPANY_CHANGE_FILES: Readonly<Record<string, string>> = 
   'src/options.ts': 'export const options = { enabled: false };\n',
 });
 const author = { name: 'Synthetic Company Change', email: 'change@example.invalid', timestamp: 1704067200, timezoneOffset: 0 };
+const registrationName = 'synthetic-workspace.json';
+const maximumRegistrationBytes = 131_072;
+const factoryName = /^company-change-synthetic-[A-Za-z0-9]{6}$/u;
 const factoryToken = Symbol('synthetic-company-change-factory');
 const fail: (suffix?: string) => never = (suffix = 'UNSAFE_WORKSPACE') => { throw new HarnessError(`SYNTHETIC_COMPANY_CHANGE_${suffix}`); };
 const digest = (value: unknown): string => hashCompanyChangeValue(canonicalReadonlyJson(value));
@@ -60,14 +65,17 @@ const readFile = (path: string, expected: Stats, maximum: number): Buffer => {
 };
 interface Entry { kind: 'directory' | 'file'; metadata: Metadata; hash: string | null }
 interface Tree { entries: Map<string, Entry>; hash: string; bytes: number }
-const scan = (root: string, ignored = new Set<string>()): Tree => {
+const gitResidual = (path: string): boolean => path.startsWith('.git/') && (path.endsWith('.lock')
+  || /(?:^|\/)(?:MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD|rebase-merge|rebase-apply|BISECT_LOG|commondir|gitdir)$/u.test(path));
+const sourceResidual = (path: string): boolean => gitResidual(path) || /(?:^|\/)\.company-change-[A-Za-z0-9-]+\.tmp$/u.test(path);
+const scan = (root: string, ignored = new Set<string>(), recovery = false): Tree => {
   const limits = getSyntheticCompanyChangeLimits(), entries = new Map<string, Entry>(); let bytes = 0, observed = 0;
   const collect = (path: string): void => {
     if (++observed > limits.maxSourceEntries + ignored.size) fail('SOURCE_LIMIT');
     const full = path ? join(root, path) : root, value = fs.lstatSync(full);
     if (value.isSymbolicLink() || value.uid !== process.getuid?.() || fs.realpathSync(full) !== full) fail();
     if (ignored.has(path)) return;
-    if (path.startsWith('.git/') && (path.endsWith('.lock') || /(?:^|\/)(?:MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD|rebase-merge|rebase-apply|BISECT_LOG|commondir|gitdir)$/u.test(path))) fail('GIT_BUSY');
+    if (!recovery && gitResidual(path)) fail('GIT_BUSY');
     if (value.isDirectory()) {
       if ((value.mode & 0o7777) !== 0o700) fail();
       entries.set(path, { kind: 'directory', metadata: metadata(value), hash: null });
@@ -128,6 +136,114 @@ const removeOwn = (file: OwnedFile): void => {
   }
 };
 
+const assertTemporaryParent = (parent: string): Stats => {
+  if (typeof parent !== 'string' || resolve(parent) !== parent || !process.getuid) fail('UNSAFE_PARENT');
+  const roots = [fs.realpathSync(tmpdir()), fs.realpathSync('/private/tmp')];
+  if (!roots.some(root => inside(root, parent))) fail('UNSAFE_PARENT');
+  return directory(parent);
+};
+
+/** Compute the fixed fixture's Git IDs without reading a repository or trusting receipt-supplied IDs. */
+const fixtureGit = (): { commit: string; objects: string[] } => {
+  const objects: string[] = [];
+  const object = (kind: string, body: Buffer): string => {
+    const oid = createHash('sha1').update(`${kind} ${body.length}\0`).update(body).digest('hex');
+    objects.push(oid); return oid;
+  };
+  const blob = (path: string): string => object('blob', Buffer.from(SYNTHETIC_COMPANY_CHANGE_FILES[path]!));
+  const entry = (mode: string, name: string, oid: string): Buffer => Buffer.concat([Buffer.from(`${mode} ${name}\0`), Buffer.from(oid, 'hex')]);
+  const readme = blob('README.md'), message = blob('src/message.ts'), options = blob('src/options.ts');
+  const source = object('tree', Buffer.concat([entry('100644', 'message.ts', message), entry('100644', 'options.ts', options)]));
+  const root = object('tree', Buffer.concat([entry('100644', 'README.md', readme), entry('40000', 'src', source)]));
+  const person = `${author.name} <${author.email}> ${author.timestamp} +0000`;
+  const commit = object('commit', Buffer.from(`tree ${root}\nauthor ${person}\ncommitter ${person}\n\nSynthetic company change baseline\n`));
+  return { commit, objects };
+};
+const fixtureIds = fixtureGit();
+const fixtureDirectories = new Set(['', 'src', '.git', '.git/hooks', '.git/info', '.git/objects', '.git/objects/info',
+  '.git/objects/pack', '.git/refs', '.git/refs/heads', '.git/refs/tags', ...fixtureIds.objects.map(oid => `.git/objects/${oid.slice(0, 2)}`)]);
+const fixtureFiles = new Set([...Object.keys(SYNTHETIC_COMPANY_CHANGE_FILES), '.git/HEAD', '.git/config', '.git/index', '.git/refs/heads/main',
+  ...fixtureIds.objects.map(oid => `.git/objects/${oid.slice(0, 2)}/${oid.slice(2)}`)]);
+interface RegistrationBody {
+  version: 'synthetic-company-change-workspace-v1';
+  ownerId: string;
+  locationHash: string;
+  rootName: string;
+  parentIdentity: Identity;
+  rootIdentity: Identity;
+  repositoryIdentity: Identity;
+  baseCommit: string;
+  baseIndexHash: string;
+  baseline: { entries: Array<[string, Entry]>; hash: string; bytes: number };
+}
+interface Registration extends RegistrationBody { receiptHash: string }
+interface RegistrationGuard { path: string; metadata: Metadata; hash: string }
+const validHash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
+const validIdentity = (value: unknown): value is Identity => {
+  if (!readonlyExactKeys(value, ['dev', 'ino', 'uid', 'gid', 'mode'])) return false;
+  const record = value as Identity;
+  return Object.values(record).every(number => Number.isSafeInteger(number) && number >= 0)
+    && record.uid === process.getuid?.() && record.mode === (constants.S_IFDIR | 0o700);
+};
+const validMetadata = (value: unknown, kind: 'directory' | 'file'): value is Metadata => {
+  if (!readonlyExactKeys(value, ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size', 'mtimeMs', 'ctimeMs'])) return false;
+  const record = value as Metadata;
+  return ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size'].every(key => Number.isSafeInteger(record[key as keyof Metadata]) && record[key as keyof Metadata] >= 0)
+    && Number.isFinite(record.mtimeMs) && record.mtimeMs >= 0 && Number.isFinite(record.ctimeMs) && record.ctimeMs >= 0
+    && record.uid === process.getuid?.() && record.nlink >= 1 && (kind === 'directory' || record.nlink === 1)
+    && record.mode === (kind === 'directory' ? constants.S_IFDIR | 0o700 : constants.S_IFREG | 0o600);
+};
+const parseRegistration = (bytes: Buffer, parent: string): { receipt: Registration; baseline: Tree } => {
+  try {
+    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const raw = parseReadonlyTransportJson(decoded, maximumRegistrationBytes);
+    if (!readonlyExactKeys(raw, ['version', 'ownerId', 'locationHash', 'rootName', 'parentIdentity', 'rootIdentity', 'repositoryIdentity',
+      'baseCommit', 'baseIndexHash', 'baseline', 'receiptHash'])) fail('INVALID_REGISTRATION');
+    const receipt = raw as Registration;
+    if (receipt.version !== 'synthetic-company-change-workspace-v1' || receipt.ownerId !== `os-user:${process.getuid?.()}`
+      || typeof receipt.rootName !== 'string' || !factoryName.test(receipt.rootName)
+      || !validIdentity(receipt.parentIdentity) || !validIdentity(receipt.rootIdentity) || !validIdentity(receipt.repositoryIdentity)
+      || receipt.baseCommit !== fixtureIds.commit || !validHash(receipt.baseIndexHash) || !validHash(receipt.receiptHash)
+      || receipt.locationHash !== digest({ path: parent, identity: receipt.parentIdentity })) fail('INVALID_REGISTRATION');
+    const { receiptHash, ...body } = receipt;
+    if (receiptHash !== digest(body) || !readonlyExactKeys(receipt.baseline, ['entries', 'hash', 'bytes'])) fail('INVALID_REGISTRATION');
+    const rawEntries = receipt.baseline.entries, entries = new Map<string, Entry>(); let total = 0;
+    if (!Array.isArray(rawEntries) || rawEntries.length !== fixtureFiles.size + fixtureDirectories.size
+      || rawEntries.length > getSyntheticCompanyChangeLimits().maxSourceEntries) fail('INVALID_REGISTRATION');
+    for (const pair of rawEntries) {
+      if (!Array.isArray(pair) || pair.length !== 2) fail('INVALID_REGISTRATION');
+      const [path, entry] = pair;
+      if (typeof path !== 'string' || entries.has(path) || !readonlyExactKeys(entry, ['kind', 'metadata', 'hash'])
+        || !['directory', 'file'].includes(entry.kind) || !validMetadata(entry.metadata, entry.kind)
+        || (entry.kind === 'directory' ? !fixtureDirectories.has(path) || entry.hash !== null : !fixtureFiles.has(path) || !validHash(entry.hash))) fail('INVALID_REGISTRATION');
+      if (entry.kind === 'file') total += entry.metadata.size;
+      entries.set(path, entry);
+    }
+    const baseline = { entries, bytes: total, hash: digest([...entries].sort(([left], [right]) => left.localeCompare(right, 'en'))) };
+    if (total > getSyntheticCompanyChangeLimits().maxSourceBytes || total !== receipt.baseline.bytes || baseline.hash !== receipt.baseline.hash
+      || !same(identity(entries.get('')!.metadata), receipt.repositoryIdentity)
+      || entries.get('.git/index')?.hash !== receipt.baseIndexHash
+      || entries.get('.git/HEAD')?.hash !== hashCompanyChangeValue('ref: refs/heads/main\n')
+      || entries.get('.git/refs/heads/main')?.hash !== hashCompanyChangeValue(`${fixtureIds.commit}\n`)) fail('INVALID_REGISTRATION');
+    for (const [path, content] of Object.entries(SYNTHETIC_COMPANY_CHANGE_FILES)) {
+      if (entries.get(path)?.hash !== hashCompanyChangeValue(content) || entries.get(path)?.metadata.size !== Buffer.byteLength(content)) fail('INVALID_REGISTRATION');
+    }
+    return { receipt, baseline };
+  } catch { return fail('INVALID_REGISTRATION'); }
+};
+
+const readRegistration = (path: string): { receipt: Registration; baseline: Tree; guard: RegistrationGuard } => {
+  if (typeof path !== 'string' || resolve(path) !== path || basename(path) !== registrationName) fail('INVALID_REGISTRATION');
+  const parent = dirname(path); assertTemporaryParent(parent);
+  try {
+    const value = fs.lstatSync(path);
+    if ((value.mode & 0o7777) !== 0o600) fail('INVALID_REGISTRATION');
+    const bytes = readFile(path, value, maximumRegistrationBytes), parsed = parseRegistration(bytes, parent);
+    if (!owned(parsed.receipt.parentIdentity, directory(parent))) fail('INVALID_REGISTRATION');
+    return { ...parsed, guard: { path, metadata: metadata(value), hash: hashCompanyChangeValue(bytes) } };
+  } catch { return fail('INVALID_REGISTRATION'); }
+};
+
 /** Instances can only refer to a fresh harness-created fixture, never an arbitrary existing repository. */
 export class SyntheticCompanyChangeWorkspace implements SyntheticCompanyChangeWorkspacePort {
   readonly #root: string;
@@ -140,6 +256,7 @@ export class SyntheticCompanyChangeWorkspace implements SyntheticCompanyChangeWo
   readonly #baseCommit: string;
   readonly #baseIndexHash: string;
   readonly #rootHash: string;
+  #registration: RegistrationGuard | null = null;
   #lease: OwnedFile | null = null;
   #observed: Tree | null = null;
   #expected: Tree | null = null;
@@ -159,10 +276,7 @@ export class SyntheticCompanyChangeWorkspace implements SyntheticCompanyChangeWo
   }
 
   static async create(parent: string): Promise<SyntheticCompanyChangeWorkspace> {
-    if (typeof parent !== 'string' || resolve(parent) !== parent || !process.getuid) fail();
-    const roots = [fs.realpathSync(tmpdir()), fs.realpathSync('/private/tmp')];
-    if (!roots.some(root => inside(root, parent))) fail('UNSAFE_PARENT');
-    const parentMetadata = directory(parent), root = fs.mkdtempSync(join(parent, 'company-change-synthetic-'));
+    const parentMetadata = assertTemporaryParent(parent), root = fs.mkdtempSync(join(parent, 'company-change-synthetic-'));
     fs.chmodSync(root, 0o700);
     const repository = join(root, 'repository'); fs.mkdirSync(repository, { mode: 0o700 });
     fs.mkdirSync(join(repository, 'src'), { mode: 0o700 });
@@ -179,14 +293,88 @@ export class SyntheticCompanyChangeWorkspace implements SyntheticCompanyChangeWo
     normalize(repository);
     if (!same(identity(parentMetadata), identity(directory(parent)))) fail('SOURCE_CHANGED');
     const baseline = scan(repository);
-    if (baseline.entries.get('.git/HEAD')?.hash !== hashCompanyChangeValue('ref: refs/heads/main\n')
+    if (commit !== fixtureIds.commit || baseline.entries.get('.git/HEAD')?.hash !== hashCompanyChangeValue('ref: refs/heads/main\n')
       || baseline.entries.get('.git/refs/heads/main')?.hash !== hashCompanyChangeValue(`${commit}\n`)) fail();
     return new SyntheticCompanyChangeWorkspace(factoryToken, parent, root, repository, commit, baseline);
+  }
+
+  static async open(registrationFile: string): Promise<SyntheticCompanyChangeWorkspace> {
+    const { receipt, baseline, guard } = readRegistration(registrationFile), parent = dirname(registrationFile);
+    const root = join(parent, receipt.rootName), repository = join(root, 'repository');
+    if (!owned(receipt.rootIdentity, directory(root)) || !owned(receipt.repositoryIdentity, directory(repository))) fail('INVALID_REGISTRATION');
+    const workspace = new SyntheticCompanyChangeWorkspace(factoryToken, parent, root, repository, receipt.baseCommit, baseline);
+    workspace.#registration = guard; workspace.assertRoots();
+    return workspace;
+  }
+
+  /** The registration contains factory-created identities and hashes; callers cannot supply a repository root. */
+  register(registrationFile: string): void {
+    if (registrationFile !== join(this.#parent, registrationName) || !factoryName.test(basename(this.#root))
+      || this.#registration || this.#lease || this.#branchCreated || this.#observed) fail('INVALID_REGISTRATION');
+    this.assertRoots(); sameTree(this.#gitBaseline, scan(this.#repository));
+    const body: RegistrationBody = { version: 'synthetic-company-change-workspace-v1', ownerId: `os-user:${process.getuid?.()}`,
+      locationHash: digest({ path: this.#parent, identity: this.#parentIdentity }), rootName: basename(this.#root),
+      parentIdentity: this.#parentIdentity, rootIdentity: this.#rootIdentity, repositoryIdentity: this.#repositoryIdentity,
+      baseCommit: this.#baseCommit, baseIndexHash: this.#baseIndexHash,
+      baseline: { entries: [...this.#gitBaseline.entries], hash: this.#gitBaseline.hash, bytes: this.#gitBaseline.bytes } };
+    const bytes = Buffer.from(`${canonicalReadonlyJson({ ...body, receiptHash: digest(body) })}\n`);
+    if (bytes.length > maximumRegistrationBytes) fail('INVALID_REGISTRATION');
+    parseRegistration(bytes, this.#parent);
+    const file = exclusiveFile(registrationFile); let complete = false;
+    try {
+      writeAll(file.descriptor, bytes); fs.fsyncSync(file.descriptor); syncDirectory(this.#parent);
+      this.assertRoots(); sameTree(this.#gitBaseline, scan(this.#repository));
+      const value = fs.fstatSync(file.descriptor);
+      if (!owned(file.identity, value) || !same(metadata(value), metadata(fs.lstatSync(registrationFile)))) fail('INVALID_REGISTRATION');
+      this.#registration = { path: registrationFile, metadata: metadata(value), hash: hashCompanyChangeValue(bytes) };
+      complete = true;
+    } finally {
+      try { if (!complete) removeOwn(file); } finally { fs.closeSync(file.descriptor); }
+    }
   }
 
   get repositoryRoot(): string { return this.#repository; }
   get baseCommit(): string { return this.#baseCommit; }
   get baseIndexHash(): string { return this.#baseIndexHash; }
+
+  /** Read-only recovery deliberately does not acquire, remove or adopt a possibly stale workspace lock. */
+  async observeRecovery(plan: SyntheticCompanyChangePlan): Promise<SyntheticCompanyChangeObservation> {
+    assertSyntheticCompanyChangePlan(plan);
+    if (plan.source.repositoryId !== 'synthetic-company-change' || plan.source.rootHash !== this.#rootHash
+      || plan.source.baseCommit !== this.#baseCommit || plan.source.baseBranch !== 'main'
+      || plan.source.indexHash !== this.#baseIndexHash || plan.branch.split('/').length !== 2) fail('SOURCE_CHANGED');
+    const incomplete = (): SyntheticCompanyChangeObservation => ({ version: 'synthetic-company-change-observation-v1',
+      taskId: plan.id, planHash: plan.planHash, branch: 'unknown',
+      files: plan.changes.map(change => ({ path: change.path, state: 'unsafe', hash: null })),
+      indexPreserved: null, basePreserved: null, residuals: null, complete: false });
+    try {
+      this.assertRoots();
+      const lockPath = join(this.#root, 'workspace.lock');
+      const lock = exists(lockPath) ? fs.lstatSync(lockPath) : null;
+      if (lock && (!lock.isFile() || lock.isSymbolicLink() || lock.nlink !== 1 || lock.uid !== process.getuid?.()
+        || (lock.mode & 0o7777) !== 0o600)) return incomplete();
+      const tree = scan(this.#repository, new Set(), true);
+      const indexPreserved = tree.entries.get('.git/index')?.hash === this.#baseIndexHash;
+      const basePreserved = tree.entries.get('.git/refs/heads/main')?.hash === hashCompanyChangeValue(`${this.#baseCommit}\n`);
+      const head = tree.entries.get('.git/HEAD')?.hash;
+      const branch = head === hashCompanyChangeValue('ref: refs/heads/main\n') && basePreserved ? 'base'
+        : head === hashCompanyChangeValue(`ref: refs/heads/${plan.branch}\n`)
+          && tree.entries.get(`.git/refs/heads/${plan.branch}`)?.hash === hashCompanyChangeValue(`${this.#baseCommit}\n`) ? 'target' : 'other';
+      const files: SyntheticCompanyChangeObservation['files'] = [];
+      for (const change of plan.changes) {
+        const entry = tree.entries.get(change.path);
+        if (entry && entry.kind !== 'file') return incomplete();
+        const hash = entry?.hash ?? null;
+        files.push({ path: change.path, hash, state: !entry ? 'absent' : hash === change.afterHash ? 'after'
+          : hash === change.beforeHash ? 'before' : 'other' });
+      }
+      this.assertRoots();
+      if (lock ? !exists(lockPath) || !same(metadata(lock), metadata(fs.lstatSync(lockPath))) : exists(lockPath)) return incomplete();
+      return { version: 'synthetic-company-change-observation-v1', taskId: plan.id, planHash: plan.planHash,
+        branch, files, indexPreserved, basePreserved,
+        residuals: [...tree.entries.keys()].filter(sourceResidual).length + (lock ? 1 : 0), complete: true };
+    } catch { return incomplete(); }
+  }
 
   async acquire(): Promise<{ release(): Promise<void> }> {
     this.assertRoots();
@@ -332,6 +520,11 @@ export class SyntheticCompanyChangeWorkspace implements SyntheticCompanyChangeWo
   }
 
   private assertRoots(): void {
+    if (this.#registration) {
+      const value = fs.lstatSync(this.#registration.path);
+      if (!same(this.#registration.metadata, metadata(value))
+        || hashCompanyChangeValue(readFile(this.#registration.path, value, maximumRegistrationBytes)) !== this.#registration.hash) fail('INVALID_REGISTRATION');
+    }
     if (!owned(this.#parentIdentity, directory(this.#parent)) || !owned(this.#rootIdentity, directory(this.#root))
       || !owned(this.#repositoryIdentity, directory(this.#repository))) fail('SOURCE_CHANGED');
   }
@@ -366,3 +559,6 @@ export class SyntheticCompanyChangeWorkspace implements SyntheticCompanyChangeWo
 
 export const createSyntheticCompanyChangeWorkspace = (parent: string): Promise<SyntheticCompanyChangeWorkspace> =>
   SyntheticCompanyChangeWorkspace.create(parent);
+
+export const openSyntheticCompanyChangeWorkspace = (registrationFile: string): Promise<SyntheticCompanyChangeWorkspace> =>
+  SyntheticCompanyChangeWorkspace.open(registrationFile);

@@ -19,6 +19,11 @@ export interface SyntheticCompanyChangeStore {
   close(): void;
 }
 
+/** Recovery is metadata-only and requires the caller to hold the runtime control lease. */
+export interface RecoverableSyntheticCompanyChangeStore extends SyntheticCompanyChangeStore {
+  recover(request: SyntheticCompanyChangeRequest, context: ReadonlyContext): SyntheticCompanyChangeSnapshot;
+}
+
 export interface SyntheticCompanyChangeWorkspacePort {
   observe(draft: CompanyChangeDraft): Promise<SyntheticCompanyChangeSource>;
   acquire(): Promise<{ release(): Promise<void> }>;

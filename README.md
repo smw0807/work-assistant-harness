@@ -845,13 +845,34 @@ pnpm harness slack-list --config /absolute/path/to/approved-slack.json --data-di
 
 ## 합성 레포의 다중 파일 적용 엔진
 
-단계 4-C-31은 `SyntheticCompanyChangeService`와 별도 SQLite 저장소·합성 workspace 어댑터를 제공하는 개발 API입니다. 새 CLI 명령은 아직 없으며 기존 `company-change-*`의 검토 전용 승인으로 실행할 수 없습니다.
+단계 4-C-31의 `SyntheticCompanyChangeService`와 별도 SQLite 저장소·합성 workspace 어댑터를 단계 4-C-32의 `synthetic-change-*` CLI에 연결했습니다. 기존 `company-change-*`의 검토 전용 승인으로 실행할 수 없습니다.
 
 factory가 전용 임시 경로에 만든 합성 Git 레포만 사용합니다. `prepare → approve → apply`에서 실제 관찰한 원본 상태와 제안 본문 hash를 재검증하고, 별도 `synthetic-apply` 승인을 한 번 소비합니다. 원본 레포에서 새 브랜치로 전환한 뒤 승인한 여러 파일을 `replace/create`합니다. 사본이나 worktree를 만들지 않으며 기존 브랜치·index·비선택 파일을 보존합니다.
 
 SQLite에는 본문 없이 계획·파일별 hash·승인·`INTENT/DONE` 진행 기록을 저장합니다. 제안 본문은 호출자가 매번 제공하고 계획 hash와 다시 대조합니다. 적용 결과 `APPLIED`는 파일·브랜치 검증 결과이며 제품 검사 상태는 `not_run`입니다. 부분 실패는 `FAILED`, 결과 기록까지 실패하면 `APPLYING`에 남을 수 있습니다. 자동 재실행·되돌리기·기존 잠금 제거는 하지 않습니다.
 
-현재는 신뢰하는 하네스의 합성 검증용 엔진이며 실제 회사 레포 등록·OS 격리된 적용 worker·중단 복구 CLI·제품 검사 실행·모델 연결은 후속 작업입니다. 검증 결과와 보관 범위는 [4-C-31 결과](docs/stage-4c31-result.md)를 따릅니다.
+현재는 신뢰하는 하네스의 합성 검증용 엔진이며 실제 회사 레포 등록·OS 격리된 적용 worker·제품 검사 실행·모델 연결은 후속 작업입니다. 엔진 검증은 [4-C-31 결과](docs/stage-4c31-result.md), CLI·중단 복구와 보관 범위는 [4-C-32 결과](docs/stage-4c32-result.md)를 따릅니다.
+
+사용하지 않은 canonical 임시 경로의 private 부모 디렉터리에서 시작합니다. 아래 경로는 예시이며 `init`은 이미 있는 runtime을 덮어쓰지 않습니다.
+
+```sh
+mkdir -m 700 /private/tmp/harness-synthetic-session
+pnpm harness synthetic-change-init --data-dir /private/tmp/harness-synthetic-session/run
+pnpm harness synthetic-change-plan --draft /private/tmp/harness-synthetic-session/run/example-draft.json --data-dir /private/tmp/harness-synthetic-session/run
+pnpm harness synthetic-change-inspect --task <task-id> --data-dir /private/tmp/harness-synthetic-session/run
+pnpm harness synthetic-change-approve --task <task-id> --plan-hash <plan-hash> --expires-in-minutes 10 --draft /private/tmp/harness-synthetic-session/run/example-draft.json --data-dir /private/tmp/harness-synthetic-session/run
+pnpm harness synthetic-change-apply --task <task-id> --plan-hash <plan-hash> --draft /private/tmp/harness-synthetic-session/run/example-draft.json --data-dir /private/tmp/harness-synthetic-session/run
+pnpm harness synthetic-change-cancel --task <task-id> --data-dir /private/tmp/harness-synthetic-session/run
+pnpm harness synthetic-change-recover --task <task-id> --plan-hash <plan-hash> --data-dir /private/tmp/harness-synthetic-session/run
+```
+
+`init`은 합성 레포·위치/identity에 묶인 등록 파일·고정 합성 `example-draft.json`을 만듭니다. `plan`의 task ID와 계획 hash를 다음 명령에 사용합니다. 승인 전에 명시한 draft와 `inspect`가 저장하는 `reports/<task-id>.json`을 로컬에서 검토합니다. 별도 draft도 허용된 임시 위치의 private JSON 파일만 받을 수 있으며 승인·적용 때 같은 본문을 다시 제공해야 합니다. 표준 출력에는 본문 대신 상태·hash·개수를 표시합니다.
+
+`cancel`은 적용 전 작업에 사용합니다. `recover`는 중단된 `APPLYING`의 잔여 파일을 읽고 `FAILED / SYNTHETIC_COMPANY_CHANGE_INTERRUPTED`로 기록합니다. 파일이 모두 적용되어 있어도 중단 복구를 `APPLIED`로 승격하지 않습니다. 이미 `APPLIED`가 저장됐다면 `inspect`로 확인하고 다시 적용하지 않습니다. 복구 관찰의 `complete:true`는 안전하게 관찰을 마쳤다는 뜻이며 적용 성공을 뜻하지 않습니다. unsafe 경로·변조·한도 문제로 관찰하지 못하면 `complete:false`와 미확인 상태를 남깁니다.
+
+모든 CLI 명령은 runtime 제어 잠금을 사용하므로 실행 중인 적용과 복구가 겹치지 않습니다. 프로세스 종료 시 SQLite 잠금은 해제되지만 남은 workspace/Git 잠금·임시 파일은 자동 삭제하지 않습니다. 기존 승인·원본 baseline을 재사용해 새로운 적용을 시작하지 않으며 다음 합성 실험은 새 runtime으로 구분합니다.
+
+CLI 자식은 최소 환경의 신뢰하는 controller입니다. Node old-space 128MiB, 부모의 30초 종료 요청·250ms 후 강제 종료 요청과 출력 16KiB 한도가 있으나 OS 파일/네트워크 격리나 독립 guardian은 아닙니다. 기존 제한 worker의 권한과 한도는 유지합니다. 오류나 응답 유실 뒤에는 같은 task를 조회하며 자동 재시도하지 않습니다.
 
 ## 개발 검증
 
