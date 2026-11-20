@@ -843,6 +843,16 @@ pnpm harness slack-list --config /absolute/path/to/approved-slack.json --data-di
 
 본문과 스레드는 비밀 패턴, 지원 이메일·국내 휴대전화 패턴을 마스킹한 뒤 보관합니다. 보관 기간은 1~168시간이며 예시는 24시간입니다. 명령 시작·수신·처리 시점과 실수신 중 매분 만료 본문을 제거합니다. 중지된 앱의 DB는 다음 실행 전까지 남습니다. 최소 event ID·메시지 revision·삭제 marker는 오래된 이벤트의 부활을 막기 위해 DB 수명 동안 남고 저장량이 늘어날 수 있습니다. 삭제는 백업·로그·파일시스템의 물리적 완전 삭제를 보장하지 않습니다. 모든 개인정보·비밀 형식을 판별하는 기능도 아닙니다.
 
+## 합성 레포의 다중 파일 적용 엔진
+
+단계 4-C-31은 `SyntheticCompanyChangeService`와 별도 SQLite 저장소·합성 workspace 어댑터를 제공하는 개발 API입니다. 새 CLI 명령은 아직 없으며 기존 `company-change-*`의 검토 전용 승인으로 실행할 수 없습니다.
+
+factory가 전용 임시 경로에 만든 합성 Git 레포만 사용합니다. `prepare → approve → apply`에서 실제 관찰한 원본 상태와 제안 본문 hash를 재검증하고, 별도 `synthetic-apply` 승인을 한 번 소비합니다. 원본 레포에서 새 브랜치로 전환한 뒤 승인한 여러 파일을 `replace/create`합니다. 사본이나 worktree를 만들지 않으며 기존 브랜치·index·비선택 파일을 보존합니다.
+
+SQLite에는 본문 없이 계획·파일별 hash·승인·`INTENT/DONE` 진행 기록을 저장합니다. 제안 본문은 호출자가 매번 제공하고 계획 hash와 다시 대조합니다. 적용 결과 `APPLIED`는 파일·브랜치 검증 결과이며 제품 검사 상태는 `not_run`입니다. 부분 실패는 `FAILED`, 결과 기록까지 실패하면 `APPLYING`에 남을 수 있습니다. 자동 재실행·되돌리기·기존 잠금 제거는 하지 않습니다.
+
+현재는 신뢰하는 하네스의 합성 검증용 엔진이며 실제 회사 레포 등록·OS 격리된 적용 worker·중단 복구 CLI·제품 검사 실행·모델 연결은 후속 작업입니다. 검증 결과와 보관 범위는 [4-C-31 결과](docs/stage-4c31-result.md)를 따릅니다.
+
 ## 개발 검증
 
 ```sh
