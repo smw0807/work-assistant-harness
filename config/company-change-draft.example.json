@@ -1,0 +1,25 @@
+{
+  "version": "company-change-draft-v1",
+  "repoId": "synthetic-company-example",
+  "requestRevision": 1,
+  "objective": "Update a synthetic message and add a synthetic note.",
+  "baseCommit": "1111111111111111111111111111111111111111",
+  "baseBranch": "main",
+  "baseIndexHash": "2222222222222222222222222222222222222222222222222222222222222222",
+  "workType": "fix",
+  "branch": "fix/update-message",
+  "changes": [
+    {
+      "operation": "replace",
+      "path": "src/message.ts",
+      "beforeHash": "c2c25800099e6d67b60e0b2aadc85a98251b8bf850178cd152622884163330d9",
+      "content": "export const message = \"after\";\n"
+    },
+    {
+      "operation": "create",
+      "path": "src/note.ts",
+      "beforeHash": null,
+      "content": "export const note = \"synthetic example\";\n"
+    }
+  ]
+}

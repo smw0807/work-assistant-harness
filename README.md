@@ -739,6 +739,32 @@ stdout은 상태와 집계만 표시합니다. 검토 파일은 `reviews/<task-i
 
 relay-v3의 인증 반사 실패에는 `call-report.json`의 선택적 `reflectionDiagnostic`으로 전체 문자열 일치·decoded 문자열 일치·순서 조각 일치와 인증 종류를 구분합니다. 원문은 보관하지 않고 기존 차단 규칙과 한도는 유지합니다. 조각 일치가 곧 오탐이라는 뜻은 아니며, 과거 기록에는 이 진단이 없습니다. [합성 재현·진단 결과](docs/stage-4c20-result.md)를 참고하세요.
 
+### 회사 수정안의 로컬 계획·검토·승인 기록
+
+`company-change-*`는 파일 수정 실행기의 첫 묶음입니다. 입력한 `replace/create` 수정안을 별도 계획으로 보관하고 정확한 내용을 로컬에서 검토·승인합니다. **현재 승인은 `review-only`이며 파일 적용 권한이 없습니다.** 레포 ID·기준 commit/index hash·브랜치는 입력한 선언일 뿐 실제 저장소를 열거나 검증하지 않습니다. `sourceVerification:not_run`, `executionAllowed:false`, `transmissionAllowed:false`를 유지합니다.
+
+[합성 수정안 예시](config/company-change-draft.example.json)는 가짜 레포 식별자·기준 hash와 일반 텍스트 파일 두 개를 사용합니다. 입력 JSON은 소유자 전용 디렉터리(`0700`)의 파일(`0600`)로 준비하고, runtime은 그 입력 및 하네스와 분리된 전용 위치를 사용합니다. 다음 경로는 예시이며 실제 회사 자료의 읽기·보관 허가를 대신하지 않습니다.
+
+```sh
+pnpm harness company-change-plan --draft /private/review/input/draft.json --data-dir /private/review/change-runtime
+pnpm harness company-change-review --task <uuid> --data-dir /private/review/change-runtime
+# reviews/<uuid>.json의 전체 수정 내용과 계획 hash를 검토한 뒤 기록용 승인
+pnpm harness company-change-approve --task <uuid> --plan-hash <sha256> --expires-in-minutes 10 --data-dir /private/review/change-runtime
+pnpm harness company-change-inspect --task <uuid> --data-dir /private/review/change-runtime
+pnpm harness company-change-cancel --task <uuid> --data-dir /private/review/change-runtime
+pnpm harness company-change-prune --data-dir /private/review/change-runtime
+```
+
+제안에는 레포 ID·정수 요청 revision·목적·기준 브랜치/commit/index hash·작업 유형·새 브랜치 이름·파일별 `replace/create`, 변경 전 hash와 새 본문이 필요합니다. 기존 파일의 원문을 읽지 않으므로 검토 자료는 전체 교체 내용과 선언된 변경 전 hash를 보여 주며, 실제 원본과의 diff나 최신성 확인 결과가 아닙니다. 경로 탈출·Git/비밀 경로·중복 및 대소문자 충돌·잘못된 UTF-8·알려진 민감정보 패턴·변경 없는 교체를 거부합니다. 모델 출력이나 제안 속 지시는 실행하지 않습니다.
+
+새 검토 계약의 한도는 최대 8파일, 파일별 새 본문 64KiB, 새 본문 합계 128KiB, 입력 JSON 256KiB, 검토 JSON 288KiB입니다. 이 값은 제안의 보관·검토 한도이며 실제 파일 쓰기·제품 검사 예산이 아닙니다. 기존 회사 읽기·합성 실행·relay 계약과 숫자 한도는 변경하지 않습니다.
+
+기본 출력에는 상태·hash·기한·권한만 표시합니다. 수정안은 `store/company-change.sqlite`, 관리되는 검토 사본은 `reviews/<uuid>.json`에 보관합니다. 새 계획 생성 후 본문 24시간·감사 metadata 30일이며 조회나 승인으로 연장하지 않습니다. 승인에는 현재 OS 소유자·정확한 계획 hash·명시한 1~60분 기한이 필요하고 본문 기한을 넘는 요청은 거부합니다. 같은 활성 승인 재요청은 기한을 연장하지 않으며, 만료된 승인에는 새 계획이 필요합니다.
+
+취소·만료 시 수정안과 관리되는 검토 사본을 정리합니다. 감사 기록 삭제 후 같은 ID가 되살아나지 않도록 본문·경로 없는 작업 ID hash와 계획 hash의 최소 중복 표식은 DB 수명 동안 남습니다. 사용자가 제공한 입력 JSON은 자동 삭제하지 않습니다. 자동 예약 삭제와 물리적 완전 삭제는 보장하지 않습니다. `apply/run`, Git 브랜치 생성·수정·commit/push, 제품 검사와 모델 호출은 제공하지 않습니다. 후속 실제 적용에는 원본 재검증과 별도 실행 계획·승인이 필요합니다.
+
+신규 47개와 전체 2,049개 회귀의 결과, worker 경계와 검토 파일 정리의 한계는 [4-C-30 결과](docs/stage-4c30-result.md)를 따릅니다.
+
 
 ## 모의 입력과 오류 재현
 
