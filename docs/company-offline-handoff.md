@@ -2,6 +2,8 @@
 
 2026-11-16 작성. 회사 장비의 새 대화에서 **하네스 자체의 오프라인 점검과 합성 로컬 검증**을 이어가기 위한 문서다. 회사 제품 저장소·업무 자료·실제 인증정보 접근과 실제 모델 호출은 포함하지 않는다. 이 문서를 저장하거나 읽었다는 사실은 회사의 소프트웨어 반입·실행·결과 공유 허가가 아니다.
 
+이 문서의 실행 범위는 초기 장비 점검에 한정한다. 이후 추가된 Slack 분석과 회사 파일 적용의 현재 사용법은 [문서 안내](README.md)에서 찾는다. 후속 기능의 승인을 이 오프라인 점검에 자동 적용하거나, 이 문서의 과거 결과를 현재 장비의 결과로 사용하지 않는다.
+
 ## 인수인계 작성 당시 상태
 
 | 항목 | 상태 |
@@ -21,27 +23,27 @@
 
 native 파일을 지정하지 않을 때는 [부분 진단 템플릿](../config/migration-check.partial.example.json)의 별도 입력을 사용할 수 있다. 부분 진단은 OS·Node·pnpm·경로·런타임 조건만 확인하며 native와 sandbox 파일 경로에 접근하지 않는다. 부분 통과와 전체 준비 미완료 상태를 구분하고, 기존 전체 진단의 조건이나 전송·수집 계약을 낮추지 않는다.
 
-개인 환경의 비공개 검증 자료는 옮기지 않는다. 회사 실행에 필요한 기준은 저장소의 [4-C-14 검증 결과](stage-4c14-result.md)에 있으며, 그 문서에 연결된 개인 장비의 로컬 자료 경로를 열거나 찾을 필요가 없다. 과거 실제 호출·승인·조사 계획도 이번 인수인계의 실행 대상이 아니다.
+개인 환경의 비공개 검증 자료는 옮기지 않는다. 회사 실행에 필요한 기준은 저장소의 [4-C-14 검증 결과](history/stage-4c14-result.md)에 있으며, 그 문서에 연결된 개인 장비의 로컬 자료 경로를 열거나 찾을 필요가 없다. 과거 실제 호출·승인·조사 계획도 이번 인수인계의 실행 대상이 아니다.
 
 ## 후속 회사 읽기 전용 준비와의 구분
 
-후속 `company-readonly-*`는 회사용 등록·로컬 보관·검토 대기를 구현한 별도 경로다. 현재는 합성 저장소로만 검증하며 이 문서의 장비 점검 요청으로 실제 회사 자료를 읽지 않는다. 기본 정책은 읽기·보관 모두 `unconfirmed`이고 미확인 상태에서는 등록 파일·대상 metadata 접근도 차단한다. 사용법과 보관 조건은 [README](../README.md#회사-저장소의-오프라인-읽기-전용-준비)를 따른다.
+후속 `company-readonly-*`는 회사용 등록·로컬 보관·검토 대기를 구현한 별도 경로다. 현재는 합성 저장소로만 검증하며 이 문서의 장비 점검 요청으로 실제 회사 자료를 읽지 않는다. 기본 정책은 읽기·보관 모두 `unconfirmed`이고 미확인 상태에서는 등록 파일·대상 metadata 접근도 차단한다. 사용법과 보관 조건은 [회사 작업 가이드](guides/company-workflows.md#회사-저장소의-오프라인-읽기-전용-준비)를 따른다.
 
 회사 자료의 실제 로컬 읽기·보관, AI 제공자·계정·전송 조건은 별도로 정해야 한다. 기존에 확인한 소프트웨어 반입·합성 테스트·공유 범위를 다시 승인받을 필요는 없다. 준비 자료의 `AWAITING_APPROVAL`과 전송/실행 권한 false는 유지하며 실제 승인·native·모델 호출 명령은 제공하지 않는다. 오프라인 준비 결과가 회사 정책 검증이나 실제 조사 성공을 뜻하지 않는다.
 
-후속 [회사 준비 v3](stage-4c17-company-v3-result.md)는 읽기 단위 판독기를 별도 등록·CLI·DB·worker에 연결한다. 기존 회사 v1/v2는 유지하며 v3는 새 profile/guard hash를 명시해야 한다. 새 방식이 단위 내부의 일시적 조상 변경 후 복원을 놓칠 수 있다는 차이를 포함한다. 이 연결의 합성 검증과 회사 자료의 실제 적용은 구분하며, 이미 확인한 정책을 다시 묻지 않는다.
+후속 [회사 준비 v3](history/stage-4c17-company-v3-result.md)는 읽기 단위 판독기를 별도 등록·CLI·DB·worker에 연결한다. 기존 회사 v1/v2는 유지하며 v3는 새 profile/guard hash를 명시해야 한다. 새 방식이 단위 내부의 일시적 조상 변경 후 복원을 놓칠 수 있다는 차이를 포함한다. 이 연결의 합성 검증과 회사 자료의 실제 적용은 구분하며, 이미 확인한 정책을 다시 묻지 않는다.
 
-별도로 승인된 후속 [회사 쓰기 등록·격리 적용의 합성 검증](stage-4c33-result.md)은 private JSON의 `sourceRoot`·정확한 파일 범위·기준 상태를 새 계약에 묶는다. `.env` 등록은 필요하지 않으며 회사 경로를 tracked 설정에 넣지 않는다. `company-write-check`는 새 합성 레포만 만들고 실제 회사 경로를 받지 않는다. 이 후속 작업에서는 명시적으로 허용된 macOS `sandbox-exec` 격리 검사를 수행했지만 native Codex·회사 자료·실제 인증·모델은 계속 제외했다. 아래 초기 장비 점검의 실행 제외 범위를 임의로 확장하는 근거로 사용하지 않는다.
+별도로 승인된 후속 [회사 쓰기 등록·격리 적용의 합성 검증](history/stage-4c33-result.md)은 private JSON의 `sourceRoot`·정확한 파일 범위·기준 상태를 새 계약에 묶는다. `.env` 등록은 필요하지 않으며 회사 경로를 tracked 설정에 넣지 않는다. `company-write-check`는 새 합성 레포만 만들고 실제 회사 경로를 받지 않는다. 이 후속 작업에서는 명시적으로 허용된 macOS `sandbox-exec` 격리 검사를 수행했지만 native Codex·회사 자료·실제 인증·모델은 계속 제외했다. 아래 초기 장비 점검의 실행 제외 범위를 임의로 확장하는 근거로 사용하지 않는다.
 
 ## 회사에서 확인할 조건
 
-후속 [검토용 Git 사본 실험](company-evidence-copy-design.md)은 고정 합성 객체로 같은 commit의 작은 사본을 구성하고 기존 판독기로 검사한다. 실제 회사 사본 생성·추출기나 새 명령은 제공하지 않는다. 큰 pack 때문에 거부되더라도 이 실험을 근거로 한도 상향·원본 repack·회사 Git 명령을 자동 실행하지 않는다. 합성 결과는 [4-C-16 결과](stage-4c16-result.md)를 따른다.
+후속 [검토용 Git 사본 실험](history/stage-4c16-result.md#당시-사본-설계)은 고정 합성 객체로 같은 commit의 작은 사본을 구성하고 기존 판독기로 검사한다. 실제 회사 사본 생성·추출기나 새 명령은 제공하지 않는다. 큰 pack 때문에 거부되더라도 이 실험을 근거로 한도 상향·원본 repack·회사 Git 명령을 자동 실행하지 않는다. 합성 결과는 [4-C-16 결과](history/stage-4c16-result.md)를 따른다.
 
-이후 방향은 원본 레포의 직접 읽기이며 사본 생성기 개발은 진행하지 않는다. [회사 Git 선택 읽기 설계](company-git-range-reader-design.md)의 1차 codec·공유 예산·고정 profile/byte proof 기록은 [codec 결과](stage-4c17-codec-result.md)에, 2차 commit/tree·작업 index parser와 위치 지정 읽기·두 pass 재검증은 [reader 결과](stage-4c17-reader-result.md)에 보존한다. 3차는 별도 회사 준비 v2의 정책/등록 gate·안전 발췌·전용 보관·CLI·supervisor를 연결한다. 합성 자료만 사용하며 3차에서 회사 자료·실제 인증·native·실제 모델·외부 서비스에 접근하지 않는다. 실제 검사와 미검증 항목은 [3차 통합 결과](stage-4c17-integration-result.md)에 기록한다.
+이후 방향은 원본 레포의 직접 읽기이며 사본 생성기 개발은 진행하지 않는다. [회사 Git 선택 읽기 설계](design/company-git-range-reader-design.md)의 1차 codec·공유 예산·고정 profile/byte proof 기록은 [codec 결과](history/stage-4c17-codec-result.md)에, 2차 commit/tree·작업 index parser와 위치 지정 읽기·두 pass 재검증은 [reader 결과](history/stage-4c17-reader-result.md)에 보존한다. 3차는 별도 회사 준비 v2의 정책/등록 gate·안전 발췌·전용 보관·CLI·supervisor를 연결한다. 합성 자료만 사용하며 3차에서 회사 자료·실제 인증·native·실제 모델·외부 서비스에 접근하지 않는다. 실제 검사와 미검증 항목은 [3차 통합 결과](history/stage-4c17-integration-result.md)에 기록한다.
 
-`company-git-range-source-v1`은 계속 metadata/hash만 반환하는 내부 API다. v2 준비는 별도 `company-readonly-registration-v2`와 고정 `gitProfileHash`를 요구하고 `company-readonly-v2-plan/inspect/cancel/prune` 명령을 사용한다. [README의 v2 사용법](../README.md#구간-판독기를-사용하는-회사-준비-v2)에 정확한 설정·명령을 둔다. 기본 미확인 정책은 등록·대상 접근 전에 거부하고 기존 v1 명령·DB·계약은 자동 전환하지 않는다. 선택 원문은 내부 메모리에서 안전 발췌로 바꾼 뒤 해제하며, 최종 pass에서 원문 hash와 발췌를 다시 확인한다. raw 본문이나 내부 FS 경로를 일반 출력에 내보내지 않고 허용된 로컬 위치에 상세 자료를 보관하며 공유 요약에는 집계만 남긴다.
+`company-git-range-source-v1`은 계속 metadata/hash만 반환하는 내부 API다. v2 준비는 별도 `company-readonly-registration-v2`와 고정 `gitProfileHash`를 요구하고 `company-readonly-v2-plan/inspect/cancel/prune` 명령을 사용한다. [회사 작업 가이드의 v2 사용법](guides/company-workflows.md#구간-판독기를-사용하는-회사-준비-v2)에 정확한 설정·명령을 둔다. 기본 미확인 정책은 등록·대상 접근 전에 거부하고 기존 v1 명령·DB·계약은 자동 전환하지 않는다. 선택 원문은 내부 메모리에서 안전 발췌로 바꾼 뒤 해제하며, 최종 pass에서 원문 hash와 발췌를 다시 확인한다. raw 본문이나 내부 FS 경로를 일반 출력에 내보내지 않고 허용된 로컬 위치에 상세 자료를 보관하며 공유 요약에는 집계만 남긴다.
 
-별도 허용된 첫 회사 읽기 준비는 자원 한도 오류로 중단됐고 같은 ID 조회에서 계획 부재를 확인했다. 실패 당시 세부 계수는 없어 동적 한도의 원인은 미확인이다. 후속 [진단 보완](stage-4c17-diagnostic-result.md)은 합성 자료로만 검증하며 회사 원본/Slack 재접근이나 자동 재시도를 하지 않는다. `plan/prune`의 선택 `--diagnostics-dir`은 기존 runtime과 분리된 `0700` 위치에 `0600` 진단을 보관한다. 최초 실패의 고정 항목과 숫자만 저장하고 기존 audit 만료를 유지하며, 같은 옵션을 준 plan/prune에서 만료 자료를 삭제한다. 기존 결과·계약·상한/hash를 바꾸거나 실패를 성공으로 해석하지 않는다. 새로운 실제 준비는 기존에 허용된 범위 안의 별도 명시적 실행으로 구분한다.
+별도 허용된 첫 회사 읽기 준비는 자원 한도 오류로 중단됐고 같은 ID 조회에서 계획 부재를 확인했다. 실패 당시 세부 계수는 없어 동적 한도의 원인은 미확인이다. 후속 [진단 보완](history/stage-4c17-diagnostic-result.md)은 합성 자료로만 검증하며 회사 원본/Slack 재접근이나 자동 재시도를 하지 않는다. `plan/prune`의 선택 `--diagnostics-dir`은 기존 runtime과 분리된 `0700` 위치에 `0600` 진단을 보관한다. 최초 실패의 고정 항목과 숫자만 저장하고 기존 audit 만료를 유지하며, 같은 옵션을 준 plan/prune에서 만료 자료를 삭제한다. 기존 결과·계약·상한/hash를 바꾸거나 실패를 성공으로 해석하지 않는다. 새로운 실제 준비는 기존에 허용된 범위 안의 별도 명시적 실행으로 구분한다.
 
 실제 I/O·할당은 기존 고정 profile 예산을 공유하며 두 pass의 반복 읽기·해제도 계수한다. v2 부모 supervisor는 30초 기한에 `SIGTERM`, 250ms 유예 뒤 `SIGKILL`을 요청하며 child의 `close`만 종료 확인으로 인정한다. 부모 생존·OS 신호 처리에 의존하고 부모 자체가 강제 종료되면 독립 guardian이나 고아 프로세스 방지는 제공하지 않는다. 닫힘 불확정 FD는 계수를 유지하며 같은 번호로 재시도하지 않는다. worker의 V8 old-space 128MiB 설정, 관리 Buffer 계수와 RSS 256MiB 합성 측정 목표는 서로 다르며 OS RSS 강제 상한이 아니다.
 
@@ -81,7 +83,7 @@ OS/CPU와 설치된 개발 도구 같은 기술 조건은 허용된 장비에서
 
 ## 새 대화에서 수행할 순서
 
-1. 현재 작업 폴더가 하네스인지 확인하고 기존 변경을 보존한다. [AGENTS.md](../AGENTS.md), [구조](architecture.md), [코딩 컨벤션](coding-conventions.md), [보안과 승인](security-and-approval.md), [구현 계획](implementation-plan.md), [이전 가이드](migration-guide.md), [검증 결과](stage-4c14-result.md), [설정 템플릿](../config/migration-check.example.json)을 읽는다. 과거 승인이나 대화의 묵시적 권한을 추정하지 않는다.
+1. 현재 작업 폴더가 하네스인지 확인하고 기존 변경을 보존한다. [AGENTS.md](../AGENTS.md), [구조](architecture.md), [코딩 컨벤션](coding-conventions.md), [보안과 승인](security-and-approval.md), [구현 계획](implementation-plan.md), [이전 가이드](migration-guide.md), [검증 결과](history/stage-4c14-result.md), [설정 템플릿](../config/migration-check.example.json)을 읽는다. 과거 승인이나 대화의 묵시적 권한을 추정하지 않는다.
 2. 회사의 반입·로컬 테스트 허용 범위와 OS/CPU·설치 도구를 확인한다. native 파일을 지정하지 않으면 부분 진단을 선택하고 native·sandbox 파일 검사는 미실행으로 남긴다. 전체 진단의 실제 바이너리는 승인된 지정 경로의 메타데이터·헤더·고정 hash로만 확인한다. 누락·불일치를 설치나 pin 변경으로 해소하지 않는다.
 3. 가이드에 따라 하네스·회사 제품 저장소 밖의 새로운 비공개 설정/런타임/결과 위치를 준비한다. `enabled:false`, 디렉터리 `0700`, 설정·결과 파일 `0600`을 유지한다. 기존 파일 덮어쓰기, 기존 디렉터리의 재귀적인 권한 변경과 실제 DB 접근은 하지 않는다.
 4. 아래 기존 정적 점검 명령을 실행한다. 예시 경로는 준비한 설정의 절대 경로로 바꾼다. 전체 상태와 종료 코드, 각 항목의 상태를 함께 기록한다. 정상 전체 진단은 9개 통과·범위 밖 8개 미실행이다. 정상 부분 진단은 7개 통과·10개 미실행이고 `partialStatus:passed`여도 `status:blocked`와 종료 코드 1을 유지한다. 남은 native·sandbox 파일 검사는 `remainingChecks`, 필요한 다음 정적 점검은 `nextActions`로 구분한다. 두 모드 모두 `liveReady=false`, `executionAllowed=false`, `approvalCreated=false`를 확인한다. 입력 오류는 JSON 보고서 생성 전에 거부될 수 있다.
@@ -90,14 +92,15 @@ OS/CPU와 설치된 개발 도구 같은 기술 조건은 허용된 장비에서
 pnpm harness migration-check --config /absolute/path/to/private-migration/migration-check.json
 ```
 
-5. 지원 환경과 회사 정책이 허용하면 [package.json](../package.json)의 lint·typecheck·합성 회귀를 순차 실행한다. 두 native opt-in 환경변수를 명시적으로 제거한다. 아래 테스트 서브셸의 `umask 022`는 개인 검증 때와 같은 fixture 생성 조건이며 부모 셸의 umask를 바꾸지 않는다. 회사 권한 정책과 충돌하면 완화하지 말고 `not_run`으로 남긴다. 비공개 자료 준비용 `umask 077`을 테스트에 그대로 전파하면 권한 관련 fixture의 판정이 달라질 수 있다.
+5. 지원 환경과 회사 정책이 허용하면 [package.json](../package.json)의 lint·typecheck·합성 회귀를 순차 실행한다. 기존 native 검사와 Slack native 검사의 opt-in 환경변수를 명시적으로 제거한다. 아래 테스트 서브셸의 `umask 022`와 `TMPDIR=/private/tmp`는 합성 fixture의 검증 조건이며 부모 셸을 바꾸지 않는다. 회사 권한 정책과 충돌하면 완화하지 말고 `not_run`으로 남긴다. 비공개 자료 준비용 `umask 077`을 테스트에 그대로 전파하면 권한 관련 fixture의 판정이 달라질 수 있다.
 
 ```sh
 pnpm lint
 pnpm typecheck
 (
   umask 022
-  env -u HARNESS_NATIVE_CODEX_PROBE -u HARNESS_NATIVE_CODEX_PATH pnpm test
+  TMPDIR=/private/tmp env -u HARNESS_NATIVE_CODEX_PROBE -u HARNESS_NATIVE_CODEX_PATH \
+    -u HARNESS_SLACK_NATIVE_PROBE pnpm test
 )
 ```
 

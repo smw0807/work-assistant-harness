@@ -2,33 +2,35 @@
 
 ## 문서의 목적과 상태
 
-이 문서는 구현할 보안 요구사항이다. 문서를 작성하거나 `AGENTS.md`에 규칙을 넣었다는 이유로 보호 장치가 작동한다고 간주하지 않는다. 코드, 권한 설정과 실패 테스트로 검증한 기능만 사용한다.
+이 문서는 행위별 승인과 계약별 보안 요구사항의 기준이다. 문서를 작성하거나 `AGENTS.md`에 규칙을 넣었다는 이유로 보호 장치가 작동한다고 간주하지 않는다. 코드, 권한 설정과 실패 테스트로 검증한 기능만 사용한다. 단계별 제외 범위는 해당 계약에 적용되며, 이후 별도 계약의 구현·승인을 대신하거나 취소하지 않는다.
 
-단계 0·1의 결과는 [stage-1-result.md](stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](stage-3a-result.md)에 기록한다. 단계 3-B의 Docker 격리 진단은 [stage-3b-result.md](stage-3b-result.md), 단계 3-C의 독립 합성 실행은 [stage-3c-result.md](stage-3c-result.md), 단계 3-D의 합성 취소·중단 복구·잔여 관찰은 [stage-3d-result.md](stage-3d-result.md), 단계 4-A의 합성 답장 계획·별도 승인·모의 전송은 [stage-4a-result.md](stage-4a-result.md), 단계 4-B-1의 오프라인 Slack HTTP 계약 진단은 [stage-4b1-result.md](stage-4b1-result.md), 단계 4-B-2의 고정 시험 문구 단건 전송은 [stage-4b2-result.md](stage-4b2-result.md)를 따른다. 진단 보고서는 실행·전송 권한이 아니며 기존 조사 Task나 실제 Slack·회사 저장소의 실행을 열지 않는다. 조사·답장·HTTP 계약 진단 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
+## 목차
 
-단계 4-C-1의 오프라인 브랜치 계약과 별도 모의 승인은 [stage-4c1-result.md](stage-4c1-result.md)를 따른다. 모의 통과는 실제 Codex·Git 작업 권한이나 격리 검증을 대신하지 않는다.
+- [신뢰 경계](#1-신뢰-경계)와 [회사 수정안·적용 계약](#회사-수정안과-적용의-계약별-경계)
+- [행위별 승인](#2-행위별-승인)과 [승인 계획·소비](#3-승인-전-보여-줄-계획)
+- [읽기 전용 강제](#4-읽기-전용은-권한으로-강제한다)와 [승인 후 격리](#5-승인-후-실행의-격리)
+- [Slack 수신·외부 전송](#6-slack과-외부-전송)과 [멘션·스레드 자동 분석](#멘션스레드의-자동-codex-분석)
+- [회사 읽기 준비](#회사-읽기-전용-준비의-승인-경계), [회사 전송](#회사-전송-계약과-실행-경계), [수정안 검토 승인](#회사-수정안의-검토-전용-승인)
+- [회사 자료·비밀정보·보관](#7-회사-자료와-비밀정보)
+- [취소·실패·감사](#8-취소-실패와-감사-기록)와 [검증 완료 조건](#9-보안-검증의-완료-조건)
 
-단계 4-C-2의 새 승인은 하네스가 준비한 독립 합성 Git 저장소의 ref 생성에만 유효하다. 실제 Codex·회사 저장소·코드 실행 권한과 구분하며 검증 상태는 [stage-4c2-result.md](stage-4c2-result.md)를 따른다.
+### 단계별 검증 기록의 범위
 
-단계 4-C-3의 새 실행 승인은 독립 합성 작업 브랜치 선택·고정 patch·등록 Docker 검사에만 유효하다. 기존 실행·브랜치 승인을 재사용하지 않으며 전체 회귀 481개와 실제 Docker 격리 진단·실행/취소/복구 12개 시나리오를 통과했다. 확인된 결과와 제한은 [stage-4c3-result.md](stage-4c3-result.md)에 기록한다.
+아래 초기 단계의 검증 결과는 당시 계약에 대한 근거다. 현재 Slack 자동 분석은 이 문서의 별도 자동 분석 절을, 회사 원본 적용은 `company-local-write` 경계를 따른다. 합성 검증과 실제 서비스·회사 업무 실행 결과를 서로 대신하지 않는다.
 
-단계 4-C-4는 고정 합성 입력의 실제 Codex 호출 승인과 검증된 제안을 적용할 실행 승인을 분리한다. 선택한 자격증명은 부모 broker만 보유하고 Codex에는 외부 OS 격리를 적용한다. 실제 호출·격리 진단·취소·강제 종료·복구와 회귀의 최종 확인 범위는 [stage-4c4-result.md](stage-4c4-result.md)를 따른다.
+단계 0·1의 결과는 [stage-1-result.md](history/stage-1-result.md), 단계 2의 수신과 오프라인 검증은 [stage-2-result.md](history/stage-2-result.md), 단계 3-A의 로컬 승인 기록은 [stage-3a-result.md](history/stage-3a-result.md)에 기록한다. 단계 3-B의 Docker 격리 진단은 [stage-3b-result.md](history/stage-3b-result.md), 단계 3-C의 독립 합성 실행은 [stage-3c-result.md](history/stage-3c-result.md), 단계 3-D의 합성 취소·중단 복구·잔여 관찰은 [stage-3d-result.md](history/stage-3d-result.md), 단계 4-A의 합성 답장 계획·별도 승인·모의 전송은 [stage-4a-result.md](history/stage-4a-result.md), 단계 4-B-1의 오프라인 Slack HTTP 계약 진단은 [stage-4b1-result.md](history/stage-4b1-result.md), 단계 4-B-2의 고정 시험 문구 단건 전송은 [stage-4b2-result.md](history/stage-4b2-result.md)를 따른다. 진단 보고서는 실행·전송 권한이 아니며 기존 조사 Task나 실제 Slack·회사 저장소의 실행을 열지 않는다. 조사·답장·HTTP 계약 진단 worker의 Node 권한 모델은 신뢰하는 하네스 코드의 접근 제한이며 악성 코드 실행용 보안 격리로 간주하지 않는다.
 
-전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 범위는 합성 데이터 기반의 로컬 조사이며 실제 회사 계정과 코드를 연결하지 않는다.
+단계 4-C-1의 오프라인 브랜치 계약과 별도 모의 승인은 [stage-4c1-result.md](history/stage-4c1-result.md)를 따른다. 모의 통과는 실제 Codex·Git 작업 권한이나 격리 검증을 대신하지 않는다.
 
-단계 4-C-31의 별도 실행 승인은 factory가 새로 생성한 합성 레포의 브랜치·선택 파일 적용에만 유효하다. 실제 회사 경로를 받거나 기존 검토 승인을 실행에 사용하는 경로가 없다. 적용 어댑터는 명령·네트워크·제품 검사 포트를 갖지 않으며, 신뢰하는 하네스 코드의 경로·파일·Git metadata 검증을 수행한다. 이 application API 자체를 OS 보안 격리로 주장하지 않는다. 같은 OS 사용자의 일시적 경로 경합과 강제 종료 복구 검증은 별도이며 실제 회사 적용은 열지 않았다.
+단계 4-C-2의 새 승인은 하네스가 준비한 독립 합성 Git 저장소의 ref 생성에만 유효하다. 실제 Codex·회사 저장소·코드 실행 권한과 구분하며 검증 상태는 [stage-4c2-result.md](history/stage-4c2-result.md)를 따른다.
+
+단계 4-C-3의 새 실행 승인은 독립 합성 작업 브랜치 선택·고정 patch·등록 Docker 검사에만 유효하다. 기존 실행·브랜치 승인을 재사용하지 않으며 전체 회귀 481개와 실제 Docker 격리 진단·실행/취소/복구 12개 시나리오를 통과했다. 확인된 결과와 제한은 [stage-4c3-result.md](history/stage-4c3-result.md)에 기록한다.
+
+단계 4-C-4는 고정 합성 입력의 실제 Codex 호출 승인과 검증된 제안을 적용할 실행 승인을 분리한다. 선택한 자격증명은 부모 broker만 보유하고 Codex에는 외부 OS 격리를 적용한다. 실제 호출·격리 진단·취소·강제 종료·복구와 회귀의 최종 확인 범위는 [stage-4c4-result.md](history/stage-4c4-result.md)를 따른다.
+
+전체 흐름은 [architecture.md](architecture.md), 단계와 상세 수용 테스트는 [implementation-plan.md](implementation-plan.md)를 따른다. 초기 모의 조사 계약은 합성 데이터만 사용한다. 후속 Slack 자동 분석과 회사 적용은 각 절의 별도 조건을 충족해야 한다.
 
 ## 1. 신뢰 경계
-
-단계 4-C-32의 합성 CLI는 이전 제한 worker를 변경하지 않고 별도의 최소 환경 trusted controller를 사용한다. 기존 적용 엔진의 fsync와 전체 조상 검사를 수행하며 Node permission mode나 OS 격리 worker로 표현하지 않는다. 합성 등록 경로·파일/명령 allowlist·실행 포트 부재는 신뢰하는 코드로 강제한다. runtime 제어 lease를 가진 CLI만 중단 상태를 관찰·확정하며 live writer의 잠금을 훔치거나 PID만으로 종료를 추정하지 않는다. 등록 receipt의 hash는 변조·위치 변경 검사이며 같은 OS 사용자를 상대로 한 전자서명이 아니다.
-
-단계 4-C-33은 위 CLI를 확장하지 않고 `company-write-*` 새 계약의 격리된 합성 검증을 분리한다. 등록의 원본 경로·허용 파일·기준 상태·권한 선언, 선택 파일 identity/hash, 제안 hash와 소유자·TTL·한도를 결합한다. 새 계약은 `synthetic-validation`이며 실제 회사 적용 승인으로 사용할 수 없다. 별도 claim과 worker marker는 exclusive create·fsync로 단건을 보존하고, JSONL journal에는 본문 없이 각 경계의 hash와 상태를 남긴다. 모든 marker/hash는 로컬 일관성 검사이며 같은 OS 사용자에 대한 서명이나 전역 재생 방지 장치가 아니다.
-
-macOS SBPL은 exact 파일/임시/Git 경로와 명시한 private 실행 journal/시작 marker만 쓰기 허용하고 미선택 본문·합성 credential canary·TCP/Unix·추가 exec를 차단한다. 필요한 디렉터리 fsync 권한은 그 디렉터리의 이름 열거까지 허용할 수 있다. 신뢰하는 하네스와 OS runtime 읽기 범위, 부모 controller의 권한은 worker 격리와 구분한다. guardian은 부모 단절·30초·출력 16KiB·취소 때 TERM 뒤 250ms KILL을 요청하고 close를 관찰한다. worker도 stdin EOF·자체 watchdog을 확인하고 새 mutation 전에 이벤트루프에 양보하지만 이미 시작된 syscall을 되돌리거나 비협조적인 동일 사용자와의 모든 경합을 막는다고 주장하지 않는다. 제품 검사·실제 회사/인증/모델·외부 전송은 이번 합성 명령에 없다.
-
-단계 4-C-34의 새 `company-local-write` 승인만 `company-apply-run`에 사용할 수 있다. 기존 review/synthetic 승인은 승격하지 않는다. 선택 replace는 HEAD blob/index stage0/working 일치, create는 HEAD/index/working 부재를 새 Git proof로 결합한다. 기존 v2 입력/결과/profile/공유 예산은 유지한다. packed refs·packed-only 기준 ref·선택 Git 객체는 읽기 전용이고 원본 repack·Git CLI·제품 실행 포트는 없다. 필요한 선택 객체의 delta base 부수 읽기와 pack 디렉터리 이름 열거는 허용된 Git 판독 범위이며 전체 pack checksum 검증이나 미선택 작업 파일 읽기와 구분한다.
-
-plan/approval/task binding과 claim/journal은 별도 private runtime에 저장한다. 모든 CLI 명령은 새 위치/소유자 결합 control lease를 사용하며, task 복사·입력 변조·원본 drift·소비/만료·잘못된 hash는 적용 전에 거부한다. 적용 전 동일 profile의 합성 canary/exec/TCP probe를 통과해야 소비하며, 소비 뒤 worker가 같은 원본을 다시 증명한다. 부분/손상 claim 또는 journal은 UNKNOWN으로 관찰하고 소비를 되돌리지 않는다. UNKNOWN은 프로세스가 반드시 끝났다는 증명이 아니며 복구 명령·lock stealing·resume을 제공하지 않는다. 명시적으로 승인된 소규모 파일 적용 외 인증·native Codex·모델·외부 전송·자동 commit/push 권한은 추가하지 않았다.
 
 - **소유자:** 로컬 CLI에서 표시된 계획을 검토하고 실행을 승인하는 사람.
 - **요청자:** Slack에서 문의나 변경 요청을 보낸 사람. 요청은 조사 대상이며 소유자의 실행 승인이 아니다.
@@ -39,6 +41,20 @@ plan/approval/task binding과 claim/journal은 별도 private runtime에 저장�
 MVP의 승인 경로는 로컬 CLI뿐이다. 현재 OS 사용자와 승인 저장소의 파일 권한이 신뢰 경계다. 같은 OS 계정을 공유하거나 호스트가 침해되면 이 가정이 깨질 수 있으므로 다중 사용자 원격 승인 서비스와 동등한 인증을 제공한다고 주장하지 않는다.
 
 단계 3-A의 소유자 ID는 `process.getuid()`가 반환한 `os-user:<uid>`로 고정한다. CLI 옵션이나 Slack ID로 소유자를 지정하지 않는다. UID가 지원되지 않으면 승인·취소를 거부한다. 승인·취소는 기존 전역 lease를 요구하므로 같은 데이터 디렉터리의 실시간 Slack 수신 중에는 수행하지 않는다. 이 제한은 오프라인 승인 기능의 한계이며 수신 중단 동안의 요청 변경 감지를 보장하지 않는다.
+
+### 회사 수정안과 적용의 계약별 경계
+
+단계 4-C-31의 별도 실행 승인은 factory가 새로 생성한 합성 레포의 브랜치·선택 파일 적용에만 유효하다. 실제 회사 경로를 받거나 기존 검토 승인을 실행에 사용하는 경로가 없다. 적용 어댑터는 명령·네트워크·제품 검사 포트를 갖지 않으며, 신뢰하는 하네스 코드의 경로·파일·Git metadata 검증을 수행한다. 이 application API 자체를 OS 보안 격리로 주장하지 않는다. 같은 OS 사용자의 일시적 경로 경합과 강제 종료 복구 검증은 별도이며 이 합성 API 계약은 실제 회사 적용을 열지 않는다. 후속 회사 적용에는 아래 4-C-34의 새 승인이 필요하다.
+
+단계 4-C-32의 합성 CLI는 이전 제한 worker를 변경하지 않고 별도의 최소 환경 trusted controller를 사용한다. 기존 적용 엔진의 fsync와 전체 조상 검사를 수행하며 Node permission mode나 OS 격리 worker로 표현하지 않는다. 합성 등록 경로·파일/명령 allowlist·실행 포트 부재는 신뢰하는 코드로 강제한다. runtime 제어 lease를 가진 CLI만 중단 상태를 관찰·확정하며 live writer의 잠금을 훔치거나 PID만으로 종료를 추정하지 않는다. 등록 receipt의 hash는 변조·위치 변경 검사이며 같은 OS 사용자를 상대로 한 전자서명이 아니다.
+
+단계 4-C-33은 위 CLI를 확장하지 않고 `company-write-*` 새 계약의 격리된 합성 검증을 분리한다. 등록의 원본 경로·허용 파일·기준 상태·권한 선언, 선택 파일 identity/hash, 제안 hash와 소유자·TTL·한도를 결합한다. 새 계약은 `synthetic-validation`이며 실제 회사 적용 승인으로 사용할 수 없다. 별도 claim과 worker marker는 exclusive create·fsync로 단건을 보존하고, JSONL journal에는 본문 없이 각 경계의 hash와 상태를 남긴다. 모든 marker/hash는 로컬 일관성 검사이며 같은 OS 사용자에 대한 서명이나 전역 재생 방지 장치가 아니다.
+
+macOS SBPL은 exact 파일/임시/Git 경로와 명시한 private 실행 journal/시작 marker만 쓰기 허용하고 미선택 본문·합성 credential canary·TCP/Unix·추가 exec를 차단한다. 필요한 디렉터리 fsync 권한은 그 디렉터리의 이름 열거까지 허용할 수 있다. 신뢰하는 하네스와 OS runtime 읽기 범위, 부모 controller의 권한은 worker 격리와 구분한다. guardian은 부모 단절·30초·출력 16KiB·취소 때 TERM 뒤 250ms KILL을 요청하고 close를 관찰한다. worker도 stdin EOF·자체 watchdog을 확인하고 새 mutation 전에 이벤트루프에 양보하지만 이미 시작된 syscall을 되돌리거나 비협조적인 동일 사용자와의 모든 경합을 막는다고 주장하지 않는다. 제품 검사·실제 회사/인증/모델·외부 전송은 이번 합성 명령에 없다.
+
+단계 4-C-34의 새 `company-local-write` 승인만 `company-apply-run`에 사용할 수 있다. 기존 review/synthetic 승인은 승격하지 않는다. 선택 replace는 HEAD blob/index stage0/working 일치, create는 HEAD/index/working 부재를 새 Git proof로 결합한다. 기존 v2 입력/결과/profile/공유 예산은 유지한다. packed refs·packed-only 기준 ref·선택 Git 객체는 읽기 전용이고 원본 repack·Git CLI·제품 실행 포트는 없다. 필요한 선택 객체의 delta base 부수 읽기와 pack 디렉터리 이름 열거는 허용된 Git 판독 범위이며 전체 pack checksum 검증이나 미선택 작업 파일 읽기와 구분한다.
+
+plan/approval/task binding과 claim/journal은 별도 private runtime에 저장한다. 모든 CLI 명령은 새 위치/소유자 결합 control lease를 사용하며, task 복사·입력 변조·원본 drift·소비/만료·잘못된 hash는 적용 전에 거부한다. 적용 전 동일 profile의 합성 canary/exec/TCP probe를 통과해야 소비하며, 소비 뒤 worker가 같은 원본을 다시 증명한다. 부분/손상 claim 또는 journal은 UNKNOWN으로 관찰하고 소비를 되돌리지 않는다. UNKNOWN은 프로세스가 반드시 끝났다는 증명이 아니며 복구 명령·lock stealing·resume을 제공하지 않는다. 명시적으로 승인된 소규모 파일 적용 외 인증·native Codex·모델·외부 전송·자동 commit/push 권한은 추가하지 않았다.
 
 ## 2. 행위별 승인
 
@@ -185,7 +201,7 @@ Slack 토큰·네트워크는 수신부에만 제공한다. 조사 worker에는 
 
 실수신 경로의 고정 API는 identity를 확인하는 `auth.test`, 연결을 여는 `apps.connections.open`, 해당 스레드를 읽는 `conversations.replies`다. 읽기 토큰의 workspace가 설정과 일치하지 않으면 Socket 연결과 문맥 수집을 시작하지 않는다. 이 검사가 실제 회사 승인·scope·채널 접근 권한 검증을 대신하지는 않는다.
 
-수신부의 Node 네트워크 권한은 프로세스 전체에 적용된다. 목적지는 어댑터의 고정 Slack API·redirect 거부와 정확한 WSS 호스트 검증으로 제한한다. 이 검사를 호스트별 OS 네트워크 격리나 악성 코드 실행 sandbox로 설명하지 않는다. 토큰은 환경변수로만 주입하며 CLI 인자·설정 파일·저장 자료에 넣지 않는다.
+수신부의 Node 네트워크 권한은 프로세스 전체에 적용된다. 목적지는 어댑터의 고정 Slack API·redirect 거부와 정확한 WSS 호스트 검증으로 제한한다. 이 검사를 호스트별 OS 네트워크 격리나 악성 코드 실행 sandbox로 설명하지 않는다. 수신 worker에는 토큰을 환경변수로만 전달한다. 부모 CLI는 `--config`와 함께 현재 프로세스의 토큰 환경변수를 사용하거나, `--env` 또는 명시적 `--env-file`에서 필요한 키만 읽는다. private env-file은 소유자 전용 `0600` 파일이어야 하며 전체 내용을 `process.env`로 주입하지 않는다. 세 설정 방식은 함께 사용할 수 없고 `.env` 자동 탐색도 하지 않는다. 토큰을 CLI 인자·수신 JSON/relay JSON 설정·저장 자료에 넣지 않는다.
 
 사용자 멘션은 고정 사용자 ID로 확인한다. `app_mention`은 봇 멘션용이므로 사용자 멘션을 대신하지 않는다. 소유자 멘션이나 요청자의 긴급 표현은 실행 승인이 아니다.
 
@@ -212,7 +228,7 @@ Slack 토큰·네트워크는 수신부에만 제공한다. 조사 worker에는 
 
 이 새 경로에 한해 사용자가 승인한 `com.openai.codex`의 `user-preference-read`, cfprefsd Mach 조회 세 항목(`global-name`의 `com.apple.cfprefsd.daemon`·`com.apple.cfprefsd.agent`, `local-name`의 `com.apple.cfprefsd.agent`), 현재 UID의 `apple.cfprefs.<uid>v1`과 `apple.cfprefs.daemonv1` 공유 영역 읽기를 추가했다. 공유 영역 이름은 정확히 두 개만 허용한다. GlobalPreferences 읽기도 승인받았지만 이 두 공유 영역의 읽기로 동기화 실패가 해결되어 추가하지 않았다. 다른 preference 도메인·다른 UID의 공유 영역 읽기와 모든 preference·공유 영역 쓰기는 계속 거부한다. 실제 OS 권한 판정31개에서 기존 경로의 거부와 새 경로의 정확한 허용 범위를 확인했다.
 
-새 버전은 비활성화한 Code Mode host 안내를 `item.completed`의 `error` 항목으로 출력한다. 위 Slack·v3·등록 hash 조건으로 선택한 `0.167.2` parser에서만 이 경고의 정확한 고정 문구를 `thread.started` 뒤, `turn.started` 전에 한 번 허용한다. 다른 오류·도구 항목의 거부와 최종 성공 응답 검증은 유지한다. private JSON 생성·env 경로 반영과 native 합성 검증은 완료했으며 실제 인증·Slack·모델 호출은 실행하지 않았다. 상세 결과는 [추가 점검 기록](slack-mention-analysis-result.md#2026-11-20-추가-점검-현재-codex-연결-설정과-호환성)을 따른다.
+새 버전은 비활성화한 Code Mode host 안내를 `item.completed`의 `error` 항목으로 출력한다. 위 Slack·v3·등록 hash 조건으로 선택한 `0.167.2` parser에서만 이 경고의 정확한 고정 문구를 `thread.started` 뒤, `turn.started` 전에 한 번 허용한다. 다른 오류·도구 항목의 거부와 최종 성공 응답 검증은 유지한다. private JSON 생성·env 경로 반영과 native 합성 검증은 완료했으며 실제 인증·Slack·모델 호출은 실행하지 않았다. 상세 결과는 [추가 점검 기록](history/slack-mention-analysis-result.md#2026-11-20-추가-점검-현재-codex-연결-설정과-호환성)을 따른다.
 
 Node가 스크립트 뒤의 `--env-file`까지 부트스트랩 단계에서 처리할 수 있으므로 package의 `harness` 진입점은 `node -- dist/src/cli/main.js`로 옵션 경계를 고정한다. 직접 실행도 같은 `--` 경계가 필요하다. 부모 Node를 시작하기 전에 이미 지정된 `NODE_OPTIONS`까지 하네스 코드가 사후에 무효화할 수 있다고 주장하지 않는다.
 
@@ -272,7 +288,7 @@ channel·새 message timestamp·thread·bot·본문이 일치하는 성공 recei
 
 고정 전송 본문도 DB·승인 snapshot·시도·영속 보고서에 복제하지 않는다. 계획 유효기간 안에서 코드 상수로 재구성해 검토한다. terminal 감사 metadata는 마지막 상태 변경부터 30일 뒤 정리하고 `SENT`·`UNKNOWN`의 최소 대상 marker는 유지한다. 정리는 명령 실행 시 수행하므로 중지 중 만료 자료는 다음 실행까지 남을 수 있으며 논리 삭제는 백업·디스크의 물리적 완전 삭제를 보장하지 않는다. DB 폐기 뒤에는 과거 중복 차단을 보장할 수 없다.
 
-구현 검사와 실제 게시는 구분한다. 단위·통합·CLI의 합성 응답 검증을 통과해도 실제 전송 권한이 생기지 않는다. 실제 게시 전에는 대상·고정 본문·계획 해시·TTL을 구체적으로 검토하고 별도 소유자 승인을 받아야 한다. 개인 테스트 workspace에서 이 절차를 거친 실제 단건 시험은 로컬 `SENT` 시도 한 개·승인 소비 한 번과 Slack UI의 댓글 한 개·고정 본문·receipt 일치로 확인했다. 이 확인은 회사 운영·자료·AI·실제 업무 자동 답장의 승인이 아니다. 검증 상태는 [4-B-2 결과](stage-4b2-result.md)를 따른다.
+구현 검사와 실제 게시는 구분한다. 단위·통합·CLI의 합성 응답 검증을 통과해도 실제 전송 권한이 생기지 않는다. 실제 게시 전에는 대상·고정 본문·계획 해시·TTL을 구체적으로 검토하고 별도 소유자 승인을 받아야 한다. 개인 테스트 workspace에서 이 절차를 거친 실제 단건 시험은 로컬 `SENT` 시도 한 개·승인 소비 한 번과 Slack UI의 댓글 한 개·고정 본문·receipt 일치로 확인했다. 이 확인은 회사 운영·자료·AI·실제 업무 자동 답장의 승인이 아니다. 검증 상태는 [4-B-2 결과](history/stage-4b2-result.md)를 따른다.
 
 ### 단계 4-C-1의 오프라인 브랜치 계약
 
@@ -282,7 +298,7 @@ OS UID 소유자·정확한 계획 hash·필수 정수 TTL 1~60분을 검증하�
 
 모든 명령은 전역 lease·비공개 DB/sidecar의 소유자·권한·symlink/hardlink 검사를 사용한다. worker는 최소 환경과 데이터 디렉터리 쓰기만 받고 네트워크·child·추가 worker·외부 native addon 권한과 상속 토큰을 차단한다. source·승인 snapshot·모의 receipt·제어 이력은 합성 metadata로 DB 수명 동안 남으며 자동 정리는 제공하지 않는다. 같은 OS 사용자와 하네스 코드는 기존처럼 신뢰한다.
 
-실제 Git·Codex·외부 모델·회사 저장소는 연결하지 않는다. commit·push·PR/MR 명령은 제공하지 않고 모의 승인을 실제 작업 권한으로 승격하지 않는다. 실제 연결에는 새로운 실행 정책·승인·격리·자료 처리 검증이 필요하며, [4-C-1 결과](stage-4c1-result.md)의 모의 통과를 그 검증으로 대신하지 않는다.
+실제 Git·Codex·외부 모델·회사 저장소는 연결하지 않는다. commit·push·PR/MR 명령은 제공하지 않고 모의 승인을 실제 작업 권한으로 승격하지 않는다. 실제 연결에는 새로운 실행 정책·승인·격리·자료 처리 검증이 필요하며, [4-C-1 결과](history/stage-4c1-result.md)의 모의 통과를 그 검증으로 대신하지 않는다.
 
 ### 단계 4-C-2의 독립 합성 Git 작업
 
@@ -312,7 +328,7 @@ OS UID 소유자·정확한 계획 hash·필수 정수 TTL 1~60분을 검증하�
 
 inspect·cancel·invalidate는 3-D와 같이 전역 lease를 우회하는 짧은 실행 DB 트랜잭션으로 동작한다. 실행·복구는 전역 lease를 유지한다. 무효화는 generation을 바꾸어 새 동작과 늦은 성공을 거부하고 이미 시작한 container는 저장된 소유 identity를 검증한 뒤 정리한다. 명시 recover는 저장한 Git/파일/view 증거와 현재 작업물을 비교하며 확인된 중단은 `INTERRUPTED`, 취소는 `CANCELLED`, 정리·관찰 불확실은 `BLOCKED`로 기록한다. 동일 승인·작업 재실행, 승인 소비 복원, 자동 수리·삭제는 제공하지 않는다. 원본·브랜치·실제 diff·검사·정리·복구 결과는 로컬 감사 기록으로 남긴다.
 
-이 단계의 fixture 초기 commit은 합성 준비이며 작업 결과 commit과 구분한다. 실제 Codex·회사 자료·Slack 요청 연결·임의 코드 수정/실행·작업 결과 commit·push·PR/MR은 제공하지 않는다. 실제 Docker 검증과 모의 backend 테스트, 회사 보안 검토를 구분하며 최종 근거는 [4-C-3 결과](stage-4c3-result.md)를 따른다.
+이 단계의 fixture 초기 commit은 합성 준비이며 작업 결과 commit과 구분한다. 실제 Codex·회사 자료·Slack 요청 연결·임의 코드 수정/실행·작업 결과 commit·push·PR/MR은 제공하지 않는다. 실제 Docker 검증과 모의 backend 테스트, 회사 보안 검토를 구분하며 최종 근거는 [4-C-3 결과](history/stage-4c3-result.md)를 따른다.
 
 ### 단계 4-C-4의 모델 호출·제안·실행 경계
 
@@ -345,7 +361,7 @@ Codex 이벤트는 최종 agent message와 완료 turn을 각각 한 건 요구�
 
 실행 계획으로 내보내기는 READY에서 EXPORTED로 전환하는 단일 트랜잭션이다. commit 후에만 결과를 반환하며 같은 UUID·작업 유형·입력/응답/설정 hash를 새 실행 계획으로 옮긴다. 변환 뒤 실행 DB나 source 준비가 실패해도 소비를 되돌리지 않는다. 실행 계획 hash는 `validatorVersion: codex-proposal-v1`과 제안 근거, 실제 patch 내용·전후 hash, 브랜치·기준·source·등록 명령·Docker 정책을 포함한다. 소유자가 새 실행 계획을 승인하기 전에는 source fixture 준비 외 작업 브랜치·patch·Docker 검사를 만들지 않는다.
 
-제안 적용은 신뢰하는 하네스가 승인한 `src/message.mjs` 한 파일에 수행한다. Codex에게 작업 트리 쓰기 포트를 주지 않고 제안 코드를 호스트에서 import·실행하지 않는다. 실행 시 독립 Git의 main·source·선택 후 Git 증거를 유지하며 Git 없는 읽기 전용 Docker view에 기존 네트워크·nonroot·root filesystem·권한·자원·시간·출력 제한을 적용한다. 실제 diff·검사 결과·취소·복구는 기존 실행 기록으로 보관한다. 회사 자료·회사 저장소·Slack 요청 연결·작업 결과 commit·push·PR/MR은 허용하지 않는다. 모든 실증의 최종 범위와 제한은 [4-C-4 결과](stage-4c4-result.md)를 따른다.
+제안 적용은 신뢰하는 하네스가 승인한 `src/message.mjs` 한 파일에 수행한다. Codex에게 작업 트리 쓰기 포트를 주지 않고 제안 코드를 호스트에서 import·실행하지 않는다. 실행 시 독립 Git의 main·source·선택 후 Git 증거를 유지하며 Git 없는 읽기 전용 Docker view에 기존 네트워크·nonroot·root filesystem·권한·자원·시간·출력 제한을 적용한다. 실제 diff·검사 결과·취소·복구는 기존 실행 기록으로 보관한다. 회사 자료·회사 저장소·Slack 요청 연결·작업 결과 commit·push·PR/MR은 허용하지 않는다. 모든 실증의 최종 범위와 제한은 [4-C-4 결과](history/stage-4c4-result.md)를 따른다.
 
 ### 단계 4-C-5의 오프라인 조사 경계
 
@@ -355,7 +371,7 @@ Codex 이벤트는 최종 agent message와 완료 turn을 각각 한 건 요구�
 
 경로·파일 identity, 비밀 패턴, 파일/줄/총량 한도, 출력 schema와 전달 근거 참조를 검사한다. 승인·일반 로그에는 원문을 복제하지 않으며 private payload의 만료를 조회·호출·재사용 경계에서 확인한다. 취소·무효화는 generation으로 늦은 결과를 거부하고 재시작은 자동 호출 없이 명시 복구한다. Node 권한 제한과 신뢰하는 하네스·동일 OS 사용자라는 경계를 악성 임의 코드용 OS 격리나 회사 보안 승인으로 표현하지 않는다.
 
-실제 모델 호출 및 live broker 검증은 사용자가 이번 구현에서 제외했다. 실제 회사 자료·대상 코드 실행·Git 원격 작업·Slack 게시도 수행하지 않는다. 상세 수용 항목과 수행/미수행 근거는 [4-C-5 결과](stage-4c5-result.md)를 따른다.
+실제 모델 호출 및 live broker 검증은 사용자가 이번 구현에서 제외했다. 실제 회사 자료·대상 코드 실행·Git 원격 작업·Slack 게시도 수행하지 않는다. 상세 수용 항목과 수행/미수행 근거는 [4-C-5 결과](history/stage-4c5-result.md)를 따른다.
 
 ### 단계 4-C-6의 가짜 전송 계약
 
@@ -363,7 +379,7 @@ Codex 이벤트는 최종 agent message와 완료 turn을 각각 한 건 요구�
 
 검토한 최종 요청 바이트의 `requestBodyHash`를 승인·attempt·전달 예약·복구에 결합한다. broker는 worker의 임의 본문·주소·도구·인증을 중계하지 않고 저장된 승인 본문을 전달한다. 단일 소비를 확정하기 전 전달은 0회이며, 확정 후 실패·timeout·중단에도 소비를 복원하지 않는다. 늦은 응답·불확실한 정리·원본 변조로 성공을 기록하지 않는다.
 
-응답 envelope/stream과 최종 조사 JSON을 모두 검증한다. 거부된 raw·부분 응답은 로그·DB/payload에 보관하지 않는다. 검증된 내용만 private payload에 제한적으로 저장하고 최초 terminal 감사 시각은 조회·복구로 연장하지 않는다. 격리는 신뢰하는 하네스와 같은 OS 사용자 경계 안의 제한된 Node worker 검사이며 임의 악성 코드에 대한 OS 보안 보증이 아니다. 실제 모델·인증 접근·외부 전송·공급자 API 호환성은 `not_run`으로 기록한다. [4-C-6 결과](stage-4c6-result.md)에서 수용 근거를 확인한다.
+응답 envelope/stream과 최종 조사 JSON을 모두 검증한다. 거부된 raw·부분 응답은 로그·DB/payload에 보관하지 않는다. 검증된 내용만 private payload에 제한적으로 저장하고 최초 terminal 감사 시각은 조회·복구로 연장하지 않는다. 격리는 신뢰하는 하네스와 같은 OS 사용자 경계 안의 제한된 Node worker 검사이며 임의 악성 코드에 대한 OS 보안 보증이 아니다. 실제 모델·인증 접근·외부 전송·공급자 API 호환성은 `not_run`으로 기록한다. [4-C-6 결과](history/stage-4c6-result.md)에서 수용 근거를 확인한다.
 
 ### 단계 4-C-7의 인증 없는 연결 준비
 
@@ -373,15 +389,15 @@ Codex 이벤트는 최종 agent message와 완료 turn을 각각 한 건 요구�
 
 JSON/SSE는 등록한 제한된 후보 형태만 받아들이며 UTF-8·중복 키·HTTP 헤더·응답/항목 ID·이벤트 순서·최종 text·근거를 검증한다. 원시/부분/거부 응답은 보관하지 않는다. 작업 55초와 정리 5초 상한, 단일 소비, 취소 generation, 종료 증거 및 세 요청 관련 hash를 확인하는 새 프로세스 복구, private 보관 경계를 적용한다. worker의 허용 모듈 외 읽기·쓰기·네트워크·추가 프로세스 접근은 합성 canary로 검증한다.
 
-이는 실제 공급자 호환성·인증 안전성·live OS 격리·모델 추론 품질의 실증이 아니다. 보고서는 항상 `liveReady=false`와 제외 항목 `not_run`을 기록한다. 실제 연결은 별도 정책·구체 입력 검토·새 승인·격리 검증이 필요한 후속 범위다. [4-C-7 결과](stage-4c7-result.md)에 검사별 근거를 남긴다.
+이는 실제 공급자 호환성·인증 안전성·live OS 격리·모델 추론 품질의 실증이 아니다. 보고서는 항상 `liveReady=false`와 제외 항목 `not_run`을 기록한다. 실제 연결은 별도 정책·구체 입력 검토·새 승인·격리 검증이 필요한 후속 범위다. [4-C-7 결과](history/stage-4c7-result.md)에 검사별 근거를 남긴다.
 
 ### 단계 4-C-8의 별도 live 조사 승인
 
-최신 metadata 진단 계획은 사용자의 TTL10분·실제1회·자동 재시도0 승인 후 실행했다. 승인·사용·소비·attempt·전달 예약·upstream은 각1회이며 `created/access-programs/value`로 실패했다. 기존 생략/null 전용 검사에서 non-null 값이 거부된 사실만 확인했으며 실제 값의 형태·내용·의미·도구 활동을 확정하지 않는다. 원본/Git·720개 코드/빌드·이전87개 파일 보존과 프로세스 종료·sandbox 부재는 사후 독립 감사 passed다. 아래 승인 전 준비·과거 실패 기록은 당시 이력이며 [최신 실제 결과](stage-4c8-result.md#metadata-진단-계획의-승인된-실제-단건-호출)를 우선한다. 이번 소비 승인을 복원하거나 추가 호출에 재사용하지 않았다.
+최신 metadata 진단 계획은 사용자의 TTL10분·실제1회·자동 재시도0 승인 후 실행했다. 승인·사용·소비·attempt·전달 예약·upstream은 각1회이며 `created/access-programs/value`로 실패했다. 기존 생략/null 전용 검사에서 non-null 값이 거부된 사실만 확인했으며 실제 값의 형태·내용·의미·도구 활동을 확정하지 않는다. 원본/Git·720개 코드/빌드·이전87개 파일 보존과 프로세스 종료·sandbox 부재는 사후 독립 감사 passed다. 아래 승인 전 준비·과거 실패 기록은 당시 이력이며 [최신 실제 결과](history/stage-4c8-result.md#metadata-진단-계획의-승인된-실제-단건-호출)를 우선한다. 이번 소비 승인을 복원하거나 추가 호출에 재사용하지 않았다.
 
-metadata 정적 진단 보완은 응답 허용 권한을 넓히지 않는다. 기존 검사 순서·null/undefined·한도·민감정보 거부·공개 오류 code와 v1~v9 hash를 유지하며, `RESPONSE_METADATA`에서 경로4·등록 field39·고정 reason6의 정확한3키만 보관한다. getter 미실행·own data descriptor·일반/null prototype·enum을 검사한 동결 사본만 전달한다. 내부 WeakMap 등록과 현재 decode 검증에서 던진 오류를 함께 확인하므로 위조 transport/stream 오류와 과거의 진짜 진단 오류 재생을 현재 요청의 증거로 쓰지 않는다. 진단 실패가 원래 거부를 대체하지 않으며 `OUTPUT_LIMIT`·`TOOL_USAGE_ACTIVITY`·v1/v2 generic 오류도 보존한다. 로컬 준비 단계의 새 검토 계획은 같은 v9 설정·본문·profile·명세를 쓰고 이전 소비 승인을 재사용하지 않은 채 승인·attempt·실제 전송0에서 멈췄다. 로컬1020개·차등7416건 검증과 [새 준비 상태](stage-4c8-result.md#metadata-정적-진단과-새-승인-대기-계획)는 실제 모델·인증 검증과 구분한다.
+metadata 정적 진단 보완은 응답 허용 권한을 넓히지 않는다. 기존 검사 순서·null/undefined·한도·민감정보 거부·공개 오류 code와 v1~v9 hash를 유지하며, `RESPONSE_METADATA`에서 경로4·등록 field39·고정 reason6의 정확한3키만 보관한다. getter 미실행·own data descriptor·일반/null prototype·enum을 검사한 동결 사본만 전달한다. 내부 WeakMap 등록과 현재 decode 검증에서 던진 오류를 함께 확인하므로 위조 transport/stream 오류와 과거의 진짜 진단 오류 재생을 현재 요청의 증거로 쓰지 않는다. 진단 실패가 원래 거부를 대체하지 않으며 `OUTPUT_LIMIT`·`TOOL_USAGE_ACTIVITY`·v1/v2 generic 오류도 보존한다. 로컬 준비 단계의 새 검토 계획은 같은 v9 설정·본문·profile·명세를 쓰고 이전 소비 승인을 재사용하지 않은 채 승인·attempt·실제 전송0에서 멈췄다. 로컬1020개·차등7416건 검증과 [새 준비 상태](history/stage-4c8-result.md#metadata-정적-진단과-새-승인-대기-계획)는 실제 모델·인증 검증과 구분한다.
 
-최신 v9 실제 단건 검증은 사용자가 TTL10분·최대1회·자동 재시도0을 구체 승인한 뒤 수행했다. 승인·소비·attempt·upstream은 각1회이며 metadata 검증 실패로 유효 보고서가 없다. 원본/Git·코드 보존과 controller·guardian·child·프로세스 그룹 종료, sandbox 부재는 별도 사후 감사로 확인했다. 현재 실제 결과와 누적 상태는 [v9 실행·사후 감사](stage-4c8-result.md#v9-승인된-실제-단건-호출과-사후-감사)를 따르며 아래 준비·구형 버전 기록은 과거 이력으로 보존한다. 이번 승인은 소비됐고 추가 호출에 재사용하지 않는다.
+최신 v9 실제 단건 검증은 사용자가 TTL10분·최대1회·자동 재시도0을 구체 승인한 뒤 수행했다. 승인·소비·attempt·upstream은 각1회이며 metadata 검증 실패로 유효 보고서가 없다. 원본/Git·코드 보존과 controller·guardian·child·프로세스 그룹 종료, sandbox 부재는 별도 사후 감사로 확인했다. 현재 실제 결과와 누적 상태는 [v9 실행·사후 감사](history/stage-4c8-result.md#v9-승인된-실제-단건-호출과-사후-감사)를 따르며 아래 준비·구형 버전 기록은 과거 이력으로 보존한다. 이번 승인은 소비됐고 추가 호출에 재사용하지 않는다.
 
 `synthetic-readonly-live-v1`은 등록 합성 fixture의 선택 근거만 실제 모델에 보내는 새 경로다. `readonly-live.sqlite`에 별도 계획·승인·단일 소비를 기록하고 이전 mock/offline/patch 승인을 재사용하지 않는다. 기존 오프라인 명령에는 live 옵션이나 인증 경로를 추가하지 않는다. 읽기·전송 범위와 빈 수정·검사 범위, 원본 identity·revision·다섯 hash·configSnapshot을 새 승인에 고정한다.
 
@@ -411,7 +427,7 @@ v4 헤더 보완은 새 설정/profile에 decoder `readonly-live-response-v3`와
 
 v9의 추가 response JSON 수용은 별도 profile·새 승인을 요구하는 제한적 호환 정책이다. 추가 필드는 최대8개이고 root 이름은 ASCII 식별자1~64자로 제한하며 제어/prototype 키를 거부한다. 추가 묶음의 키를 포함한 canonical UTF-8 전체16KiB·256노드·깊이8 한도를 공유된 불변 상수로 강제한다(묶음 자체는 깊이0·노드1). 유한한 JSON 값만 허용하고 accessor·symbol·비표준 객체·순환 참조는 거부한다. 제외할 추가 원본도 숫자 별칭 없이 별도로 민감정보 검사하므로 알려진 metadata의 투영 규칙을 unknown 자료에 적용하지 않는다. 알려진 필드의 기존 검증과 원본 전체 민감정보·도구·완료·크기 제한을 유지하며 추가 자료는 보고서·상태·명령에 쓰지 않는다. 정적 거부 사유5개만 기존 response 진단에 추가하고 원문 키·값은 보관하지 않는다. 구현과 전체1005개·집중121개 검증을 마쳤으며 재생성한 v9 계획의 별도 승인 후 실제1회는 RESPONSE_METADATA로 실패했다. 기존 v1~v8 계약·hash는 보존하고 실제 추가 필드명·의미는 미확인으로 남긴다.
 
-결과에는 실제/합성 검증 증거를 구분하고 schema 통과를 의미 정확성 보증으로 표시하지 않는다. 내용24시간·최초 terminal 감사30일·DB 수명의 소비 marker를 유지하며 원본/Git·DB·감사·실패 작업물은 임시 디렉터리 정리 대상이 아니다. 전체985개 검증 코드의 response 실제 진단은 SSE created 내부 response의 추가 필드5개로 거부됐다. 필수 누락은 없고 이름·의미는 미확인이며 이 결과를 이전 v8의 origin으로 소급 적용하지 않는다. 격리·인증 접근 passed와 cleanupConfirmed=true를 확인했고 독립 사후 감사에서 원본/Git33개·부모7개 identity·HEAD/base 보존과 관련 프로세스·sandbox 종료를 확인했다. 그 시점까지 upstream14회 실패·별도 전송 전 실패1회·소비 승인15개·자동 재시도0회였고 유효 보고서·responseHash는 없었다. HTTP200은 완성 응답·추론 성공의 증거가 아니다. 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤다. 기존 v1~v8 계약·profile·hash는 보존한다. 이후 재생성한 v9 계획을 TTL10분으로 별도 승인해1회 호출했으나 RESPONSE_METADATA로 실패했다. 승인·attempt·전송 각1회·자동 재시도0회이며 원본/Git·프로세스 종료 감사는 passed다. [4-C-8 결과](stage-4c8-result.md)에 이력을 보존하며 회사 자료·실제 저장소·Slack·대상 실행·commit/push·PR/MR은 포함하지 않는다.
+결과에는 실제/합성 검증 증거를 구분하고 schema 통과를 의미 정확성 보증으로 표시하지 않는다. 내용24시간·최초 terminal 감사30일·DB 수명의 소비 marker를 유지하며 원본/Git·DB·감사·실패 작업물은 임시 디렉터리 정리 대상이 아니다. 전체985개 검증 코드의 response 실제 진단은 SSE created 내부 response의 추가 필드5개로 거부됐다. 필수 누락은 없고 이름·의미는 미확인이며 이 결과를 이전 v8의 origin으로 소급 적용하지 않는다. 격리·인증 접근 passed와 cleanupConfirmed=true를 확인했고 독립 사후 감사에서 원본/Git33개·부모7개 identity·HEAD/base 보존과 관련 프로세스·sandbox 종료를 확인했다. 그 시점까지 upstream14회 실패·별도 전송 전 실패1회·소비 승인15개·자동 재시도0회였고 유효 보고서·responseHash는 없었다. HTTP200은 완성 응답·추론 성공의 증거가 아니다. 별도 v9 추가 JSON 호환 정책은 구현과 전체1005개·집중121개 검증을 마쳤다. 기존 v1~v8 계약·profile·hash는 보존한다. 이후 재생성한 v9 계획을 TTL10분으로 별도 승인해1회 호출했으나 RESPONSE_METADATA로 실패했다. 승인·attempt·전송 각1회·자동 재시도0회이며 원본/Git·프로세스 종료 감사는 passed다. [4-C-8 결과](history/stage-4c8-result.md)에 이력을 보존하며 회사 자료·실제 저장소·Slack·대상 실행·commit/push·PR/MR은 포함하지 않는다.
 
 v6는 공식 `tool_usage` 경로에 한해 필수·선택 키와 정수만으로 된 전체 형태를 검증하고 민감정보 검사 대상의 숫자 별칭을 만든다. 임의 경로·문자열·추가 키·null은 이 예외에 포함하지 않는다. 모든 수치를0으로 제한하고 nonzero는 정적 `TOOL_USAGE_ACTIVITY`로 차단하는 것은 `tools=[]`를 위한 하네스의 추가 제한이다. 공식 문서의 집계0·선택 필드 생략은 도구 미실행을 증명하지 않으므로 실제 tool call/event/output 거부를 별도 유지한다. v1~v5 계약·hash는 보존하며 변경된 수용 정책은 새 profile·계획·승인을 요구한다.
 
@@ -445,7 +461,7 @@ v2 수신 진단은 정확한 own data의 비음수 정수 계수8개와 EOF·�
 
 하네스의 DB·일반 로그·감사에는 원시/부분/거부 응답을 쓰지 않는다. 격리 Codex가 일시적으로 보유하는 내용은 native 임시 영역의 종료 후 제거와 함께 다루며, 강제 중단·정리 불확실에서 잔류 내용의 완전한 제거를 보증하지 않는다. 원본/Git·DB·감사는 임시 영역 정리 대상이 아니다.
 
-각 새 검토 본문·hash를 `AWAITING_APPROVAL`로 고정한 뒤 사용자의 별도 TTL10분·1회·retry0 승인으로 실행했다. relay-v1 실제1회의256KiB 초과 실패와 소비 기록을 보존한다. 후속4MiB v2의 새 계획은 로컬1125개 회귀·독립 감사 후 별도 승인됐고 승인·사용·소비·attempt·dispatch·upstream 각1회, HTTP200·362,095byte EOF·유효 보고서·`REPORTED`를 확인했다. 원본/Git·코드/고정 자료 보존과 controller/guardian/child/PGID 종료를 사후 감사했고 원시 본문은 보관하지 않는다. 구체 단건 성공은 일반 공급자 호환성·의미 정확성·회사 보안 검토 통과가 아니다. 원격 추론 중지 여부는 확인할 수 없으며 승인 복원·재시도·실행 중 한도 변경은 하지 않았다. [예산 보완 실제 결과](stage-4c9-result.md#응답-예산-보완의-승인된-실제-단건-호출)와 [기준 계획](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)을 따른다.
+각 새 검토 본문·hash를 `AWAITING_APPROVAL`로 고정한 뒤 사용자의 별도 TTL10분·1회·retry0 승인으로 실행했다. relay-v1 실제1회의256KiB 초과 실패와 소비 기록을 보존한다. 후속4MiB v2의 새 계획은 로컬1125개 회귀·독립 감사 후 별도 승인됐고 승인·사용·소비·attempt·dispatch·upstream 각1회, HTTP200·362,095byte EOF·유효 보고서·`REPORTED`를 확인했다. 원본/Git·코드/고정 자료 보존과 controller/guardian/child/PGID 종료를 사후 감사했고 원시 본문은 보관하지 않는다. 구체 단건 성공은 일반 공급자 호환성·의미 정확성·회사 보안 검토 통과가 아니다. 원격 추론 중지 여부는 확인할 수 없으며 승인 복원·재시도·실행 중 한도 변경은 하지 않았다. [예산 보완 실제 결과](history/stage-4c9-result.md#응답-예산-보완의-승인된-실제-단건-호출)와 [기준 계획](implementation-plan.md#단계-4-c-9-chatgpt-로그인-유지와-codex-응답-해석으로-전환)을 따른다.
 
 ### 개인 시험 저장소의 로컬 준비 경계
 
@@ -453,7 +469,7 @@ v2 수신 진단은 정확한 own data의 비음수 정수 계수8개와 EOF·�
 
 reader의 FS는 필요한 Git 객체와 선택 파일의 bounded read만 제공한다. Git CLI·target import/스크립트·설치/검사·거래 API·네트워크·쓰기·Git config/hooks·alternate object store는 제공하지 않는다. leaf와 부모 identity·canonical path·단일 link·소유자를 확인하고 static symlink/hardlink·경로 탈출·선택 파일 dirty·index/HEAD/ref 변화를 거부한다. 단일 OS 사용자의 신뢰하는 하네스 코드와 파일 시스템을 전제로 하며 악성 동시 사용자에 대한 OS 격리를 주장하지 않는다. 감시 범위는 선택 파일과 실제 사용한 Git identity이며 전체 저장소가 clean이거나 검토됐다고 표시하지 않는다.
 
-개인 adapter는 하네스에 고정된 입력 validator만 공통 relay-v2에 주입한다. 외부 등록·모델 출력에는 validator/함수·임의 endpoint·명령 옵션이 없다. native와 broker의 부모 인증·단건·4MiB/최종16KiB·EOF/반사 검사·종료 규칙은 유지하며 원시 응답/인증 비보관과 미검증5항목도 같다. 실제 개인 자료를 사용한 작업은 이번 준비에서 `AWAITING_APPROVAL`과 승인/소비/attempt/dispatch0을 유지한다. 가짜 전송·합성 native 검증의 성공을 실제 개인 조사나 의미 정확성 검증으로 바꾸지 않는다. [준비 결과](stage-4c10-result.md)를 참조한다.
+개인 adapter는 하네스에 고정된 입력 validator만 공통 relay-v2에 주입한다. 외부 등록·모델 출력에는 validator/함수·임의 endpoint·명령 옵션이 없다. native와 broker의 부모 인증·단건·4MiB/최종16KiB·EOF/반사 검사·종료 규칙은 유지하며 원시 응답/인증 비보관과 미검증5항목도 같다. 실제 개인 자료를 사용한 작업은 이번 준비에서 `AWAITING_APPROVAL`과 승인/소비/attempt/dispatch0을 유지한다. 가짜 전송·합성 native 검증의 성공을 실제 개인 조사나 의미 정확성 검증으로 바꾸지 않는다. [준비 결과](history/stage-4c10-result.md)를 참조한다.
 
 ### 개인 수집 v2의 변환·검사 경계
 
@@ -463,7 +479,7 @@ reader의 FS는 필요한 Git 객체와 선택 파일의 bounded read만 제공�
 
 private proof는 source/view hash·바이트·줄수·고정 검사 상태와 마스크 줄 범위만 저장한다. 매치 값·조각·자유 오류·원문/전체 view는 저장하지 않는다. 모델에는 안전 발췌·view hash·마스킹 고지만 전달하고, 가려진 내용을 원본으로 복원하거나 추측하지 않게 한다. 변환 후 view가 같아도 raw source 변경은 guard에서 차단한다. 보고서의 collection metadata와 planHash는 별도 수집 계약을 식별하며 실제 원문 민감 검사 통과나 의미 정확성을 주장하지 않는다.
 
-패턴 검사는 모든 비밀/개인정보의 완전한 판별이 아니며 마스킹으로 회사 자료 처리 승인을 대체하지 않는다. 실제 개인 자료의 새 계획은 로컬 준비와 승인0 상태에서 멈추며 별도 명시 승인 전 인증·모델·외부 전송0을 유지한다. [검증 범위](stage-4c11-result.md)를 따른다.
+패턴 검사는 모든 비밀/개인정보의 완전한 판별이 아니며 마스킹으로 회사 자료 처리 승인을 대체하지 않는다. 실제 개인 자료의 새 계획은 로컬 준비와 승인0 상태에서 멈추며 별도 명시 승인 전 인증·모델·외부 전송0을 유지한다. [검증 범위](history/stage-4c11-result.md)를 따른다.
 
 ### 새 시간·프레임 실행 예산의 권한
 
@@ -473,7 +489,7 @@ service·adapter·collector·native idle·guardian·broker의 응답 대기와 �
 
 전체4MiB/frame64KiB/깊이16/최종16KiB/native 출력 합계128KiB/stderr16KiB·민감정보·인증 반사·원문/부분 응답 비보관을 유지한다. 구형 개인 v2의 원본 거부와 view 전체 재검사를 그대로 사용한다. 새 보고서의 실행 예산 고지는 의미 정확성·전체 호출 그래프·원격 추론 중지의 보증이 아니다. 합성 clock·메모리 검사와 실제 지연 native fake의 검증 범위를 구분한다.
 
-이번 준비는 실제 로그인 정보·상태/refresh·모델·공급자 전송0에서 끝낸다. 정확한 입력·고정 예산·만료·원본/코드 hash와 DB의 승인/사용/소비/attempt/dispatch0을 검토한 새 `AWAITING_APPROVAL` 계획만 만들며 후속 실제 호출은 구체 TTL·최대1회·자동 재시도0 승인이 필요하다. [4-C-12 결과](stage-4c12-result.md)를 따른다.
+이번 준비는 실제 로그인 정보·상태/refresh·모델·공급자 전송0에서 끝낸다. 정확한 입력·고정 예산·만료·원본/코드 hash와 DB의 승인/사용/소비/attempt/dispatch0을 검토한 새 `AWAITING_APPROVAL` 계획만 만들며 후속 실제 호출은 구체 TTL·최대1회·자동 재시도0 승인이 필요하다. [4-C-12 결과](history/stage-4c12-result.md)를 따른다.
 
 ### 오프라인 이전 점검의 접근 경계
 
@@ -499,31 +515,31 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 ### 검토용 Git 사본의 실험 경계
 
-[4-C-16 사본 설계](company-evidence-copy-design.md)는 테스트가 만든 합성 객체만 사용하며 실제 exporter·회사 자료 추출을 제공하지 않는다. 기존 판독기·계약·한도를 바꾸지 않고 같은 commit과 선택 경로를 검증한다. guard의 대상은 사본이며 원본의 이후 변경·현재 HEAD/index·전체 저장소 상태를 보증하지 않는다. OID 일치도 회사 출처·작성자 신원·서명의 인증과 구분한다.
+[4-C-16 사본 설계](history/stage-4c16-result.md#당시-사본-설계)는 테스트가 만든 합성 객체만 사용하며 실제 exporter·회사 자료 추출을 제공하지 않는다. 기존 판독기·계약·한도를 바꾸지 않고 같은 commit과 선택 경로를 검증한다. guard의 대상은 사본이며 원본의 이후 변경·현재 HEAD/index·전체 저장소 상태를 보증하지 않는다. OID 일치도 회사 출처·작성자 신원·서명의 인증과 구분한다.
 
 원본 OID를 보존하는 실제 사본에는 선택 원문, commit 본문과 비선택 형제 이름을 포함한 tree metadata가 남는다. 마스킹된 검토 payload로 취급하지 않으며 별도 보관/정리 범위를 적용해야 한다. 회사용 DB의 TTL/prune은 사본을 삭제하지 않는다. 실제 공급/추출 방식은 당시 미구현 후속안이었으며 현재 사본 생성기 개발은 중단하고 아래 원본 직접 읽기 설계로 전환했다.
 
 ### 회사 Git 선택 읽기의 경계 — 합성 파일 판독기까지 구현
 
-사본 생성기 개발을 중단하고 원본의 직접 읽기를 위한 [새 회사 전용 계약](company-git-range-reader-design.md)을 설계했다. 큰 pack의 물리적 크기와 실제 구간 읽기량은 별도 상한이며 작은 index 전체와 필요한 객체/의존 base를 검증한다. 전체 pack checksum·미조회 객체는 `not_checked`다. CRC와 index/trailer 값의 일치를 전체 무결성이나 출처 인증으로 설명하지 않는다. 비선택/과거 delta base도 복원 과정에서 읽힐 수 있으나 raw 내용은 디스크/근거/로그에 저장하지 않는다.
+사본 생성기 개발을 중단하고 원본의 직접 읽기를 위한 [새 회사 전용 계약](design/company-git-range-reader-design.md)을 설계했다. 큰 pack의 물리적 크기와 실제 구간 읽기량은 별도 상한이며 작은 index 전체와 필요한 객체/의존 base를 검증한다. 전체 pack checksum·미조회 객체는 `not_checked`다. CRC와 index/trailer 값의 일치를 전체 무결성이나 출처 인증으로 설명하지 않는다. 비선택/과거 delta base도 복원 과정에서 읽힐 수 있으나 raw 내용은 디스크/근거/로그에 저장하지 않는다.
 
 기존 v1의 전체 Git hash 대신 새 구간 proof·profile·계획 버전을 요구한다. 자동 fallback·계획/DB 재사용·한도 자동 상향은 없고 기본 비활성·전송/실행 false를 유지한다. 최초 조회/최종 guard의 공통 예산, FD/경로/부모 대조와 부모 supervisor가 필요하다. 관리 buffer·V8 old-space·RSS 측정 목표는 서로 다르며 OS 메모리 격리로 표시하지 않는다.
 
 1차 구현은 메모리 기반 byte codec과 공통 논리 예산에 한정한다. 호출자는 모든 I/O·할당·cache 소유권을 등록하고 단조 시간을 공급해야 하며, 출력 buffer나 view를 보유하는 동안 memory lease를 유지해야 한다. 이미 전달된 입력의 할당과 등록하지 않은 JavaScript/native 내부 메모리까지 통제하지 않는다. 새 byte proof는 허용된 metadata 구조·hash·의존 관계의 정합성을 검사할 뿐 실제 파일 관찰·회사 승인·출처를 인증하지 않는다. 두 pass에서 같은 proofHash가 나와도 누적 예산 snapshot은 별도이며, 최종 repository proof에 함께 결합하는 단계는 미구현이다.
 
-1차 기록은 [codec 결과](stage-4c17-codec-result.md)를 따른다. [2차 파일 판독기](stage-4c17-reader-result.md)는 합성 저장소에서 실제 위치 지정 읽기, 경로·FD·부모·부재·pack 목록 대조, commit/tree/작업 index 해석과 두 pass의 새 읽기·proof 비교를 검증했다. symlink·hardlink·비정규 파일·작업 중 교체를 관찰하면 거부하며, pack 전체 읽기나 실패 후 다른 공급원으로의 자동 재시도는 없다. 명시적인 인증·설정 경로는 내용 읽기 전에 차단하고 alternate object store 참조 파일은 metadata로 존재를 확인해 거부한다.
+1차 기록은 [codec 결과](history/stage-4c17-codec-result.md)를 따른다. [2차 파일 판독기](history/stage-4c17-reader-result.md)는 합성 저장소에서 실제 위치 지정 읽기, 경로·FD·부모·부재·pack 목록 대조, commit/tree/작업 index 해석과 두 pass의 새 읽기·proof 비교를 검증했다. symlink·hardlink·비정규 파일·작업 중 교체를 관찰하면 거부하며, pack 전체 읽기나 실패 후 다른 공급원으로의 자동 재시도는 없다. 명시적인 인증·설정 경로는 내용 읽기 전에 차단하고 alternate object store 참조 파일은 metadata로 존재를 확인해 거부한다.
 
-내부 source API의 입력 검증은 회사 승인 gate가 아니다. 2차 당시 회사용 v2 등록/준비·safe-view·DB/CLI 연결은 없었으며, 이후 연결과 부모 supervisor의 검증 범위는 [3차 통합 결과](stage-4c17-integration-result.md)를 따른다. 기존 회사 명령·등록 v1은 자동 전환하지 않았다. metadata 전용 source의 성공 반환에는 raw commit/tree/base/source 본문이 없다. 관찰 결과는 파일 시스템의 원자적 snapshot이나 OS 읽기 격리가 아니며 최종 관찰 후 변경까지 보증하지 않는다. byte proof 단독 parser와 신뢰하는 판독기가 실제 읽기에서 만든 관찰을 구분한다.
+내부 source API의 입력 검증은 회사 승인 gate가 아니다. 2차 당시 회사용 v2 등록/준비·safe-view·DB/CLI 연결은 없었으며, 이후 연결과 부모 supervisor의 검증 범위는 [3차 통합 결과](history/stage-4c17-integration-result.md)를 따른다. 기존 회사 명령·등록 v1은 자동 전환하지 않았다. metadata 전용 source의 성공 반환에는 raw commit/tree/base/source 본문이 없다. 관찰 결과는 파일 시스템의 원자적 snapshot이나 OS 읽기 격리가 아니며 최종 관찰 후 변경까지 보증하지 않는다. byte proof 단독 parser와 신뢰하는 판독기가 실제 읽기에서 만든 관찰을 구분한다.
 
 공통 예산은 실제 I/O와 buffer 소유권에 연결했다. 구간 proof는 동일 읽기 구간을 중복 제거하지만 예산은 반복 호출을 모두 차감한다. 내부 API 자체의 실제 단조 시각 검사는 동기 작업을 선점하지 않는다. close 오류는 닫힘을 확정할 수 없으므로 FD 계수를 유지하고 실패하며 같은 FD 번호를 다시 닫지 않는다. 불확정 자원 정리는 worker 종료 확인이 필요하다. 3차 회사 준비 v2의 종료 정책과 메모리 측정 범위는 위 통합 결과를 따르며 OS RSS 상한으로 취급하지 않는다.
 
-후속 [읽기 단위 계약](company-git-range-read-unit-design.md)은 별도 reader-v2/profile/guard hash·byte-proof-v2·source-v2로 합성 구현한다. 각 단위 시작/끝과 pass 최종에는 전체 경로를, chunk 전후에는 leaf/FD를 확인한다. 일시적으로 조상이 바뀌었다 단위 끝 전에 복원되면 관찰하지 못할 수 있으므로 기존 reader-v1과 동등하지 않다. 새 요청/hash·budget identity·증거 버전은 분리하며 기존 회사 준비 명령이나 승인/DB로 자동 선택하지 않는다. 후속 회사 준비 v3는 동일 회사 정책 gate와 별도 등록/계획·DB·worker·진단을 연결한다. v3 등록은 새 profile/guard hash를 모두 요구하고 worker 입력·시작 기록·runtime binding에도 결합한다. 구형 DB를 이름만 바꾸어 사용하거나 구형 등록/증거/진단을 받아들이지 않는다. 정리 실패 시 준비를 보관하지 않고 최초 실패 진단을 보존한다. 불확실 결과는 자동 재시도 없이 같은 ID로 조회한다. [합성 통합 결과](stage-4c17-company-v3-result.md)는 회사 승인이나 OS 읽기 격리를 제공한다는 뜻이 아니며 실제 회사 적용은 별도 명시적 단계다.
+후속 [읽기 단위 계약](design/company-git-range-read-unit-design.md)은 별도 reader-v2/profile/guard hash·byte-proof-v2·source-v2로 합성 구현한다. 각 단위 시작/끝과 pass 최종에는 전체 경로를, chunk 전후에는 leaf/FD를 확인한다. 일시적으로 조상이 바뀌었다 단위 끝 전에 복원되면 관찰하지 못할 수 있으므로 기존 reader-v1과 동등하지 않다. 새 요청/hash·budget identity·증거 버전은 분리하며 기존 회사 준비 명령이나 승인/DB로 자동 선택하지 않는다. 후속 회사 준비 v3는 동일 회사 정책 gate와 별도 등록/계획·DB·worker·진단을 연결한다. v3 등록은 새 profile/guard hash를 모두 요구하고 worker 입력·시작 기록·runtime binding에도 결합한다. 구형 DB를 이름만 바꾸어 사용하거나 구형 등록/증거/진단을 받아들이지 않는다. 정리 실패 시 준비를 보관하지 않고 최초 실패 진단을 보존한다. 불확실 결과는 자동 재시도 없이 같은 ID로 조회한다. [합성 통합 결과](history/stage-4c17-company-v3-result.md)는 회사 승인이나 OS 읽기 격리를 제공한다는 뜻이 아니며 실제 회사 적용은 별도 명시적 단계다.
 
-공통 경로 순회 개선은 같은 pathname prefix의 반복 Git tree 요청을 묶는다. 기존 parser가 선택 항목 뒤의 잘못된 entry까지 전체 tree를 검사하며, 반환하는 OID/mode metadata 외에 본문은 즉시 해제한다. 각 실제 I/O의 open/unit/chunk/final guard와 매 pass의 새 읽기를 유지하고 기존 profile/guard hash·수치 상한을 바꾸지 않는다. 반복 호출이 줄어 syscall 순서·일시적 변경을 우연히 관찰하는 횟수까지 동일하지는 않으며 연속적 경로 동일성이나 원자적 snapshot을 주장하지 않는다. 회사 자료 재접근 없이 독립 합성 검증만 수행한다. [개선 결과와 한계](stage-4c17-tree-traversal-result.md)를 따른다.
+공통 경로 순회 개선은 같은 pathname prefix의 반복 Git tree 요청을 묶는다. 기존 parser가 선택 항목 뒤의 잘못된 entry까지 전체 tree를 검사하며, 반환하는 OID/mode metadata 외에 본문은 즉시 해제한다. 각 실제 I/O의 open/unit/chunk/final guard와 매 pass의 새 읽기를 유지하고 기존 profile/guard hash·수치 상한을 바꾸지 않는다. 반복 호출이 줄어 syscall 순서·일시적 변경을 우연히 관찰하는 횟수까지 동일하지는 않으며 연속적 경로 동일성이나 원자적 snapshot을 주장하지 않는다. 회사 자료 재접근 없이 독립 합성 검증만 수행한다. [개선 결과와 한계](history/stage-4c17-tree-traversal-result.md)를 따른다.
 
-회사 준비 v3의 일반 실패 진단은 53개 고정 오류 코드만 허용한다. task ID에 결합된 단일 완결 프레임을 기존 64KiB stderr 한도 안에서 해석하며, supervisor가 중단하지 않은 worker의 종료 코드 1·signal 없음·close를 확인한 때만 `workerFailureCode`를 보관한다. 성공 출력과의 충돌은 거절하고 budget 진단의 오류 코드와 다르면 새 코드를 버린다. getter·proxy·오류 message/stack·임의 코드 문자열은 기록하지 않는다. 새 코드가 있는 진단 record-v2와 없는 기존 record-v1을 엄격히 구분하며 원래 audit 기한·0700/0600·위치와 hash 결합·명령 기반 정리를 유지한다. 일반 오류 진단은 정책 승인·자료 무결성 증명·재시도 근거가 아니며 과거 원인을 소급 복원하지 않는다. 합성 검증 범위는 [4-C-21 결과](stage-4c21-result.md)를 따른다.
+회사 준비 v3의 일반 실패 진단은 53개 고정 오류 코드만 허용한다. task ID에 결합된 단일 완결 프레임을 기존 64KiB stderr 한도 안에서 해석하며, supervisor가 중단하지 않은 worker의 종료 코드 1·signal 없음·close를 확인한 때만 `workerFailureCode`를 보관한다. 성공 출력과의 충돌은 거절하고 budget 진단의 오류 코드와 다르면 새 코드를 버린다. getter·proxy·오류 message/stack·임의 코드 문자열은 기록하지 않는다. 새 코드가 있는 진단 record-v2와 없는 기존 record-v1을 엄격히 구분하며 원래 audit 기한·0700/0600·위치와 hash 결합·명령 기반 정리를 유지한다. 일반 오류 진단은 정책 승인·자료 무결성 증명·재시도 근거가 아니며 과거 원인을 소급 복원하지 않는다. 합성 검증 범위는 [4-C-21 결과](history/stage-4c21-result.md)를 따른다.
 
-소스 거부 분기는 판독기가 생성한 `INVALID_SOURCE` 오류 identity에 WeakMap으로만 결합한다. 외부 오류의 property·message·stack에서 분기를 가져오지 않으며 원본 경로·OID·행번호·본문을 보관하지 않는다. 고정9분기를 가진 새 worker frame-v2와 diagnostic record-v3는 `workerFailureCode=COMPANY_GIT_RANGE_INVALID_SOURCE`일 때만 허용한다. 기존 frame-v1과 혼합/중복되면 진단을 거부하고, 종료/기한/출력 및 budget 진단 우선순위는 유지한다. 기존 record-v1/v2의 필드와 hash, 모든 계약·수치 한도와 보관 조건은 보존한다. 안전 view·발췌 오류도 이 일반 코드로 합쳐질 수 있으므로 Git 원본 손상의 증거로 확대하지 않는다. [분기 검증 결과](stage-4c22-result.md)를 따른다.
+소스 거부 분기는 판독기가 생성한 `INVALID_SOURCE` 오류 identity에 WeakMap으로만 결합한다. 외부 오류의 property·message·stack에서 분기를 가져오지 않으며 원본 경로·OID·행번호·본문을 보관하지 않는다. 고정9분기를 가진 새 worker frame-v2와 diagnostic record-v3는 `workerFailureCode=COMPANY_GIT_RANGE_INVALID_SOURCE`일 때만 허용한다. 기존 frame-v1과 혼합/중복되면 진단을 거부하고, 종료/기한/출력 및 budget 진단 우선순위는 유지한다. 기존 record-v1/v2의 필드와 hash, 모든 계약·수치 한도와 보관 조건은 보존한다. 안전 view·발췌 오류도 이 일반 코드로 합쳐질 수 있으므로 Git 원본 손상의 증거로 확대하지 않는다. [분기 검증 결과](history/stage-4c22-result.md)를 따른다.
 
 ### 회사 준비에서 모의 조사로 넘어가는 경계
 
@@ -535,7 +551,7 @@ Node 권한 worker는 상속 인증 환경·네트워크·추가 프로세스·�
 
 준비의 원래 본문/감사 기한을 상속한다. 모의 승인 TTL은 본문 기한을 넘을 수 없고 payload와 보고서가 함께 삭제된다. 응답은 기존 16KiB JSON·민감정보·제공된 근거/줄 범위를 검증한다. `responseHash`는 검증한 `result`의 canonical JSON hash이며 raw 응답 hash가 아니다. 모의 응답의 의미 정확성·실제 회사 정책·공급자 호환성은 미검증이다.
 
-DB 사전검사와 실행은 최소 환경의 별도 Node 권한 child에서 수행한다. 네트워크·추가 child/worker·addon·WASI·inspector를 허용하지 않고 새 조사 store와 필요한 기존 준비 store에만 쓰기를 허용한다. source는 읽기 전용 코드로 접근하며 OS 읽기 격리라고 주장하지 않는다. V8 old-space128MiB는 RSS 상한이 아니다. 전체 CLI 작업 기한은 사전검사를 포함해 run125초, 나머지30초이고, 비동기 실행 supervisor는250ms 유예 후 SIGKILL을 요청하며 close를 확인한다. 부모 생존과 OS 신호 처리에 의존한다. 상세 검사와 한계는 [4-C-18 결과](stage-4c18-result.md)를 따른다.
+DB 사전검사와 실행은 최소 환경의 별도 Node 권한 child에서 수행한다. 네트워크·추가 child/worker·addon·WASI·inspector를 허용하지 않고 새 조사 store와 필요한 기존 준비 store에만 쓰기를 허용한다. source는 읽기 전용 코드로 접근하며 OS 읽기 격리라고 주장하지 않는다. V8 old-space128MiB는 RSS 상한이 아니다. 전체 CLI 작업 기한은 사전검사를 포함해 run125초, 나머지30초이고, 비동기 실행 supervisor는250ms 유예 후 SIGKILL을 요청하며 close를 확인한다. 부모 생존과 OS 신호 처리에 의존한다. 상세 검사와 한계는 [4-C-18 결과](history/stage-4c18-result.md)를 따른다.
 
 ### 회사 전송 계약과 실행 경계
 
@@ -543,9 +559,9 @@ DB 사전검사와 실행은 최소 환경의 별도 Node 권한 child에서 수
 
 preflight·비실행 명령은 최소 환경과 Node 권한 모델을 유지한다. 명시적 run은 현재 Node 권한 모드가 fsync를 막기 때문에 기존 relay와 같은 신뢰 controller로 실행한다. controller는 OS 파일/네트워크/프로세스 권한을 갖는다. 여기에 회사 source의 OS 읽기/쓰기 격리를 주장하지 않는다. native child는 기존 SBPL·broker·guardian을 사용하며 대상 코드 실행이나 임의 명령 포트를 제공하지 않는다. 이 변경은 기존 모의 worker의 권한을 넓히지 않는다. 짧은 전용 IPC 위치는 대상 겹침을 검사한 뒤 부모가 만들고, 종료가 확인된 소유 디렉터리가 비었을 때만 제거한다.
 
-원래 payload/audit 기한과 relay-v3 예산을 유지한다. 관리되는 review 사본에는 정확한 요청과 검증된 결과만 쓰며 fsync를 요구하는 승인 원장은 SQLite에 둔다. 비실행 명령도 만료된 사본과 종료된 감사 파일을 정리한다. scratch·종료 불확정·알 수 없는 산출물은 감사 기한 이후에도 보존할 수 있으며 `preservedUncertainArtifacts`로 알린다. 백그라운드 삭제, 강제 RSS 상한, 원자적 source snapshot, 원격 처리 취소를 보장하지 않는다. 실행 중 JSON 설정 수정은 즉시 취소가 아니므로 cancel을 사용한다. 실제 인증/native/모델과 회사 자료를 제외한 이번 검증의 상세 범위는 [4-C-19 결과](stage-4c19-result.md)를 따른다.
+원래 payload/audit 기한과 relay-v3 예산을 유지한다. 관리되는 review 사본에는 정확한 요청과 검증된 결과만 쓰며 fsync를 요구하는 승인 원장은 SQLite에 둔다. 비실행 명령도 만료된 사본과 종료된 감사 파일을 정리한다. scratch·종료 불확정·알 수 없는 산출물은 감사 기한 이후에도 보존할 수 있으며 `preservedUncertainArtifacts`로 알린다. 백그라운드 삭제, 강제 RSS 상한, 원자적 source snapshot, 원격 처리 취소를 보장하지 않는다. 실행 중 JSON 설정 수정은 즉시 취소가 아니므로 cancel을 사용한다. 실제 인증/native/모델과 회사 자료를 제외한 이번 검증의 상세 범위는 [4-C-19 결과](history/stage-4c19-result.md)를 따른다.
 
-인증 반사 진단 보완은 기존 차단 조건을 완화하지 않는다. relay-v3의 `call-report.json`에만 선택적으로 `reflectionDiagnostic`의 고정 version/scope/match/credential enum을 남긴다. 값·조각·길이·위치·원시 응답은 보관하지 않으며 현재 동기 검사 오류의 내부 결합만 인정한다. 기존 reception 11필드, 공개 오류, 구형 보고서·hash·예산·64상태 한도와 EOF/반사 검사 전 자식 전달 금지는 유지한다. 조각 누적 진단만으로 오탐이나 실제 노출을 확정하지 않는다. 합성 재현과 검증 범위는 [4-C-20 결과](stage-4c20-result.md)를 따른다.
+인증 반사 진단 보완은 기존 차단 조건을 완화하지 않는다. relay-v3의 `call-report.json`에만 선택적으로 `reflectionDiagnostic`의 고정 version/scope/match/credential enum을 남긴다. 값·조각·길이·위치·원시 응답은 보관하지 않으며 현재 동기 검사 오류의 내부 결합만 인정한다. 기존 reception 11필드, 공개 오류, 구형 보고서·hash·예산·64상태 한도와 EOF/반사 검사 전 자식 전달 금지는 유지한다. 조각 누적 진단만으로 오탐이나 실제 노출을 확정하지 않는다. 합성 재현과 검증 범위는 [4-C-20 결과](history/stage-4c20-result.md)를 따른다.
 
 ### 회사 수정안의 검토 전용 승인
 
@@ -594,5 +610,5 @@ Gmail·Calendar·Drive는 후속 선택 기능이다. 연결된 계정이 있다
 - 별도 허가 없는 메시지 전송·push가 없고, 대상 저장소 작업에 PR/MR 생성 경로를 제공하지 않음.
 - 승인 범위 밖 변경과 실패·미실행 검사를 성공으로 보고하지 않음.
 
-단계 3-A의 기록용 승인, 단계 3-B의 합성 격리 진단, 단계 3-C의 독립 합성 실행, 단계 3-D의 합성 제어·복구, 단계 4-A의 합성 답장 전용 승인, 단계 4-B-1의 오프라인 HTTP 계약 진단과 단계 4-B-2의 별도 live 승인을 구분한다. 실제 검증 범위는 각 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. 기존 조사 실행 포트는 항상 거부하며 실제 회사 저장소·Slack 요청 실행·자동 업무 답장은 연결하지 않는다. 실제 Slack 게시 검증은 별도 승인된 고정 단건 시험으로만 기록한다. 합성 검증을 회사 보안 검토 통과로 표현하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
+단계 3-A의 기록용 승인, 단계 3-B의 합성 격리 진단, 단계 3-C의 독립 합성 실행, 단계 3-D의 합성 제어·복구, 단계 4-A의 합성 답장 전용 승인, 단계 4-B-1의 오프라인 HTTP 계약 진단과 단계 4-B-2의 별도 live 승인을 구분한다. 실제 검증 범위는 각 결과 문서에서 `passed`, `failed`, `not_run`으로 기록한다. 기존 조사 실행 포트는 항상 거부한다. 위 초기 계약은 실제 회사 저장소 실행이나 자동 업무 답장으로 연결하지 않는다. 별도 Slack 자동 분석은 메시지·스레드 분석에만, 회사 로컬 적용은 새 `company-local-write` 승인 범위에만 적용한다. 실제 Slack 게시 검증은 별도 승인된 고정 단건 시험으로만 기록한다. 합성 검증을 회사 보안 검토 통과로 표현하지 않는다. 상세 수용 테스트는 기준 계획서에서 관리한다.
 

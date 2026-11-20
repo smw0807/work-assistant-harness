@@ -99,4 +99,4 @@ pnpm --silent harness migration-check --config /absolute/path/to/private-migrati
 
 정적 준비가 끝나면 회사 기기에서 합성 자료를 이용한 로컬 검증 범위를 정한다. 회사 코드의 실제 읽기나 외부 AI 전송은 회사가 허용한 계정·자료 범위·보관 조건을 확인한 별도 계획으로 준비한다. 현재 진단은 회사 승인을 확인하거나 회사 저장소를 등록하지 않으며 실제 모델 호출도 승인하지 않는다. 개인 시험 저장소에서 추가 호출하는 것은 회사 이전의 필수 단계가 아니다.
 
-구현·검증 결과는 [단계 4-C-14 결과](stage-4c14-result.md), 회사 자료의 권한과 보관 조건은 [보안과 승인](security-and-approval.md#7-회사-자료와-비밀정보)을 따른다.
+구현·검증 결과는 [단계 4-C-14 결과](history/stage-4c14-result.md), 회사 자료의 권한과 보관 조건은 [보안과 승인](security-and-approval.md#7-회사-자료와-비밀정보)을 따른다.
