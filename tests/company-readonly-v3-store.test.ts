@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { constants as sqliteConstants, DatabaseSync } from 'node:sqlite';
 import { test, type TestContext } from 'node:test';
 import { SqliteCompanyReadonlyStore } from '../src/adapters/sqlite-company-readonly-store.js';
 import { SqliteCompanyReadonlyV2Store } from '../src/adapters/sqlite-company-readonly-v2-store.js';
@@ -318,4 +318,153 @@ test('a failure after inserting the plan rolls the entire v3 transaction back an
     mocked.mock.restore(); assert.deepEqual(counts(h.file), { plans: 0, payloads: 0, bindings: 1 });
     assert.equal(h.store.create(h.plan, h.payload, h.context).plan.id, h.id);
   } finally { mocked.mock.restore(); h.close(); }
+});
+
+test('prune-only opening and transactions never read the payload column, including malformed unexpired bodies', async context => {
+  const h = await setup(context);
+  let pruner: SqliteCompanyReadonlyV3Store | undefined;
+  try {
+    h.store.create(h.plan, h.payload, h.context);
+    const later = { ...h.context, now: new Date(h.context.now.getTime() + 30 * 60_000) };
+    const fresh = h.prepare('ffffffff-ffff-4fff-8fff-ffffffffffff', undefined, later);
+    h.store.create(fresh.plan, fresh.payload, later); h.store.close();
+    const damaged = new DatabaseSync(h.file), expiredBody = 'SYNTHETIC_EXPIRED_BODY {', freshBody = 'SYNTHETIC_UNEXPIRED_BODY {';
+    try {
+      damaged.prepare('UPDATE company_readonly_v3_payloads SET payload_json = ? WHERE preparation_id = ?').run(expiredBody, h.id);
+      damaged.prepare('UPDATE company_readonly_v3_payloads SET payload_json = ? WHERE preparation_id = ?').run(freshBody, fresh.plan.id);
+    } finally { damaged.close(); }
+    assert.throws(() => new SqliteCompanyReadonlyV3Store(h.file), { code: 'COMPANY_READONLY_V3_INVALID_RECORD' });
+
+    const originalPrepare = DatabaseSync.prototype.prepare, guarded = new WeakSet<DatabaseSync>();
+    let payloadReads = 0;
+    const mock = context.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+      if (!guarded.has(this)) {
+        this.setAuthorizer((action, table, column) => {
+          if (action === sqliteConstants.SQLITE_READ && table === 'company_readonly_v3_payloads' && column === 'payload_json') {
+            payloadReads += 1; return sqliteConstants.SQLITE_DENY;
+          }
+          return sqliteConstants.SQLITE_OK;
+        });
+        guarded.add(this);
+      }
+      return originalPrepare.call(this, sql);
+    });
+    try {
+      pruner = SqliteCompanyReadonlyV3Store.openForPrune(h.file);
+      const before = preserved(h.file);
+      assert.deepEqual(pruner.prune({ ...h.context, now: new Date(Date.parse(h.plan.expiresAt) - 1) }), { payloadsRemoved: 0, recordsRemoved: 0 });
+      assert.deepEqual(preserved(h.file), before);
+      assert.deepEqual(pruner.prune({ ...h.context, now: new Date(h.plan.expiresAt) }), { payloadsRemoved: 1, recordsRemoved: 0 });
+      assert.deepEqual(counts(h.file), { plans: 2, payloads: 1, bindings: 1 });
+      assert.deepEqual(pruner.prune({ ...h.context, now: new Date(h.plan.expiresAt) }), { payloadsRemoved: 0, recordsRemoved: 0 });
+      assert.equal(payloadReads, 0);
+    } finally { mock.mock.restore(); }
+    const remaining = new DatabaseSync(h.file, { readOnly: true });
+    try {
+      assert.equal(remaining.prepare('SELECT payload_json FROM company_readonly_v3_payloads WHERE preparation_id = ?').get(fresh.plan.id)!.payload_json, freshBody);
+      const record = remaining.prepare('SELECT status, updated_at, audit_expires_at FROM company_readonly_v3_preparations WHERE preparation_id = ?').get(h.id)!;
+      assert.equal(record.status, 'EXPIRED'); assert.equal(record.updated_at, h.plan.expiresAt); assert.equal(record.audit_expires_at, h.plan.auditExpiresAt);
+    } finally { remaining.close(); }
+    assert.deepEqual(pruner.prune({ ...h.context, now: new Date(Date.parse(h.plan.auditExpiresAt) - 1) }), { payloadsRemoved: 1, recordsRemoved: 0 });
+    assert.deepEqual(pruner.prune({ ...h.context, now: new Date(h.plan.auditExpiresAt) }), { payloadsRemoved: 0, recordsRemoved: 1 });
+    assert.deepEqual(counts(h.file), { plans: 1, payloads: 0, bindings: 1 });
+    assert.deepEqual(pruner.prune({ ...h.context, now: new Date(fresh.plan.auditExpiresAt) }), { payloadsRemoved: 0, recordsRemoved: 1 });
+  } finally { pruner?.close(); h.close(); }
+});
+
+test('a prune-only store cannot create, inspect or cancel, and refuses invalid owners or time without changes', async context => {
+  const h = await setup(context);
+  let pruner: SqliteCompanyReadonlyV3Store | undefined;
+  try {
+    h.store.create(h.plan, h.payload, h.context); h.store.close();
+    pruner = SqliteCompanyReadonlyV3Store.openForPrune(h.file);
+    const before = preserved(h.file);
+    const unreadable = new Proxy(h.payload, { get: () => { throw new Error('PAYLOAD_ARGUMENT_MUST_NOT_BE_READ'); } });
+    assert.throws(() => pruner!.create(h.plan, unreadable, h.context), { code: 'COMPANY_READONLY_V3_INVALID_STORE' });
+    assert.throws(() => pruner!.inspect(h.id, h.context), { code: 'COMPANY_READONLY_V3_INVALID_STORE' });
+    assert.throws(() => pruner!.cancel(h.id, h.context), { code: 'COMPANY_READONLY_V3_INVALID_STORE' });
+    assert.throws(() => pruner!.prune({ ...h.context, ownerId: 'os-user:999999999' }), { code: 'COMPANY_READONLY_V3_OWNER_MISMATCH' });
+    assert.throws(() => pruner!.prune({ ...h.context, now: new Date(h.context.now.getTime() - 1) }), { code: 'COMPANY_READONLY_V3_TIME_REVERSED' });
+    assert.deepEqual(preserved(h.file), before);
+    pruner.close(); assert.throws(() => pruner!.prune(h.context), { code: 'COMPANY_READONLY_V3_STORE_CLOSED' });
+  } finally { pruner?.close(); h.close(); }
+});
+
+test('prune-only validation still refuses altered record, owner, schema and payload metadata before writes', async context => {
+  for (const kind of ['record', 'owner', 'schema', 'expiry', 'payload-hash', 'missing-payload', 'terminal-payload'] as const) {
+    const h = await setup(context);
+    try {
+      h.store.create(h.plan, h.payload, h.context);
+      if (kind === 'terminal-payload') h.store.cancel(h.id, h.context);
+      h.store.close(); const database = new DatabaseSync(h.file);
+      try {
+        if (kind === 'record') database.prepare('UPDATE company_readonly_v3_preparations SET record_hash = ?').run('0'.repeat(64));
+        if (kind === 'owner') database.prepare('UPDATE company_readonly_v3_store SET owner_id = ?').run('os-user:999999999');
+        if (kind === 'schema') database.exec('CREATE TABLE unexpected (id TEXT)');
+        if (kind === 'expiry') database.prepare('UPDATE company_readonly_v3_payloads SET expires_at = ?').run(h.plan.auditExpiresAt);
+        if (kind === 'payload-hash') database.prepare('UPDATE company_readonly_v3_payloads SET payload_hash = ?').run('0'.repeat(64));
+        if (kind === 'missing-payload') database.exec('DELETE FROM company_readonly_v3_payloads');
+        if (kind === 'terminal-payload') {
+          const row = database.prepare('SELECT payload_hash FROM company_readonly_v3_preparations WHERE preparation_id = ?').get(h.id)!;
+          database.prepare('INSERT INTO company_readonly_v3_payloads VALUES (?, ?, ?, ?)').run(h.id, h.plan.expiresAt, row.payload_hash!, '{}');
+        }
+      } finally { database.close(); }
+      const before = preserved(h.file);
+      assert.throws(() => SqliteCompanyReadonlyV3Store.openForPrune(h.file), { code: ['owner', 'schema'].includes(kind)
+        ? 'COMPANY_READONLY_V3_INVALID_STORE' : 'COMPANY_READONLY_V3_INVALID_RECORD' });
+      assert.deepEqual(preserved(h.file), before);
+    } finally { h.close(); }
+  }
+});
+
+test('prune-only opening refuses missing or unsafe locations and never creates a replacement database', () => {
+  const h = privateDirectory();
+  try {
+    assert.throws(() => SqliteCompanyReadonlyV3Store.openForPrune(h.file), { code: 'COMPANY_READONLY_V3_INVALID_STORE' });
+    assert.equal(fs.existsSync(h.file), false);
+    new SqliteCompanyReadonlyV3Store(h.file).close(); fs.chmodSync(h.file, 0o644);
+    const before = preserved(h.file);
+    assert.throws(() => SqliteCompanyReadonlyV3Store.openForPrune(h.file), { code: 'UNSAFE_RUNTIME_FILE' });
+    assert.deepEqual(preserved(h.file), before); fs.chmodSync(h.file, 0o600);
+    const link = join(h.directory, 'link'); fs.mkdirSync(link, { mode: 0o700 });
+    fs.symlinkSync(h.file, join(link, 'company-readonly-v3.sqlite'));
+    assert.throws(() => SqliteCompanyReadonlyV3Store.openForPrune(join(link, 'company-readonly-v3.sqlite')), { code: 'UNSAFE_RUNTIME_FILE' });
+  } finally { h.close(); }
+});
+
+test('ordinary open stores retain full payload validation for every transaction even after expiry', async context => {
+  const h = await setup(context);
+  try {
+    h.store.create(h.plan, h.payload, h.context);
+    const database = new DatabaseSync(h.file);
+    try { database.prepare('UPDATE company_readonly_v3_payloads SET payload_json = ?').run('SYNTHETIC_DAMAGED_BODY {'); }
+    finally { database.close(); }
+    const before = preserved(h.file), expired = { ...h.context, now: new Date(h.plan.expiresAt) };
+    for (const action of [() => h.store.create(h.plan, h.payload, expired), () => h.store.inspect(h.id, expired),
+      () => h.store.cancel(h.id, expired), () => h.store.prune(expired)]) {
+      assert.throws(action, { code: 'COMPANY_READONLY_V3_INVALID_RECORD' });
+      assert.deepEqual(preserved(h.file), before);
+    }
+  } finally { h.close(); }
+});
+
+test('a prune-only failure after one deletion rolls back all payload and audit changes', async context => {
+  const h = await setup(context);
+  let pruner: SqliteCompanyReadonlyV3Store | undefined;
+  try {
+    h.store.create(h.plan, h.payload, h.context);
+    const next = h.prepare('ffffffff-ffff-4fff-8fff-ffffffffffff'); h.store.create(next.plan, next.payload, h.context); h.store.close();
+    pruner = SqliteCompanyReadonlyV3Store.openForPrune(h.file);
+    const originalPrepare = DatabaseSync.prototype.prepare; let deletions = 0;
+    const mock = context.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+      if (sql.startsWith('DELETE FROM company_readonly_v3_payloads') && ++deletions === 2) throw new Error('SYNTHETIC_DELETE_FAILURE');
+      return originalPrepare.call(this, sql);
+    });
+    try {
+      assert.throws(() => pruner!.prune({ ...h.context, now: new Date(h.plan.auditExpiresAt) }), { code: 'COMPANY_READONLY_V3_INVALID_RECORD' });
+      assert.equal(deletions, 2);
+    } finally { mock.mock.restore(); }
+    assert.deepEqual(counts(h.file), { plans: 2, payloads: 2, bindings: 1 });
+    h.reopen(); assert.equal(h.store.inspect(h.id, h.context).status, 'AWAITING_APPROVAL');
+  } finally { pruner?.close(); h.close(); }
 });

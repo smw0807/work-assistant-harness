@@ -15,6 +15,7 @@ const applicationId = 0x43525033;
 const schemaVersion = 1;
 const planBytes = 32_768;
 const payloadBytes = 2_097_152;
+const pruneOnlyAccess = Symbol('company-readonly-v3-prune-only');
 const metadataTable = `CREATE TABLE company_readonly_v3_store (
   singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
   location_hash TEXT NOT NULL,
@@ -89,13 +90,21 @@ const recordHash = ({ plan, status, updatedAt, payloadHash }: PlanRecord): strin
 
 /** Preparation-only storage has no approval, attempt, credential or dispatch tables or methods. */
 export class SqliteCompanyReadonlyV3Store implements CompanyReadonlyStoreV3 {
+  readonly #pruneOnly: boolean;
   private readonly database: DatabaseSync;
   private readonly parents: { path: string; metadata: Stats }[] = [];
   private fileIdentity: Stats | null = null;
   private closed = false;
   private transactionOpen = false;
 
-  constructor(private readonly filePath: string) {
+  /** Metadata validation permits deletion only; it never establishes payload validity. */
+  static openForPrune(filePath: string): SqliteCompanyReadonlyV3Store {
+    return new SqliteCompanyReadonlyV3Store(filePath, pruneOnlyAccess);
+  }
+
+  constructor(private readonly filePath: string, access?: typeof pruneOnlyAccess) {
+    if (access !== undefined && access !== pruneOnlyAccess) fail('COMPANY_READONLY_V3_INVALID_STORE');
+    this.#pruneOnly = access === pruneOnlyAccess;
     let database: DatabaseSync | undefined;
     try {
       if (typeof filePath !== 'string' || !isAbsolute(filePath) || resolve(filePath) !== filePath
@@ -107,6 +116,7 @@ export class SqliteCompanyReadonlyV3Store implements CompanyReadonlyStoreV3 {
       }
       this.protectFiles(false);
       const existing = runtimePathMetadata(filePath);
+      if (!existing && this.#pruneOnly) fail('COMPANY_READONLY_V3_INVALID_STORE');
       if (existing) {
         this.fileIdentity = existing;
         // Reject a foreign schema before a writable connection or migration can touch its contents.
@@ -139,6 +149,7 @@ export class SqliteCompanyReadonlyV3Store implements CompanyReadonlyStoreV3 {
   }
 
   create(value: CompanyReadonlyPlanV3, input: CompanyReadonlyPayloadV3, context: ReadonlyContext): CompanyReadonlySnapshotV3 {
+    this.assertPayloadAccess();
     try {
       const now = assertContext(context);
       const plan = copyCompanyReadonlyV3Data(value), payload = copyCompanyReadonlyV3Data(input);
@@ -174,6 +185,7 @@ export class SqliteCompanyReadonlyV3Store implements CompanyReadonlyStoreV3 {
   }
 
   inspect(id: string, context: ReadonlyContext): CompanyReadonlySnapshotV3 {
+    this.assertPayloadAccess();
     try {
       const now = assertContext(context); if (!identifier(id)) fail('COMPANY_READONLY_V3_INVALID_ID');
       const result = this.transaction(() => {
@@ -185,6 +197,7 @@ export class SqliteCompanyReadonlyV3Store implements CompanyReadonlyStoreV3 {
   }
 
   cancel(id: string, context: ReadonlyContext): CompanyReadonlySnapshotV3 {
+    this.assertPayloadAccess();
     try {
       const now = assertContext(context); if (!identifier(id)) fail('COMPANY_READONLY_V3_INVALID_ID');
       const result = this.transaction(() => {
@@ -263,6 +276,7 @@ export class SqliteCompanyReadonlyV3Store implements CompanyReadonlyStoreV3 {
   }
 
   private readPayload(record: PlanRecord, database = this.database): CompanyReadonlyPayloadV3 | null {
+    this.assertPayloadAccess();
     const row = database.prepare(`SELECT expires_at, payload_hash, length(CAST(payload_json AS BLOB)) AS bytes
       FROM company_readonly_v3_payloads WHERE preparation_id = ?`).get(record.plan.id);
     if (record.status !== 'AWAITING_APPROVAL') { if (row) return fail(); return null; }
@@ -273,6 +287,17 @@ export class SqliteCompanyReadonlyV3Store implements CompanyReadonlyStoreV3 {
     const payload = decode<CompanyReadonlyPayloadV3>(body, payloadBytes);
     try { validateCompanyReadonlyPayloadV3(record.plan, payload); } catch { return fail(); }
     return payload;
+  }
+
+  private assertPayloadAccess(): void {
+    if (this.#pruneOnly) fail('COMPANY_READONLY_V3_INVALID_STORE');
+  }
+
+  private validatePayloadMetadata(record: PlanRecord, database: DatabaseSync): void {
+    const row = database.prepare(`SELECT expires_at, payload_hash
+      FROM company_readonly_v3_payloads WHERE preparation_id = ?`).get(record.plan.id);
+    if (record.status !== 'AWAITING_APPROVAL') { if (row) fail(); return; }
+    if (!row || row.expires_at !== record.plan.expiresAt || row.payload_hash !== record.payloadHash) fail();
   }
 
   private validateStoredRecords(database: DatabaseSync): void {
@@ -286,7 +311,9 @@ export class SqliteCompanyReadonlyV3Store implements CompanyReadonlyStoreV3 {
         if (!identifier(id)) return fail();
         const record = this.readRecord(id, database);
         if (!record) return fail();
-        this.readPayload(record, database); lastId = id;
+        if (this.#pruneOnly) this.validatePayloadMetadata(record, database);
+        else this.readPayload(record, database);
+        lastId = id;
       }
     }
   }
@@ -318,7 +345,7 @@ export class SqliteCompanyReadonlyV3Store implements CompanyReadonlyStoreV3 {
         } else if (now >= record.plan.expiresAt && record.status === 'AWAITING_APPROVAL') {
           payloadsRemoved += Number(this.database.prepare('DELETE FROM company_readonly_v3_payloads WHERE preparation_id = ?').run(lastId).changes);
           record.status = 'EXPIRED'; record.updatedAt = record.plan.expiresAt; this.writeRecord(record);
-        } else this.readPayload(record);
+        } else if (!this.#pruneOnly) this.readPayload(record);
       }
     }
     return { payloadsRemoved, recordsRemoved };

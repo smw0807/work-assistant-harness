@@ -676,6 +676,8 @@ pnpm harness company-readonly-v3-prune --data-dir /private/review/company-runtim
 
 이후 별도 요청으로 회사 레포의 검토된7파일을 로컬 commit1개로 저장하고 parent·범위·blob·index와 작업 파일 보존을 확인했습니다. push와 실제 제품/API 확인은 수행하지 않았습니다. 같은 결과 문서의 후속 기록에 준비와 실제 커밋을 구분했습니다.
 
+만료 자료 정리에서는 지정107파일과 DB5곳의 payload5개를 삭제하고 감사 record5개를 보존했습니다. `company-readonly-v3-prune`은 본문을 조회하지 않는 전용 store를 사용하며, 일반 읽기·준비 경로의 전체 검증은 유지합니다. 미만료 본문은 유효성을 판정하지 않고 보존합니다. [4-C-29 결과](docs/stage-4c29-result.md)에 코드 보완·합성 회귀와 실제 정리 범위를 기록했습니다.
+
 회사 준비 명령의 `v3`는 `company-git-range-reader-v2`를 선택하며, 위 회사 준비 `v2`는 계속 `company-git-range-reader-v1`을 사용합니다. 새 방식은 부모 경로를 열기·읽기 단위 경계·최종 pass에 검사하고 chunk마다 leaf/FD를 검사합니다. **단위 내부의 일시적 조상 변경 후 복원을 놓칠 수 있으며 구형과 동등한 검증은 아닙니다.** 이 차이는 별도 guard hash와 로컬 검토 자료에 포함됩니다. 수집·읽기·metadata·메모리·시간 한도는 높이지 않았습니다.
 
 v3 준비 명령은 `AWAITING_APPROVAL`까지만 제공하며 승인 생성·전송·실행은 `false`입니다. 준비 명령 자체에는 `approve/run`이 없습니다. worker 권한, 30초·250ms 종료 정책, RSS 관찰 목표, 본문 최대24시간·감사 최대30일과 명시적 정리는 v2와 같습니다. [v3 통합 결과](docs/stage-4c17-company-v3-result.md)는 당시 합성 검증 기록이며, 이후 별도로 허용된 실제 준비에서 8파일·2pass·metadata7816/8192·같은 ID 조회와 검토 대기 저장을 확인했습니다. 이는 실제 AI 답변 생성 성공이 아닙니다.

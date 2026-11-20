@@ -5,8 +5,12 @@ import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { DatabaseSync } from 'node:sqlite';
 import { test, type TestContext } from 'node:test';
+import { SqliteCompanyReadonlyV3Store } from '../src/adapters/sqlite-company-readonly-v3-store.js';
+import { prepareCompanyV3Directory } from '../src/cli/company-readonly-v3-files.js';
 import { getCompanyGitRangeUnitGuardPolicyHash, getCompanyGitRangeUnitProfileHash } from '../src/policy/company-git-range-unit-budget.js';
+import { createCompanyReadonlyPreparationV3 } from '../src/policy/company-readonly-v3.js';
 import { createCompanyReadonlyV3Fixture } from './company-readonly-v3-fixture.js';
 
 interface CommandResult { code: number | null; stdout: string; stderr: string }
@@ -35,6 +39,35 @@ const setup = async (context: TestContext, large = false) => {
   return { ...fixture, directory, policyFile, registrationFile, runtime, database, planArgs };
 };
 type Fixture = Awaited<ReturnType<typeof setup>>;
+const setupPrunablePreparation = async (context: TestContext, ageHours: number) => {
+  const fixture = await setup(context), input = fixture.prepareInput();
+  const createdContext = { ...input.context, now: new Date(Date.now() - ageHours * 3_600_000) };
+  const prepared = createCompanyReadonlyPreparationV3(input.registration, input.policy, input.observation,
+    input.collected, input.budget, createdContext, input.id);
+  await prepareCompanyV3Directory(fixture.runtime, true);
+  const store = new SqliteCompanyReadonlyV3Store(fixture.database);
+  try { store.create(prepared.plan, prepared.payload, createdContext); }
+  finally { store.close(); }
+  const payloadCanary = 'SYNTHETIC_PRUNE_PAYLOAD_CANARY:{', database = new DatabaseSync(fixture.database);
+  try {
+    assert.equal(database.prepare('UPDATE company_readonly_v3_payloads SET payload_json = ? WHERE preparation_id = ?')
+      .run(payloadCanary, prepared.plan.id).changes, 1);
+  } finally { database.close(); }
+  fs.rmSync(fixture.root, { recursive: true, force: true });
+  fs.unlinkSync(fixture.registrationFile); fs.unlinkSync(fixture.policyFile);
+  assert.deepEqual(fs.readdirSync(join(fixture.runtime, 'runs')), []);
+  return { fixture, plan: prepared.plan, payloadCanary };
+};
+const preparationCounts = (fixture: Fixture) => {
+  const database = new DatabaseSync(fixture.database, { readOnly: true });
+  try {
+    return {
+      payloads: database.prepare('SELECT count(*) AS count FROM company_readonly_v3_payloads').get()!.count,
+      records: database.prepare('SELECT count(*) AS count FROM company_readonly_v3_preparations').get()!.count,
+      bindings: database.prepare('SELECT count(*) AS count FROM company_readonly_v3_store').get()!.count,
+    };
+  } finally { database.close(); }
+};
 const resultBody = (result: CommandResult): Record<string, unknown> => JSON.parse(result.stdout) as Record<string, unknown>;
 const successful = (result: CommandResult, status: string): Record<string, unknown> => {
   assert.equal(result.code, 0, result.stderr);
@@ -202,6 +235,44 @@ test('v3 inspect and cancel of an absent record do not create an empty database'
     assert.equal(body.taskId, id); assert.equal(body.planHash, null); assert.equal(body.reviewAvailable, false);
     assert.equal(fs.existsSync(fixture.database), false); assert.deepEqual(fs.readdirSync(join(fixture.runtime, 'runs')), []);
   }
+});
+
+test('v3 CLI prune removes malformed expired payloads without source or registration and retains valid audit records', { timeout: 30_000 }, async context => {
+  const { fixture, plan, payloadCanary } = await setupPrunablePreparation(context, 2), audit = auditPreload(fixture);
+  assert.deepEqual(preparationCounts(fixture), { payloads: 1, records: 1, bindings: 1 });
+  const pruned = await run(['company-readonly-v3-prune', '--data-dir', fixture.runtime], audit.preload);
+  const body = successful(pruned, 'PRUNED');
+  assert.equal(body.prunedPayloads, 1); assert.equal(body.prunedRecords, 0); assert.equal(body.runsRemoved, 0);
+  metadataOnly(pruned.stdout + pruned.stderr, fixture); assert.equal((pruned.stdout + pruned.stderr).includes(payloadCanary), false);
+  const observed = audit.read();
+  assert.equal(observed.spawns, 1); assert.equal(observed.sourceAccesses, 0); assert.equal(observed.registrationAccesses, 0);
+  assert.equal(observed.closeCode, 0); assert.equal(observed.closeSignal, null);
+  assert.deepEqual(preparationCounts(fixture), { payloads: 0, records: 1, bindings: 1 });
+  assert.deepEqual(fs.readdirSync(join(fixture.runtime, 'runs')), []);
+  const store = new SqliteCompanyReadonlyV3Store(fixture.database);
+  try {
+    const retained = store.inspect(plan.id, { ownerId: plan.ownerId, now: new Date() });
+    assert.deepEqual(retained.plan, plan); assert.equal(retained.status, 'EXPIRED');
+    assert.equal(retained.updatedAt, plan.expiresAt); assert.equal(retained.payload, null);
+  } finally { store.close(); }
+});
+
+test('v3 CLI prune deletes malformed payloads after audit expiry and a repeated prune removes nothing', { timeout: 30_000 }, async context => {
+  const { fixture, payloadCanary } = await setupPrunablePreparation(context, 25), audit = auditPreload(fixture);
+  assert.deepEqual(preparationCounts(fixture), { payloads: 1, records: 1, bindings: 1 });
+  const pruned = await run(['company-readonly-v3-prune', '--data-dir', fixture.runtime], audit.preload);
+  const body = successful(pruned, 'PRUNED');
+  assert.equal(body.prunedPayloads, 1); assert.equal(body.prunedRecords, 1); assert.equal(body.runsRemoved, 0);
+  metadataOnly(pruned.stdout + pruned.stderr, fixture); assert.equal((pruned.stdout + pruned.stderr).includes(payloadCanary), false);
+  const observed = audit.read();
+  assert.equal(observed.spawns, 1); assert.equal(observed.sourceAccesses, 0); assert.equal(observed.registrationAccesses, 0);
+  assert.deepEqual(preparationCounts(fixture), { payloads: 0, records: 0, bindings: 1 });
+  const repeated = await run(['company-readonly-v3-prune', '--data-dir', fixture.runtime]);
+  const repeatedBody = successful(repeated, 'PRUNED');
+  assert.equal(repeatedBody.prunedPayloads, 0); assert.equal(repeatedBody.prunedRecords, 0); assert.equal(repeatedBody.runsRemoved, 0);
+  metadataOnly(repeated.stdout + repeated.stderr, fixture); assert.equal((repeated.stdout + repeated.stderr).includes(payloadCanary), false);
+  assert.deepEqual(preparationCounts(fixture), { payloads: 0, records: 0, bindings: 1 });
+  assert.deepEqual(fs.readdirSync(join(fixture.runtime, 'runs')), []);
 });
 
 test('a committed v3 preparation with lost worker output stays unknown and is recovered only by inspecting the same ID', { timeout: 30_000 }, async context => {

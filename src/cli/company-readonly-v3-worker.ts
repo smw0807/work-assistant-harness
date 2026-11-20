@@ -80,7 +80,8 @@ const run = async (): Promise<void> => {
   };
   const databasePath = join(storeDirectory, 'company-readonly-v3.sqlite');
   if (options.command === 'plan' || await companyV3FileExists(databasePath)) {
-    const store = new SqliteCompanyReadonlyV3Store(databasePath);
+    const store = options.command === 'prune' ? SqliteCompanyReadonlyV3Store.openForPrune(databasePath)
+      : new SqliteCompanyReadonlyV3Store(databasePath);
     let storeFailed = false;
     try {
       const app = await NestFactory.createApplicationContext({ module: CompanyReadonlyV3Module,
