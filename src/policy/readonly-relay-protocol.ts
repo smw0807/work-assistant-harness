@@ -422,12 +422,15 @@ export const collectReadonlyRelayResponse = async (response: Response, signal: A
 };
 
 const warning = 'Model metadata for `gpt-6.1-sol` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.';
+const disabledCodeModeWarning = 'Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.';
 /** The pinned CLI may emit reasoning; it grants no tool permission and never becomes the returned answer. */
-export const parseReadonlyRelayCodexOutput = (output: string, maxResponseBytes = 16384): string => {
+export const parseReadonlyRelayCodexOutput = (output: string, maxResponseBytes = 16384,
+  nativeVersion: '0.154.0' | '0.167.2' = '0.154.0'): string => {
   if (typeof output !== 'string' || !validUnicode(output) || Buffer.byteLength(output) > READONLY_RELAY_RESPONSE_LIMITS.cliBytes) fail('OUTPUT_LIMIT');
   if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1 || maxResponseBytes > READONLY_RELAY_RESPONSE_LIMITS.outputBytes) fail('OUTPUT_LIMIT');
+  if (!['0.154.0', '0.167.2'].includes(nativeVersion)) fail('INVALID_CLI_OUTPUT');
   let state: 'initial' | 'thread' | 'turn' | 'message' | 'completed' = 'initial';
-  let finalText: string | null = null; let warned = false; let assistantStarted = false; let reasoningOpen = false;
+  let finalText: string | null = null; let warned = false; let codeModeWarned = false; let assistantStarted = false; let reasoningOpen = false;
   for (const line of output.split('\n').filter(Boolean)) {
     const value = parseJson(line, READONLY_RELAY_RESPONSE_LIMITS.cliBytes);
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_CLI_OUTPUT');
@@ -436,6 +439,11 @@ export const parseReadonlyRelayCodexOutput = (output: string, maxResponseBytes =
     if (event.type === 'turn.started' && state === 'thread') { state = 'turn'; continue; }
     if (event.type === 'item.completed' && event.item?.type === 'error' && !warned
       && ['thread', 'turn'].includes(state) && event.item.message === warning) { warned = true; continue; }
+    // The verified current CLI reports the intentionally disabled host once before the turn.
+    if (nativeVersion === '0.167.2' && state === 'thread' && !codeModeWarned
+      && event.type === 'item.completed' && event.item?.type === 'error' && event.item.message === disabledCodeModeWarning) {
+      codeModeWarned = true; continue;
+    }
     if (state === 'turn' && event.item?.type === 'reasoning' && !assistantStarted) {
       if (event.item.text !== undefined && typeof event.item.text !== 'string') fail('INVALID_CLI_OUTPUT');
       if (event.type === 'item.started' && !reasoningOpen) { reasoningOpen = true; continue; }

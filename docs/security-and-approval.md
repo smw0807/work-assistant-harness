@@ -208,6 +208,12 @@ Slack 토큰·네트워크는 수신부에만 제공한다. 조사 worker에는 
 
 `--env-file`은 명시된 0600 소유자 파일에서 필요한 키만 읽는다. 전체 파일을 `process.env`에 주입하거나 다른 환경값으로 누락 값을 채우지 않는다. `.env` 자동 탐색·Node 실행 옵션 상속·인증값 출력은 없다. 수신 worker는 Slack 토큰만, 분석 controller는 LANG/TZ/PATH 최소 환경만 받으며 기존 Codex 인증 접근은 relay가 실행 시 처리한다. 기존 native 바이너리 고정·예산·OS 격리와 단건 upstream 호출·토큰 반사 검사를 유지한다.
 
+현재 설치 버전 사용 요청에 따라 `slack-mention-analysis-v1` 입력과 relay-v3 설정에서만 macOS ARM64 Codex `0.167.2`를 선택한다. 등록 SHA-256은 `97bc82fd46f117cf10efb95e6ff0c81dc4784f5797bcdc2cb75093ba09e4def0`이며 실제 파일 hash와 격리 안의 버전 출력을 모두 검사한다. 새 버전의 추가 실행·연결 기능은 비활성화한다. 기존 `0.154.0` 경로와 회사·개인·코드 제안의 버전 조건, 고정 upstream 요청 계약, 모델·125초/16KiB 한도는 변경하지 않는다.
+
+이 새 경로에 한해 사용자가 승인한 `com.openai.codex`의 `user-preference-read`, cfprefsd Mach 조회 세 항목(`global-name`의 `com.apple.cfprefsd.daemon`·`com.apple.cfprefsd.agent`, `local-name`의 `com.apple.cfprefsd.agent`), 현재 UID의 `apple.cfprefs.<uid>v1`과 `apple.cfprefs.daemonv1` 공유 영역 읽기를 추가했다. 공유 영역 이름은 정확히 두 개만 허용한다. GlobalPreferences 읽기도 승인받았지만 이 두 공유 영역의 읽기로 동기화 실패가 해결되어 추가하지 않았다. 다른 preference 도메인·다른 UID의 공유 영역 읽기와 모든 preference·공유 영역 쓰기는 계속 거부한다. 실제 OS 권한 판정31개에서 기존 경로의 거부와 새 경로의 정확한 허용 범위를 확인했다.
+
+새 버전은 비활성화한 Code Mode host 안내를 `item.completed`의 `error` 항목으로 출력한다. 위 Slack·v3·등록 hash 조건으로 선택한 `0.167.2` parser에서만 이 경고의 정확한 고정 문구를 `thread.started` 뒤, `turn.started` 전에 한 번 허용한다. 다른 오류·도구 항목의 거부와 최종 성공 응답 검증은 유지한다. private JSON 생성·env 경로 반영과 native 합성 검증은 완료했으며 실제 인증·Slack·모델 호출은 실행하지 않았다. 상세 결과는 [추가 점검 기록](slack-mention-analysis-result.md#2026-11-20-추가-점검-현재-codex-연결-설정과-호환성)을 따른다.
+
 Node가 스크립트 뒤의 `--env-file`까지 부트스트랩 단계에서 처리할 수 있으므로 package의 `harness` 진입점은 `node -- dist/src/cli/main.js`로 옵션 경계를 고정한다. 직접 실행도 같은 `--` 경계가 필요하다. 부모 Node를 시작하기 전에 이미 지정된 `NODE_OPTIONS`까지 하네스 코드가 사후에 무효화할 수 있다고 주장하지 않는다.
 
 모델 입력은 허용 workspace/channel의 본인 멘션, 완전한 스레드, 현재 revision과 마스킹된 본문에 결합한다. 회사 저장소 정보는 포함하지 않는다. 현재 세션에 수신된 자료만 선택하고 과거 기록의 자동 분석이나 연결 공백의 backfill을 하지 않는다. credential 접근 전·전송 전·응답 후마다 최신 수신 상태·기간·연결을 확인하며 편집/삭제/공백은 취소를 요청한다. 이미 발행된 외부 전송을 되돌리거나 수신하지 못한 Slack 변경까지 감지한다고 주장하지 않는다.

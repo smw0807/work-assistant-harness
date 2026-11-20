@@ -9,8 +9,11 @@ import type { CodexConfig } from '../domain/codex-config.js';
 import { HarnessError } from '../domain/errors.js';
 
 /** macOS SBPL은 쓰기·실행을 기본 거부하고 전용 broker TCP 포트만 연다. */
-export const codexSandboxProfile = (executable: string, workspace: string, port: number): string => {
+export const codexSandboxProfile = (executable: string, workspace: string, port: number, managedPreferences = false): string => {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new HarnessError('INVALID_CODEX_BROKER');
+  if (typeof managedPreferences !== 'boolean') throw new HarnessError('INVALID_CODEX_PREFERENCES');
+  const uid = managedPreferences ? process.getuid?.() : undefined;
+  if (managedPreferences && (!Number.isSafeInteger(uid) || uid! < 0)) throw new HarnessError('INVALID_CODEX_PREFERENCES');
   const quote = (value: string): string => JSON.stringify(value);
   return [
     '(version 1)', '(deny default)', '(import "dyld-support.sb")',
@@ -21,6 +24,12 @@ export const codexSandboxProfile = (executable: string, workspace: string, port:
     `(allow file-write* (subpath ${quote(workspace)}) (literal "/dev/null"))`,
     `(allow network-outbound (remote ip "localhost:${port}"))`,
     '(allow system-socket (require-all (socket-domain AF_INET) (socket-type SOCK_STREAM)))',
+    ...(managedPreferences ? [
+      '(allow user-preference-read (preference-domain "com.openai.codex"))',
+      '(allow mach-lookup (global-name "com.apple.cfprefsd.daemon") (global-name "com.apple.cfprefsd.agent") (local-name "com.apple.cfprefsd.agent"))',
+      // CFPreferences uses read-only generation counters; other users and shared-memory writes remain denied.
+      `(allow ipc-posix-shm-read* (ipc-posix-name "apple.cfprefs.${uid}v1") (ipc-posix-name "apple.cfprefs.daemonv1"))`,
+    ] : []),
   ].join('\n');
 };
 
@@ -46,9 +55,10 @@ export const verifyCodexBinary = async (config: CodexConfig): Promise<void> => {
 
 export const runSandboxedCodex = (
   executable: string, arguments_: string[], workspace: string, port: number,
-  environment: NodeJS.ProcessEnv, input: string, signal: AbortSignal, maxBytes: number,
+  environment: NodeJS.ProcessEnv, input: string, signal: AbortSignal, maxBytes: number, managedPreferences = false,
 ): Promise<string> => new Promise((resolve, reject) => {
   if (signal.aborted) { reject(new HarnessError('CODEX_CALL_ABORTED')); return; }
+  const profile = codexSandboxProfile(executable, workspace, port, managedPreferences);
   const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'codex-process.js')], {
     cwd: workspace, env: { LANG: 'C.UTF-8', PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
@@ -70,7 +80,7 @@ export const runSandboxedCodex = (
     if (failure || code !== 0) reject(new HarnessError(failure ?? 'CODEX_PROCESS_FAILED'));
     else resolve(Buffer.concat(output).toString('utf8'));
   });
-  child.send({ executable, arguments: arguments_, profile: codexSandboxProfile(executable, workspace, port), workspace,
+  child.send({ executable, arguments: arguments_, profile, workspace,
     environment, input, maxBytes }, () => undefined);
 });
 
@@ -89,7 +99,7 @@ export const inspectCompanyCodexIpcDirectory = async (path: string,
 
 /** 실제 모델 호출 전에 동일한 SBPL 생성기로 파일/쓰기/exec/network/Unix socket 경계를 시험한다. */
 export const probeCodexIsolation = async (root: string, workspace: string, brokerPort: number, signal: AbortSignal,
-  companyIpcDirectory?: string): Promise<void> => {
+  companyIpcDirectory?: string, managedPreferences = false): Promise<void> => {
   const companyIdentity = companyIpcDirectory === undefined ? null : await inspectCompanyCodexIpcDirectory(companyIpcDirectory);
   const canary = join(root, 'host-canary.txt');
   await writeFile(canary, 'synthetic isolation canary', { flag: 'wx', mode: 0o600 });
@@ -114,7 +124,7 @@ export const probeCodexIsolation = async (root: string, workspace: string, broke
     ].join('\n');
     const nodePath = await realpath(process.execPath);
     const output = await runSandboxedCodex(nodePath, ['--no-addons', '-e', script], workspace, brokerPort,
-      { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', HOME: workspace }, '', signal, 4096);
+      { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', HOME: workspace }, '', signal, 4096, managedPreferences);
     if (output.trim() !== 'ISOLATION_PASSED') throw new HarnessError('CODEX_ISOLATION_FAILED');
   } finally {
     await Promise.all([new Promise<void>((resolve) => server.close(() => resolve())),

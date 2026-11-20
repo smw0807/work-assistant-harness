@@ -10,10 +10,12 @@ import type { ReadonlyRelayLocation } from './readonly-relay-lifecycle.js';
 export const runReadonlyRelayProcess = (
   executable: string, arguments_: string[], workspace: string, port: number, environment: NodeJS.ProcessEnv,
   input: string, signal: AbortSignal, location: ReadonlyRelayLocation, executionBudget?: ReadonlyRelayExecutionBudget,
+  managedPreferences = false,
 ): Promise<string> => new Promise((resolve, reject) => {
   if (signal.aborted) { reject(new HarnessError('READONLY_RELAY_CANCELLED')); return; }
   const selectedBudget = executionBudget === undefined ? null : copyReadonlyRelayExecutionBudget(executionBudget);
   if (executionBudget !== undefined && !selectedBudget) { reject(new HarnessError('READONLY_RELAY_INVALID_EXECUTION_BUDGET')); return; }
+  const profile = codexSandboxProfile(executable, workspace, port, managedPreferences);
   const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'readonly-relay-process.js')], {
     cwd: workspace, env: { LANG: 'C.UTF-8', PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
@@ -42,6 +44,6 @@ export const runReadonlyRelayProcess = (
       catch { reject(new HarnessError('READONLY_RELAY_INVALID_RESPONSE')); }
     }
   });
-  child.send({ executable, arguments: arguments_, profile: codexSandboxProfile(executable, workspace, port),
+  child.send({ executable, arguments: arguments_, profile,
     workspace, environment, input, maxBytes: 128 * 1024, location, ...(selectedBudget ? { executionBudget: selectedBudget } : {}) }, () => undefined);
 });

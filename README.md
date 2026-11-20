@@ -858,7 +858,19 @@ SLACK_ANALYSIS_ENABLED=true
 SLACK_ANALYSIS_CODEX_CONFIG=/absolute/private/path/codex-relay.json
 ```
 
-위 값들은 자리표시자입니다. `SLACK_ANALYSIS_CODEX_CONFIG`에는 기존 private Codex relay 설정의 절대 경로를 넣습니다. 연결 설정에는 검증한 native 바이너리 경로·SHA-256, `enabled:true`, 기존 모델 `gpt-6.1-sol`·`authMode:chatgpt`가 필요합니다. [v3 예시](config/readonly-relay-budget.example.json)는 고정 125초 계약이며 v1/v2 설정의 기존 한도도 지원합니다. 바이너리 버전·hash 검사를 생략하거나 모델/한도를 자동 변경하지 않습니다. 기존 ChatGPT 인증은 relay controller가 호출 시에만 사용하고 native 자식에는 실제 토큰을 전달하지 않습니다.
+위 값들은 자리표시자입니다. `SLACK_ANALYSIS_CODEX_CONFIG`에는 실제로 생성한 하네스 전용 Codex 연결 JSON 파일의 절대 경로를 넣습니다. env 파일 안의 `~`나 `$HOME`은 확장하지 않으므로 `/Users/.../codex-relay.json`처럼 전체 경로를 사용합니다. JSON도 저장소 밖의 소유자 전용 `0600` 파일로 보관하며, 설정 디렉터리는 `0700`으로 준비합니다.
+
+[v3 예시](config/readonly-relay-execution-budget.example.json)를 복사한 뒤 `enabled`를 `true`로, `codexPath`와 `codexSha256`을 확인한 실행 파일의 실제 경로와 SHA-256으로 설정합니다. `codexPath`는 심볼릭 링크가 없는 절대 경로여야 합니다. 기존 모델 `gpt-6.1-sol`, 인증 방식 `chatgpt`, 총 시간 `125000`ms, 최종 응답 `16384`바이트를 유지합니다. JSON에 Slack 토큰이나 ChatGPT 인증값을 넣지 않습니다. 기존 ChatGPT 인증은 relay controller가 호출 시에만 사용하고 native 자식에는 실제 토큰을 전달하지 않습니다.
+
+Slack 분석의 relay-v3는 macOS ARM64 Codex `0.167.2` 중 아래 SHA-256과 일치하는 바이너리를 지원합니다. 2026-11-20 추가 점검에서 private JSON 생성·env 경로 반영과 해당 native의 합성 호환성 검증을 마쳤습니다. 실제 Slack·인증·모델 연결은 아직 실행하지 않았습니다. 검증 범위와 결과는 [추가 점검 기록](docs/slack-mention-analysis-result.md#2026-11-20-추가-점검-현재-codex-연결-설정과-호환성)을 따릅니다.
+
+기존 `0.154.0`과 v1/v2 설정의 기존 한도는 유지합니다. 회사·개인 조사와 코드 제안 경로의 지원 버전을 자동으로 넓히지 않으며, 이후 Codex 업데이트도 자동 허용하지 않습니다.
+
+```text
+97bc82fd46f117cf10efb95e6ff0c81dc4784f5797bcdc2cb75093ba09e4def0
+```
+
+설정 파일 생성과 합성 검증은 실제 Slack 연결, 계정 인증 또는 모델 응답의 성공을 뜻하지 않습니다. 현재 버전의 격리에는 사용자가 승인한 `com.openai.codex` preference 읽기, cfprefsd의 세 Mach 조회 항목, 현재 사용자와 daemon의 정확한 CFPreferences 공유 영역 두 개에 대한 읽기만 추가했습니다. GlobalPreferences 읽기도 승인받았지만 동기화에 필요하지 않아 추가하지 않았습니다. 다른 preference 도메인·다른 사용자 공유 영역과 모든 preference·공유 영역 쓰기는 계속 거부합니다. native 호환성은 가짜 인증·합성 응답으로 검증했으며, 실제 서비스 연결은 별도의 실행 결과로 구분합니다.
 
 아래 `pnpm harness`는 Node 옵션 경계를 `node --`로 고정합니다. 컴파일된 CLI를 직접 실행할 때도 `node -- dist/src/cli/main.js ...`를 사용합니다. `--` 없이 실행하면 Node 자체가 `--env-file`을 하네스보다 먼저 처리할 수 있습니다.
 

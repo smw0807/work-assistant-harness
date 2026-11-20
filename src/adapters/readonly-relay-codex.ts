@@ -25,13 +25,33 @@ export type ReadonlyRelayInputContract = {
   assertCredential: ReadonlyRelayCredentialValidator; ipcDirectory?: string };
 const fail = (suffix: string): never => { throw new HarnessError(`READONLY_RELAY_${suffix}`); };
 
+const slackCurrentCodexHash = '97bc82fd46f117cf10efb95e6ff0c81dc4784f5797bcdc2cb75093ba09e4def0';
+const isCurrentSlackCodex = (config: ReadonlyRelayConfig, inputPolicy?: string): boolean =>
+  inputPolicy === 'slack-mention-analysis-v1' && config.policyVersion === 'readonly-relay-codex-v3'
+  && config.codexSha256 === slackCurrentCodexHash;
+
+/** The current binary is admitted only for Slack v3; existing approved relay contracts keep their native version. */
+export const assertReadonlyRelayNativeVersion = (output: string, config: ReadonlyRelayConfig, inputPolicy?: string): void => {
+  const expected = isCurrentSlackCodex(config, inputPolicy) ? '0.167.2' : '0.154.0';
+  if (output.trim() !== `codex-cli ${expected}`) fail('BINARY_UNSUPPORTED');
+};
+
 /** Only the relay gets the longer idle wait: it first buffers bounded upstream EOF. */
 export const readonlyRelayCodexArguments = (config: CodexConfig, workspace: string, port: number,
-  executionBudget?: ReadonlyRelayExecutionBudget): string[] => {
+  executionBudget?: ReadonlyRelayExecutionBudget, nativeVersion: '0.154.0' | '0.167.2' = '0.154.0'): string[] => {
   const selected = executionBudget === undefined ? null : copyReadonlyRelayExecutionBudget(executionBudget);
   if (executionBudget !== undefined && !selected) return fail('INVALID_EXECUTION_BUDGET');
-  return codexProposalArguments(config, workspace, port).map((argument) => argument === 'model_providers.harness.stream_idle_timeout_ms=30000'
+  const arguments_ = codexProposalArguments(config, workspace, port).map((argument) => argument === 'model_providers.harness.stream_idle_timeout_ms=30000'
     ? `model_providers.harness.stream_idle_timeout_ms=${selected?.workTimeoutMs ?? 55000}` : argument);
+  if (nativeVersion === '0.167.2') {
+    // These newer startup/integration features are unnecessary for the single local broker exchange.
+    const disabled = ['computer_use', 'code_mode_host', 'daemon_auto_start', 'in_app_local_automation', 'in_app_updates',
+      'in_app_voice', 'in_app_dictation', 'plugin_discovery_prefetch', 'skill_mcp_dependency_install', 'sleep_tool',
+      'tool_suggest', 'api_key_model_discovery', 'auth_elicitation', 'mcp_oauth_refresh_coordination',
+      'system_proxy_fallback', 'unified_exec'];
+    arguments_.splice(arguments_.length - 1, 0, ...disabled.flatMap(feature => ['--disable', feature]));
+  }
+  return arguments_;
 };
 
 /** Parent-only login, one approved request, bounded opaque response, and a separate native-output contract. */
@@ -78,6 +98,7 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
     const legacyConfig: CodexConfig = { ...config, policyVersion: 'codex-cli-proposal-v1', timeoutMs: 60000 };
     const budget = getReadonlyRelayExecutionBudget(config);
     const selectedBudget = config.policyVersion === 'readonly-relay-codex-v3' ? budget : undefined;
+    const managedPreferences = isCurrentSlackCodex(config, this.inputContract?.policy);
     const location = { dataDirectory: this.dataDirectory, investigationId: this.investigationId };
     const lifecycle = createReadonlyRelayLifecycle(location, { requestBodyHash: dispatch.requestBodyHash,
       requestEnvelopeHash: dispatch.requestEnvelopeHash, connectionProfileHash: dispatch.requestEnvelope.connectionProfileHash });
@@ -139,14 +160,15 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
       const activeBroker = connection.broker;
       if (!activeBroker) return fail('BROKER_FAILED');
       await operation(probeCodexIsolation(lifecycle.directory, workspace, activeBroker.port, controller.signal,
-        this.inputContract?.policy === 'company-relay-plan-v1' ? this.inputContract.ipcDirectory : undefined));
+        this.inputContract?.policy === 'company-relay-plan-v1' ? this.inputContract.ipcDirectory : undefined, managedPreferences));
       const environment = { HOME: home, CODEX_HOME: home, TMPDIR: home, PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', TZ: 'UTC',
         HARNESS_CODEX_CAPABILITY: activeBroker.capability };
       const foundVersion = await operation(runSandboxedCodex(config.codexPath, ['--version'], workspace, activeBroker.port, environment, '', controller.signal, 4096));
-      if (foundVersion.trim() !== 'codex-cli 0.154.0') fail('BINARY_UNSUPPORTED');
+      assertReadonlyRelayNativeVersion(foundVersion, config, this.inputContract?.policy);
+      const nativeVersion = isCurrentSlackCodex(config, this.inputContract?.policy) ? '0.167.2' : '0.154.0';
       isolation = true; phase = 'request'; lifecycle.running();
-      const output = await operation(runReadonlyRelayProcess(config.codexPath, readonlyRelayCodexArguments(legacyConfig, workspace, activeBroker.port, selectedBudget),
-        workspace, activeBroker.port, environment, dispatch.requestEnvelope.body, controller.signal, location, selectedBudget));
+      const output = await operation(runReadonlyRelayProcess(config.codexPath, readonlyRelayCodexArguments(legacyConfig, workspace, activeBroker.port, selectedBudget, nativeVersion),
+        workspace, activeBroker.port, environment, dispatch.requestEnvelope.body, controller.signal, location, selectedBudget, managedPreferences));
       const relayed = activeBroker.result();
       const brokerFailure = activeBroker.failure();
       if (brokerFailure) {
@@ -154,7 +176,7 @@ export class RestrictedReadonlyRelayCodex implements ReadonlyRelayPort {
         throw new HarnessError(brokerFailure);
       }
       if (!relayed || activeBroker.calls() !== 1 || controller.signal.aborted || performance.now() >= deadline) return fail('CALL_FAILED');
-      const text = parseReadonlyRelayCodexOutput(output, config.maxResponseBytes);
+      const text = parseReadonlyRelayCodexOutput(output, config.maxResponseBytes, nativeVersion);
       activeBroker.verifyFinalText(text);
       finalTextHash = createHash('sha256').update(text).digest('hex');
       phase = 'completed';

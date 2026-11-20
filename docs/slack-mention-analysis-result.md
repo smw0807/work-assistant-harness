@@ -43,3 +43,46 @@
 실행 중 수신하지 못한 Slack 변경을 알아내거나 이미 전송한 내용을 되돌릴 수는 없다. 보고서는 관찰한 문맥에 대한 검토용 결과이며 의미적 정확성은 보장하지 않는다. 기록 보관은 논리적 삭제이고 백업·디스크의 물리적 삭제 보증은 아니다. 일일 한도에 아직 진입하지 못한 요청은 같은 세션의 다음 UTC 날짜에 다시 선택될 수 있으며, 실패/소비된 revision의 재시도와는 구분한다.
 
 허용된 `/private/tmp` 아래 새 0700 위치에 baseline·검사 로그·결과·영속 합성 smoke와 완료 audit를 보관했다. 보고/설정/로그는0600이며 테스트 자식의 합성 fixture는 별도 umask022를 사용한다. 실제 회사 경로·메시지·토큰을 공유 문서나 Git에 넣지 않았다. 검증 완료 시점에는 이번 변경을 아직 커밋하지 않은 상태였다.
+
+## 2026-11-20 추가 점검: 현재 Codex 연결 설정과 호환성
+
+사용자가 연결 JSON 생성과 현재 설치된 Codex 사용을 요청했다. 저장소 밖의 private Codex relay JSON을 생성하고 실행용 env의 `SLACK_ANALYSIS_CODEX_CONFIG`를 해당 파일의 절대 경로로 반영했다. 실제 설정 파일의 기계별 경로와 토큰은 이 문서와 Git에 기록하지 않는다. 앞 절의 초기 구현·검증 기록은 당시 결과로 유지하며, 현재 설치 버전의 사용 상태는 이 추가 기록을 따른다.
+
+Slack 입력 계약·relay-v3·등록 SHA-256을 함께 검사하여 macOS ARM64 Codex `0.167.2`를 선택하는 코드를 준비했다. 등록 hash는 `97bc82fd46f117cf10efb95e6ff0c81dc4784f5797bcdc2cb75093ba09e4def0`이다. 기존 `0.154.0` 경로와 회사·개인 조사 및 코드 제안의 버전 조건은 자동으로 변경하지 않는다. 모델 `gpt-6.1-sol`, ChatGPT 인증 방식, 총125초·최종16KiB, 단건 broker와 고정 upstream 요청 계약을 유지한다.
+
+### 공유 영역 추가 승인 전 검사
+
+첫 검사 당시 새 native 경로의 격리에는 사용자가 승인한 `com.openai.codex` preference 읽기와 cfprefsd Mach 조회 세 항목만 추가했다. 항목은 `global-name`의 `com.apple.cfprefsd.daemon`·`com.apple.cfprefsd.agent`, `local-name`의 `com.apple.cfprefsd.agent`다. 당시 GlobalPreferences와 CFPreferences 공유 메모리 읽기는 아직 승인되지 않았으며, preference 쓰기 권한도 추가하지 않았다.
+
+| 검사 | 결과 | 범위와 한계 |
+| --- | --- | --- |
+| private 연결 JSON·env 경로 준비 | passed | 소유자 전용 설정 생성과 명시 경로 반영. 실제 서비스 연결의 성공 증거는 아님 |
+| 전체 회귀 | passed | Node26.12.1·현재 설치 pnpm12.16.1·`TMPDIR=/private/tmp` 사용. 총2,319개 중2,281 passed, 0 failed, native opt-in38 skipped. 아래 조기 실패의 no-spawn 검사 추가 전 실행 결과 |
+| 당시 build·lint | passed | 당시 수정과 추가 검사 포함 |
+| 당시 집중 경계 검사 | passed | `slack-analysis-native.test.ts`의 순수 경계4개 통과. 잘못된 profile 옵션을 guardian 생성 전에 거부하는 no-spawn 검사 포함 |
+| 당시 native와 가짜 응답의 별도 검사 | failed | 같은 집중 파일의 native2개 실패, 전송0회. CFPreferences 동기화 단계에서 막혀 정상 분석·거부 경로의 native 통합 검증 미완료. 집중 검사 전체는6개 중4 passed, 2 failed |
+| 실제 Slack·인증·모델·회사 레포 | not_run | native 호환 점검은 합성 자료와 가짜 인증·응답만 사용. 실제 서비스 호출과 회사 자료 접근은 수행하지 않음 |
+
+합성 preference 도메인에서 cfprefsd 응답 뒤 공유 메모리 읽기가 `EPERM`으로 거부되는 것을 호출 메타데이터로 관찰했다. 이는 추가 읽기 범위를 검토할 근거이며 GlobalPreferences 접근이 필요하다는 증거는 아니었다. 승인 전 진단에서는 공유 메모리 내용을 읽지 않았으며, 미확인 권한을 추가하거나 동기화 오류를 우회하지 않았다.
+
+잘못된 profile 옵션의 검증을 guardian 생성 앞으로 옮겨 조기 실패 시 잔여 프로세스가 생기지 않도록 수정했다. 이 추가 경계는 새 no-spawn 검사와 당시 build·lint로 확인했으며, 앞의 전체 회귀 수치를 이 수정 뒤 재실행한 결과로 바꾸어 기록하지 않는다.
+
+### 공유 영역 추가 승인 후 검사
+
+사용자가 현재 UID와 daemon의 CFPreferences 공유 영역 두 개 및 GlobalPreferences 읽기를 승인했다. 실제 구현에는 `apple.cfprefs.<uid>v1`과 `apple.cfprefs.daemonv1`의 읽기만 추가했다. 이 범위로 CFPreferences 동기화 실패가 해결되어 GlobalPreferences 읽기는 추가하지 않았다. 다른 preference 도메인·다른 UID의 공유 영역 읽기와 모든 preference·공유 영역 쓰기는 계속 거부한다.
+
+Codex `0.167.2`는 비활성화한 Code Mode host 안내를 오류 형태의 항목으로 출력한다. [해당 버전의 공식 Code Mode 구현](https://github.com/openai/codex/blob/rust-v0.167.2/codex-rs/core/src/tools/code_mode/mod.rs)의 `take_unavailable_warning`에서 실행을 거부하는 안내임을 확인했다. Slack 입력 계약·relay-v3·등록 hash에 결합한 새 버전 parser에서만 이 경고의 정확한 고정 문구를 `thread.started` 뒤, `turn.started` 전에 한 번 허용했다. 다른 오류·도구 응답은 계속 거부하며 최종 응답의 성공 조건도 유지한다.
+
+| 검사 | 결과 | 범위와 한계 |
+| --- | --- | --- |
+| 최종 전체 회귀 | passed | Node26.12.1·현재 설치 pnpm12.16.1·`TMPDIR=/private/tmp`·`umask022` 사용. 총2,321개 중2,283 passed, 0 failed, native opt-in38 skipped. 아래 native 집중 검사는 별도 실행 |
+| 최종 native 집중 검사 | passed | 총7개 중 순수 경계5개·native2개 통과. 정상 요청의 가짜 upstream 호출1회와 응답, 도구 응답 거부·재전송0회·정리 확인 |
+| OS 격리 권한 판정 | passed | 총31개 통과. 기존 경로는 추가 preference·공유 영역 접근 거부, 새 경로는 승인된 정확한 읽기 범위만 허용하고 다른 도메인·다른 UID·모든 쓰기 거부 |
+| 최신 lint·typecheck | passed | 공유 영역과 버전별 parser 변경 포함 |
+| 실제 Slack·인증·모델·회사 레포 | not_run | 실제 서비스 연결의 성공 여부는 이 합성 결과로 판단하지 않음 |
+
+최종 전체 회귀의 첫 실행에서는 `umask077` 때문에 권한 fixture·Docker 모의 검사12개가 실패했다. 코드 변경 없이 합성 fixture의 기존 실행 조건인 `umask022`로 재검사하여 위 최종 전체 회귀 결과를 확인했고, 검사 로그 자체의 권한은 `0600`을 유지했다. 앞 절의2,319개 결과는 이 재검사의 결과가 아닌 초기 회귀 기록이다.
+
+**현재 Codex `0.167.2`의 설정 준비와 native 합성 호환성 검증을 완료했다.** 실행에는 기존 Node26 요건과 현재 설치된 pnpm을 사용하며 pnpm 버전을 새로 고정하거나 설치를 변경하지 않았다. 실제 Slack·인증·모델 연결 결과는 첫 실제 실행에서 별도로 확인해야 한다.
+
+합성 검사 로그와 정적 진단 근거는 허용된 비공개 임시 위치에 보관했다. 이번 추가 변경은 이 기록 시점에 아직 커밋하지 않았다.
