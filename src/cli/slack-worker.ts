@@ -63,7 +63,7 @@ const run = async (): Promise<void> => {
     process.stdout.write(`${JSON.stringify({
       ...value, dataDirectory: options.dataDirectory,
       checks: [
-        { name: 'analysis', status: 'not_run', reason: 'Slack 수신·문맥 기록만 수행하며 모델과 대상 저장소를 연결하지 않습니다.' },
+        { name: 'analysis', status: 'not_run', reason: '이 수신 프로세스는 Slack 문맥만 기록합니다. 별도 Codex 분석 상태는 slack-analysis 이벤트와 slack-inspect 결과에서 확인합니다.' },
         { name: 'external_message_delivery', status: 'not_run', reason: 'Slack 메시지·DM·Git 원격 전송 경로가 없습니다.' },
         { name: 'approval_and_execution', status: 'not_run', reason: '수집 경로는 승인과 실행을 제공하지 않으며 실행 포트는 계속 거부합니다.' },
       ],

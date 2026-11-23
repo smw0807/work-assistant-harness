@@ -169,6 +169,55 @@ test('Slack 오류·잘못된 JSON·과도한 응답을 정적 코드로 차단�
   }
 });
 
+test('알려진 Slack API 거부는 작업별 고정 코드로만 표시하며 응답 metadata를 노출하지 않는다', async () => {
+  const reasons = ['invalid_auth', 'not_authed', 'missing_scope', 'not_allowed_token_type', 'token_expired', 'token_revoked',
+    'account_inactive', 'access_denied', 'accesslimited', 'forbidden_team', 'missing_args'];
+  for (const reason of reasons) {
+    const client = new SlackReadClient(credentials, { fetch: async () => jsonResponse({ ok: false, error: reason,
+      needed: credentials.appToken, provided: credentials.webToken,
+      response_metadata: { messages: [`https://ignored.invalid/?token=${credentials.appToken}`] } }) });
+    await assert.rejects(client.openSocket(), hasCode(`SLACK_SOCKET_API_${reason.toUpperCase()}`));
+    await assert.rejects(client.verifyWorkspace('W_LOCAL'), hasCode(`SLACK_IDENTITY_API_${reason.toUpperCase()}`));
+    const result = await client.readThread('C_ALLOWED', '1700000000.000001', limits);
+    assert.deepEqual(result, { messages: [], complete: false, reason: `SLACK_THREAD_API_${reason.toUpperCase()}` });
+    assert.equal(JSON.stringify(result).includes(credentials.webToken), false);
+    assert.equal(JSON.stringify(result).includes(credentials.appToken), false);
+  }
+});
+
+test('알 수 없거나 변형된 API 오류는 원문을 숨기고 기존 거부 코드로 남긴다', async () => {
+  for (const error of [credentials.appToken, credentials.webToken, 'new_provider_error', 'INVALID_AUTH',
+    ' invalid_auth', `invalid_auth\n${credentials.appToken}`, '__proto__', ['invalid_auth'], { code: 'invalid_auth' }, null]) {
+    const client = new SlackReadClient(credentials, { fetch: async () => jsonResponse({ ok: false, error }) });
+    await assert.rejects(client.openSocket(), hasCode('SLACK_API_REJECTED'));
+    await assert.rejects(client.verifyWorkspace('W_LOCAL'), hasCode('SLACK_API_REJECTED'));
+    assert.equal((await client.readThread('C_ALLOWED', '1700000000.000001', limits)).reason, 'SLACK_API_REJECTED');
+  }
+  for (const ok of [undefined, null, 0, 'false']) {
+    const client = new SlackReadClient(credentials, { fetch: async () => jsonResponse({ ok, error: 'invalid_auth' }) });
+    await assert.rejects(client.openSocket(), hasCode('SLACK_API_REJECTED'));
+  }
+});
+
+test('연결 진단 코드를 보존하면서 기존 Socket 재시도 한도와 대기를 유지한다', async () => {
+  let requests = 0;
+  const waits: number[] = [], gaps: string[] = [];
+  const client = new SlackReadClient(credentials, { fetch: async () => {
+    requests++;
+    return jsonResponse({ ok: false, error: 'missing_scope' });
+  } });
+  const transport = new SlackSocketTransport(client, {
+    createSocket: () => { throw new Error('rejected API must not create a socket'); },
+    sleep: async milliseconds => { waits.push(milliseconds); },
+  });
+  await assert.rejects(transport.run(async () => {}, new AbortController().signal, (state, reason) => {
+    assert.equal(state, 'gap'); gaps.push(reason);
+  }), hasCode('SLACK_RECONNECT_LIMIT'));
+  assert.equal(requests, 6);
+  assert.deepEqual(waits, [1000, 2000, 4000, 8000, 16000]);
+  assert.deepEqual(gaps, Array(6).fill('SLACK_SOCKET_API_MISSING_SCOPE'));
+});
+
 test('HTTP 요청과 응답 스트림 읽기 모두 시간 상한을 갖는다', async () => {
   const stalledFetch = new SlackReadClient({ ...credentials, requestTimeoutMs: 5 }, { fetch: async () => new Promise<Response>(() => {}) });
   await assert.rejects(stalledFetch.openSocket(), hasCode('SLACK_REQUEST_TIMEOUT'));

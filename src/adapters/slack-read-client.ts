@@ -6,6 +6,19 @@ const maxResponseBytes = 262_144;
 const maxRetryDelayMs = 60_000;
 const timestampPattern = /^\d{1,20}\.\d{1,20}$/;
 const identifierPattern = /^[A-Za-z0-9_]{1,128}$/;
+type SlackApiOperation = 'socket' | 'thread' | 'identity';
+const knownApiErrors = new Set([
+  'invalid_auth', 'not_authed', 'missing_scope', 'not_allowed_token_type', 'token_expired', 'token_revoked',
+  'account_inactive', 'access_denied', 'accesslimited', 'forbidden_team', 'missing_args',
+]);
+
+/** Only fixed API error categories can enter logs; response text and metadata stay private. */
+const apiRejectionCode = (operation: SlackApiOperation, response: Record<string, unknown>): string => {
+  if (response.ok !== false || typeof response.error !== 'string' || !knownApiErrors.has(response.error)) {
+    return 'SLACK_API_REJECTED';
+  }
+  return `SLACK_${operation.toUpperCase()}_API_${response.error.toUpperCase()}`;
+};
 
 export interface SlackThreadLimits {
   maxMessages: number;
@@ -174,7 +187,7 @@ export class SlackReadClient {
     return incomplete('SLACK_THREAD_PAGE_LIMIT');
   }
 
-  private async request(operation: 'socket' | 'thread' | 'identity', parameters = new URLSearchParams(), signal?: AbortSignal): Promise<Record<string, unknown>> {
+  private async request(operation: SlackApiOperation, parameters = new URLSearchParams(), signal?: AbortSignal): Promise<Record<string, unknown>> {
     const apiUrl = {
       socket: 'https://slack.com/api/apps.connections.open',
       thread: 'https://slack.com/api/conversations.replies',
@@ -207,7 +220,7 @@ export class SlackReadClient {
               throw new HarnessError('SLACK_HTTP_FAILED');
             }
             const parsed = await readJson(response);
-            if (parsed.ok !== true) throw new HarnessError('SLACK_API_REJECTED');
+            if (parsed.ok !== true) throw new HarnessError(apiRejectionCode(operation, parsed));
             return { parsed };
           })(),
           new Promise<never>((_resolve, reject) => {

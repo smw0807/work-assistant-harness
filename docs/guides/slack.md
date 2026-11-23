@@ -8,6 +8,7 @@
 
 - [단계 2 Slack 읽기 수신](#단계-2-slack-읽기-수신)
 - [Slack 본인 멘션 자동 분석](#slack-본인-멘션-자동-분석)
+- [연결 문제 해결](#연결-문제-해결)
 
 ## 단계 2 Slack 읽기 수신
 
@@ -97,3 +98,32 @@ pnpm harness slack-inspect <channel-id> <message-ts> --env-file /absolute/privat
 표준 출력의 `slack-analysis` 이벤트에서 진행 상태를 확인하고, `slack-inspect`의 `analysis.results`에서 한국어 요약·근거·불확실성·답변 초안·추가 질문을 검토합니다. `slack-list`는 보고서 본문 없이 상태만 표시합니다. 결과는 private `slack-analysis.sqlite`에 보관하며 원래 Slack 본문을 분석 DB에 추가 복제하지 않습니다. 보고서 본문은 원본 보관 기한과 분석 시작 후 24시간 중 먼저 도래하는 때 제거하고, 중복 방지 metadata는 유지합니다. 실행 중 편집·삭제·멘션 제거·연결 공백은 진행 중 호출의 취소를 요청하고 오래된 결과의 게시를 막습니다. 이미 외부 전송한 내용을 되돌리지는 못합니다. 수신하지 못한 변경이나 의미적 정답까지 검증했다는 뜻은 아닙니다.
 
 조회 명령은 모델 설정 파일이나 Codex 인증을 열지 않고 현재 수신 기록과 기존 결과를 대조합니다. 재시작 시 중단된 분석은 `INTERRUPTED`로 남고 재전송하지 않습니다. native 정리 여부가 불확실하면 다음 분석을 시작하지 않고 수신과 분석을 종료합니다. 호출 중 hard kill로 남은 `slack-analysis-active.json`도 다음 시작을 차단합니다. 남은 프로세스와 실행 기록의 로컬 확인 없이 이 marker를 자동 삭제하지 않습니다. 합성 검증과 실제 연결 여부는 [Slack 자동 분석 결과](../history/slack-mention-analysis-result.md)에 구분해 기록합니다.
+
+## 연결 문제 해결
+
+| 로그 | 의미 |
+| --- | --- |
+| `slack-analysis`의 `ready` | 분석 설정·native 바이너리의 정적 준비 완료. Slack 연결이나 모델 호출 성공은 아님 |
+| 수신부의 `starting` | Web API 토큰의 `auth.test`와 workspace 확인을 통과한 뒤 Socket 연결을 시작하는 단계 |
+| `checks.analysis: not_run` | 수신 worker 자체의 범위 표시. 별도 분석 controller가 비활성이라는 뜻은 아님 |
+| `--allow-net`의 `ExperimentalWarning` | Node 권한 기능 안내이며 이 경고 자체가 연결 실패나 프로세스 종료의 원인은 아님 |
+
+`SLACK_API_REJECTED` 등의 이유로 `gap`이 반복되고 `SLACK_RECONNECT_LIMIT` 뒤 `SLACK_ANALYSIS_PAIR_FAILED`로 끝났다면, 앞선 API 거부로 재연결 한도를 소진하여 수신·분석 묶음이 종료된 흐름입니다. 마지막 오류만으로 Codex 실패라고 판단하지 않습니다. 재연결 횟수와 분석 재시도·시간 한도는 그대로 유지합니다.
+
+확인된 공식 오류만 고정 코드로 구분합니다. `SLACK_SOCKET_API_*`는 `apps.connections.open` 단계이며 인증 확인·스레드 조회는 각각 별도 접두사를 사용합니다. 미확인 응답값은 그대로 출력하지 않고 기존 `SLACK_API_REJECTED`로 남깁니다.
+
+| Socket 오류 코드 | 확인할 조건 |
+| --- | --- |
+| `SLACK_SOCKET_API_INVALID_AUTH` | 앱 토큰의 유효성 |
+| `SLACK_SOCKET_API_MISSING_SCOPE` | 해당 앱 토큰의 `connections:write` |
+| `SLACK_SOCKET_API_NOT_ALLOWED_TOKEN_TYPE` | app-level `xapp-` 토큰을 사용했는지 |
+| `SLACK_SOCKET_API_TOKEN_EXPIRED` / `SLACK_SOCKET_API_TOKEN_REVOKED` | 토큰 만료·철회 여부 |
+| `SLACK_SOCKET_API_NOT_AUTHED` / `SLACK_SOCKET_API_MISSING_ARGS` | 필요한 토큰이 전달됐는지 |
+| `SLACK_SOCKET_API_ACCOUNT_INACTIVE` / `SLACK_SOCKET_API_ACCESS_DENIED` | 계정·workspace 상태와 접근 제한 |
+| `SLACK_SOCKET_API_ACCESSLIMITED` / `SLACK_SOCKET_API_FORBIDDEN_TEAM` | 네트워크·팀의 API 이용 제한 |
+
+Slack 앱의 **Basic Information → App-Level Tokens**에서 `connections:write`가 있는 `xapp-` 토큰을, **Socket Mode → Enable Socket Mode**에서 활성화를 확인합니다. `SLACK_APP_TOKEN`과 스레드 조회용 `SLACK_WEB_TOKEN`은 역할이 다릅니다. [앱 토큰 설정](https://docs.slack.dev/tools/python-slack-sdk/socket-mode/index.html), [연결 권한](https://docs.slack.dev/reference/scopes/connections.write/), [공식 오류 목록](https://docs.slack.dev/reference/methods/apps.connections.open/)
+
+`starting`은 Web API 인증 확인 결과이지 앱 토큰이나 스레드 읽기 권한까지 검증한 결과가 아닙니다. Socket Mode 비활성화를 특정 API 오류 코드 하나로 단정하지 않습니다. [인증 확인](https://docs.slack.dev/reference/methods/auth.test/), [Socket Mode 동작](https://docs.slack.dev/apis/events-api/using-socket-mode/)
+
+설정을 바꿨다면 실행에 지정한 private env 파일에 반영한 뒤 다시 시작합니다. 토큰값·env 본문·인증 응답 원문을 터미널이나 공유 로그에 출력하지 않습니다. 원인을 확인하기 위해 읽기·쓰기 권한을 일괄 추가하지 않습니다.
