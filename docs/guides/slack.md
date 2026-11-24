@@ -7,6 +7,7 @@
 [문서 목록](../README.md) · [보안과 승인](../security-and-approval.md)
 
 - [단계 2 Slack 읽기 수신](#단계-2-slack-읽기-수신)
+- [리스트 댓글 멘션 감시](#리스트-댓글-멘션-감시)
 - [Slack 본인 멘션 자동 분석](#slack-본인-멘션-자동-분석)
 - [연결 문제 해결](#연결-문제-해결)
 
@@ -48,6 +49,22 @@ pnpm harness slack-list --config /absolute/path/to/approved-slack.json --data-di
 `tasks.sqlite`의 `slack_*` 테이블에 이벤트·요청·연결 이력을 저장합니다. 이벤트 ID는 중복 제거용이고 원본 메시지는 workspace·채널·message ts로 식별합니다. 편집·삭제·멘션 제거는 이전 문맥과 연계된 계획을 무효화합니다. 기존 조사 계획이 같은 메시지에 연결되어 있으면 DB에서 취소하고 로컬 보고서도 취소 상태로 다시 씁니다. DB가 원본이며, 보고서 쓰기 중 종료되면 다음 명령에서 복구합니다. 진행 중 중단된 수집은 `BLOCKED`로 보존하고 자동 재수집하지 않습니다.
 
 본문과 스레드는 비밀 패턴, 지원 이메일·국내 휴대전화 패턴을 마스킹한 뒤 보관합니다. 보관 기간은 1~168시간이며 예시는 24시간입니다. 명령 시작·수신·처리 시점과 실수신 중 매분 만료 본문을 제거합니다. 중지된 앱의 DB는 다음 실행 전까지 남습니다. 최소 event ID·메시지 revision·삭제 marker는 오래된 이벤트의 부활을 막기 위해 DB 수명 동안 남고 저장량이 늘어날 수 있습니다. 삭제는 백업·로그·파일시스템의 물리적 완전 삭제를 보장하지 않습니다. 모든 개인정보·비밀 형식을 판별하는 기능도 아닙니다.
+
+## 리스트 댓글 멘션 감시
+
+리스트 URL에서 `/list/` 다음의 `F…` ID를 복사해 기존 비공개 env 파일에 아래처럼 추가하고 수신기를 재시작합니다. JSON 설정에서는 같은 값을 `listId`로 지정합니다. `SLACK_WEB_TOKEN`에는 해당 리스트 열람 권한과 `lists:read`가 필요합니다. [Slack 리스트 읽기 권한](https://docs.slack.dev/reference/scopes/lists.read/)
+
+```dotenv
+SLACK_LIST_ID=FEXAMPLE
+```
+
+`slack-listen`은 `auth.test`로 워크스페이스를 확인한 뒤 지정한 리스트의 활성 항목과 댓글을 JSON으로 내보냅니다. 첨부 메타데이터와 보관한 항목은 제외합니다. 조회를 마친 뒤 5분을 기다렸다가 다음 내보내기를 시작합니다. 채널 ID를 함께 설정하면 Socket Mode 수신도 병행합니다. 리스트만 확인할 때는 env의 채널 ID와 앱 토큰을 생략하고, JSON에서는 `channelIds: []`를 사용합니다. 리스트만 감시할 때는 채널용 Codex 분석 프로세스를 실행하지 않습니다. [내보내기 시작](https://docs.slack.dev/reference/methods/slackLists.download.start/) · [결과 조회](https://docs.slack.dev/reference/methods/slackLists.download.get/)
+
+첫 성공 시 기존 댓글의 식별자만 기록합니다. 이후 다른 사람이 **새 댓글에서 내 사용자 ID를 직접 멘션**하면 `slack-list-poll`의 `mention` 이벤트에 리스트·행·댓글 ID가 표시됩니다. `slack-list`의 `listMentions`에서 보관 기간 내 최근 100건의 마스킹한 발췌문과 감지 시각을 볼 수 있습니다. 기존 댓글 편집, 담당자 필드, 같은 댓글 재조회는 새 알림을 만들지 않습니다. 재시작 후에도 같은 데이터 디렉터리를 사용해야 이력이 이어집니다. 조회 사이에 생성 후 삭제된 댓글은 놓칠 수 있습니다.
+
+내보내기 원본은 메모리에서 처리하고 리스트 댓글은 로컬에만 기록합니다. 전체 결과를 읽고 검증한 후 SQLite 트랜잭션으로 반영합니다. 발췌문은 보관 기간이 지나면 지우고, 재알림 방지용 댓글 식별자는 DB 수명 동안 유지하므로 댓글 수에 따라 저장량이 늘어납니다.
+
+`baseline`은 최초 기준점, `checked`는 이후 조회 성공, `error`는 해당 조회 실패를 뜻합니다. 실패 시 기존 기준점을 유지합니다. `SLACK_LIST_API_MISSING_SCOPE`이면 Web API 토큰에 부여된 권한을, `SLACK_LIST_EXPORT_SCHEMA`이면 테스트용 리스트에서 내보낸 JSON이 지원되는 댓글 구조인지 확인합니다.
 
 ## Slack 본인 멘션 자동 분석
 

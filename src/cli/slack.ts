@@ -71,8 +71,8 @@ export const runSlackCommand = async (args: string[]): Promise<void> => {
   if (live) {
     const appToken = environment ? environment.appToken : process.env['SLACK_APP_TOKEN'];
     const webToken = environment ? environment.webToken : process.env['SLACK_WEB_TOKEN'];
-    if (!appToken || !webToken) throw new HarnessError('SLACK_TOKENS_REQUIRED');
-    receiverEnvironment['SLACK_APP_TOKEN'] = appToken;
+    if (!webToken || (options.config.channelIds.length > 0 && !appToken)) throw new HarnessError('SLACK_TOKENS_REQUIRED');
+    if (appToken && options.config.channelIds.length > 0) receiverEnvironment['SLACK_APP_TOKEN'] = appToken;
     receiverEnvironment['SLACK_WEB_TOKEN'] = webToken;
   }
   const readOnly = options.command === 'slack-list' || options.command === 'slack-inspect';
@@ -87,12 +87,12 @@ export const runSlackCommand = async (args: string[]): Promise<void> => {
     if (!live) {
       const output = execFileSync(executable, workerArgs, {
         cwd: sourceRoot, env: receiverEnvironment, encoding: 'utf8', timeout: 30_000,
-        maxBuffer: 512_000, stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: options.config.listId && options.command === 'slack-list' ? 2_000_000 : 512_000, stdio: ['ignore', 'pipe', 'pipe'],
       });
       process.stdout.write(appendSlackAnalysisResults(output, options));
       return;
     }
-    if (analysisConfigPath) {
+    if (analysisConfigPath && options.config.channelIds.length > 0) {
       await runSlackAnalysisPair(executable, workerArgs,
         [join(sourceRoot, 'dist', 'src', 'cli', 'slack-analysis-worker.js'), JSON.stringify(options)], sourceRoot, receiverEnvironment);
       return;

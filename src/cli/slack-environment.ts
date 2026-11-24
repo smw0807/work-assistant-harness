@@ -13,7 +13,7 @@ export interface SlackEnvironmentSettings {
   webToken: string | undefined;
   analysisConfigPath?: string;
 }
-const keys = ['SLACK_WORKSPACE_ID', 'SLACK_TARGET_USER_ID', 'SLACK_CHANNEL_IDS', 'SLACK_LIVE_READ_ENABLED',
+const keys = ['SLACK_WORKSPACE_ID', 'SLACK_TARGET_USER_ID', 'SLACK_CHANNEL_IDS', 'SLACK_LIST_ID', 'SLACK_LIVE_READ_ENABLED',
   'SLACK_APP_TOKEN', 'SLACK_WEB_TOKEN', 'SLACK_ANALYSIS_ENABLED', 'SLACK_ANALYSIS_CODEX_CONFIG'] as const;
 const fail: (code: string) => never = code => { throw new HarnessError(code); };
 const booleanValue = (value: string | undefined, optional = false): boolean => {
@@ -43,12 +43,13 @@ export const parseSlackEnvironment = (input: Record<string, string | undefined>)
       values[key] = value as string | undefined;
     }
     const channels = values['SLACK_CHANNEL_IDS'];
-    if (channels === undefined || channels.length === 0) fail('SLACK_INVALID_ENV');
+    const listId = values['SLACK_LIST_ID'];
     const config = parseSlackReceiverConfig({ workspaceId: values['SLACK_WORKSPACE_ID'], targetUserId: values['SLACK_TARGET_USER_ID'],
-      channelIds: channels.split(',').map(value => value.trim()), liveReadEnabled: booleanValue(values['SLACK_LIVE_READ_ENABLED']),
+      channelIds: channels ? channels.split(',').map(value => value.trim()) : [],
+      ...(listId !== undefined ? { listId } : {}), liveReadEnabled: booleanValue(values['SLACK_LIVE_READ_ENABLED']),
       retentionHours: 24, maxPending: 100, thread: { maxMessages: 30, maxPages: 3, maxBytes: 16_384 } });
     const settings: SlackEnvironmentSettings = { config, appToken: tokenValue(values['SLACK_APP_TOKEN']), webToken: tokenValue(values['SLACK_WEB_TOKEN']) };
-    if (booleanValue(values['SLACK_ANALYSIS_ENABLED'], true)) {
+    if (booleanValue(values['SLACK_ANALYSIS_ENABLED'], true) && config.channelIds.length > 0) {
       const path = values['SLACK_ANALYSIS_CODEX_CONFIG'];
       if (!path || !isAbsolute(path) || resolve(path) !== path || !noControls(path)) fail('SLACK_INVALID_ENV');
       settings.analysisConfigPath = path;

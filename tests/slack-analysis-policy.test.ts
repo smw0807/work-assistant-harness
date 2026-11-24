@@ -74,6 +74,12 @@ test('only complete recorded mentions from allowed channels with the exact targe
   }
 });
 
+test('리스트 수신을 함께 켜도 채널 분석의 근거와 hash는 유지한다', () => {
+  const combined = { ...receiver, listId: 'FTEST123' };
+  assert.equal(hashSlackAnalysisSource(request(), combined), hashSlackAnalysisSource(request(), receiver));
+  assert.equal(buildSlackAnalysisPayload(request(), combined, config).dispatch.requestEnvelope.body.includes(combined.listId), false);
+});
+
 test('thread order, timestamp precision, duplicate aliases and older revisions fail closed', () => {
   const reversed = request(); reversed.thread!.messages.reverse();
   const duplicate = request(); duplicate.thread!.messages.push({ ...duplicate.thread!.messages[1]! });

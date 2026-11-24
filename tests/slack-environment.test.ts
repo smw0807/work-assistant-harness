@@ -77,6 +77,17 @@ test('선언된 키의 accessor와 Proxy를 실행하지 않으며 오류에 값
   assert.equal(reads, 0);
 });
 
+test('리스트 하나를 채널과 함께 또는 단독으로 지정하고 잘못된 대상은 거부한다', () => {
+  const settings = { ...environment(), SLACK_LIST_ID: 'FTEST123' };
+  assert.deepEqual(parseSlackEnvironment(settings).config.channelIds, ['C_ALLOWED']);
+  assert.equal(parseSlackEnvironment(settings).config.listId, 'FTEST123');
+  assert.deepEqual(parseSlackEnvironment({ ...settings, SLACK_CHANNEL_IDS: undefined }).config.channelIds, []);
+  assert.equal(parseSlackEnvironment({ ...settings, SLACK_CHANNEL_IDS: '', SLACK_ANALYSIS_ENABLED: 'true' }).analysisConfigPath, undefined);
+  for (const invalid of ['*', '', 'C123', 'FTEST,FB', 'https://app.slack.com/list/FTEST', ' FTEST']) {
+    assert.throws(() => parseSlackEnvironment({ ...settings, SLACK_LIST_ID: invalid }), { code: 'SLACK_INVALID_ENV' });
+  }
+});
+
 test('분석 활성화는 절대 경로를 요구하며 비활성 설정은 파일을 읽지 않는다', () => {
   const path = '/synthetic-not-created/private/codex.json';
   assert.equal(parseSlackEnvironment({ ...environment(), SLACK_ANALYSIS_ENABLED: 'true', SLACK_ANALYSIS_CODEX_CONFIG: path }).analysisConfigPath, path);

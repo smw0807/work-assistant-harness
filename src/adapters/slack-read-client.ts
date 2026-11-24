@@ -33,7 +33,7 @@ export interface SlackThreadResult {
 }
 
 interface SlackReadOptions {
-  appToken: string;
+  appToken?: string;
   webToken: string;
   requestTimeoutMs?: number;
   maxRetries?: number;
@@ -108,7 +108,8 @@ export class SlackReadClient {
   private readonly maxRetries: number;
 
   constructor(private readonly options: SlackReadOptions, dependencies: SlackReadDependencies = {}) {
-    if (![options.appToken, options.webToken].every((token) => typeof token === 'string' && token.length > 0 && token.length <= 4096 && !/\s/.test(token))) {
+    const tokens = options.appToken === undefined ? [options.webToken] : [options.webToken, options.appToken];
+    if (!tokens.every((token) => typeof token === 'string' && token.length > 0 && token.length <= 4096 && !/\s/.test(token))) {
       throw new HarnessError('SLACK_INVALID_CREDENTIALS');
     }
     this.requestTimeoutMs = validateInteger(options.requestTimeoutMs ?? 10_000, 1, 60_000);
@@ -195,6 +196,7 @@ export class SlackReadClient {
     }[operation];
     const url = operation === 'thread' ? `${apiUrl}?${parameters.toString()}` : apiUrl;
     const token = operation === 'socket' ? this.options.appToken : this.options.webToken;
+    if (!token) throw new HarnessError('SLACK_INVALID_CREDENTIALS');
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       if (signal?.aborted) throw new HarnessError('SLACK_REQUEST_CANCELLED');
       const controller = new AbortController();

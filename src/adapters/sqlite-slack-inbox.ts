@@ -10,6 +10,15 @@ import type { Task } from '../domain/types.js';
 import type { ApprovalRecord } from '../domain/approval.js';
 import { containsSensitiveText, redactSlackText } from '../policy/redaction.js';
 import { assertRuntimeFile } from '../policy/runtime-path.js';
+import type { SlackListComment } from '../policy/slack-list-export.js';
+
+export interface SlackListMention {
+  listId: string;
+  itemId: string;
+  commentId: string;
+  text: string;
+  detectedAt: string;
+}
 
 const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const timestampPattern = /^\d{1,20}\.\d{1,10}$/;
@@ -83,7 +92,93 @@ export class SqliteSlackInbox implements SlackInbox {
         id INTEGER PRIMARY KEY,
         payload TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS slack_list_snapshots (
+        workspace_id TEXT NOT NULL, list_id TEXT NOT NULL, target_id TEXT NOT NULL,
+        observed_at INTEGER NOT NULL,
+        PRIMARY KEY(workspace_id, list_id, target_id)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS slack_list_comments (
+        workspace_id TEXT NOT NULL, list_id TEXT NOT NULL, target_id TEXT NOT NULL,
+        item_id TEXT NOT NULL, comment_id TEXT NOT NULL,
+        text TEXT, detected_at INTEGER, expires_at INTEGER,
+        PRIMARY KEY(workspace_id, list_id, target_id, item_id, comment_id)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS slack_list_mentions_expiry ON slack_list_comments(expires_at)
+        WHERE text IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS slack_list_mentions_scope ON slack_list_comments(workspace_id, list_id, target_id, detected_at DESC)
+        WHERE text IS NOT NULL;
     `);
+  }
+
+  /** 완전한 내보내기 한 건의 기준점과 중복 키를 함께 커밋해 재시작해도 과거 댓글을 알리지 않는다. */
+  applyListSnapshot(listId: string, comments: readonly SlackListComment[], now: number): { baseline: boolean; mentions: SlackListMention[] } {
+    if (!listId || listId !== this.config.listId || !isId(listId)) throw new HarnessError('SLACK_LIST_DENIED');
+    const scope = [this.config.workspaceId, listId, this.config.targetUserId] as const;
+    const detectedAt = new Date(now).toISOString();
+    const expiresAt = now + this.config.retentionHours * 3_600_000;
+    return this.transaction(() => {
+      const previous = this.database.prepare(`
+        SELECT observed_at FROM slack_list_snapshots WHERE workspace_id = ? AND list_id = ? AND target_id = ?
+      `).get(...scope);
+      if (previous && Number(previous.observed_at) > now) return { baseline: false, mentions: [] };
+      this.database.prepare(`
+        INSERT INTO slack_list_snapshots(workspace_id, list_id, target_id, observed_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(workspace_id, list_id, target_id) DO UPDATE SET observed_at = excluded.observed_at
+      `).run(...scope, now);
+      this.pruneListMentions(now);
+      const activeRows = this.database.prepare(`
+        SELECT rowid, item_id, comment_id, text FROM slack_list_comments
+        WHERE workspace_id = ? AND list_id = ? AND target_id = ? AND text IS NOT NULL
+      `).all(...scope);
+      const active = new Map(activeRows.map(row => [`${row.item_id}/${row.comment_id}`, row]));
+      const update = this.database.prepare('UPDATE slack_list_comments SET text = ? WHERE rowid = ?');
+      const insert = this.database.prepare(`
+        INSERT INTO slack_list_comments(workspace_id, list_id, target_id, item_id, comment_id, text, detected_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
+      `);
+      const mentions: SlackListMention[] = [];
+      for (const comment of comments) {
+        if (!isId(comment.itemId) || !(isId(comment.commentId) || isTimestamp(comment.commentId))
+          || typeof comment.mentionsTarget !== 'boolean' || typeof comment.text !== 'string'
+          || Buffer.byteLength(comment.text) > 16_384) throw new HarnessError('SLACK_LIST_COMMENT_INVALID');
+        const key = `${comment.itemId}/${comment.commentId}`;
+        const current = active.get(key);
+        const text = previous && comment.mentionsTarget ? redactSlackText(comment.text) : null;
+        if (current) {
+          if (current.text !== text) update.run(text, current.rowid!);
+          active.delete(key);
+          continue;
+        }
+        const inserted = insert.run(...scope, comment.itemId, comment.commentId,
+          text, text === null ? null : now, text === null ? null : expiresAt);
+        if (text !== null && inserted.changes === 1) {
+          mentions.push({ listId, itemId: comment.itemId, commentId: comment.commentId, text, detectedAt });
+        }
+      }
+      // 완전한 스냅샷에서 사라진 댓글은 본문을 지우고 재등장에 대비해 식별자만 남긴다.
+      for (const row of active.values()) update.run(null, row.rowid!);
+      return { baseline: !previous, mentions };
+    });
+  }
+
+  listMentions(now = Date.now()): SlackListMention[] {
+    const listId = this.config.listId;
+    if (!listId) return [];
+    this.pruneListMentions(now);
+    return this.database.prepare(`
+      SELECT item_id, comment_id, text, detected_at FROM slack_list_comments
+      WHERE workspace_id = ? AND list_id = ? AND target_id = ? AND text IS NOT NULL AND expires_at > ?
+      ORDER BY detected_at DESC, rowid DESC LIMIT 100
+    `).all(this.config.workspaceId, listId, this.config.targetUserId, now).map(row => ({
+      listId, itemId: String(row.item_id), commentId: String(row.comment_id),
+      text: String(row.text), detectedAt: new Date(Number(row.detected_at)).toISOString(),
+    }));
+  }
+
+  private pruneListMentions(now: number): number {
+    return Number(this.database.prepare(`
+      UPDATE slack_list_comments SET text = NULL WHERE text IS NOT NULL AND expires_at <= ?
+    `).run(now).changes);
   }
 
   receive(input: SlackMessageChange, now: Date): 'accepted' | 'duplicate' | 'ignored' {
@@ -242,7 +337,7 @@ export class SqliteSlackInbox implements SlackInbox {
       `).run(now.toISOString()).changes;
       // 본문은 보관 기간 후 지우고, event 중복 키와 revision/삭제 marker는 DB 수명 동안 유지한다.
       // 이 최소 marker를 지우면 오래된 Slack 재전달을 새 요청으로 받아들일 수 있다.
-      return Number(inbox) + Number(requests);
+      return Number(inbox) + Number(requests) + this.pruneListMentions(now.getTime());
     });
   }
 

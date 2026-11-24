@@ -1,6 +1,7 @@
 import type { IngestionPolicy } from './types.js';
 
 export interface SlackReceiverConfig extends IngestionPolicy {
+  listId?: string;
   retentionHours: number;
   maxPending: number;
   thread: { maxMessages: number; maxPages: number; maxBytes: number };

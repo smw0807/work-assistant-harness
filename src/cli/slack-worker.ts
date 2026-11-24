@@ -3,12 +3,14 @@ import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { join } from 'node:path';
 import { SlackReadClient } from '../adapters/slack-read-client.js';
+import { SlackListExportClient } from '../adapters/slack-list-export.js';
 import { SlackSocketTransport } from '../adapters/slack-socket-transport.js';
 import { SqliteSlackInbox } from '../adapters/sqlite-slack-inbox.js';
 import { SqliteTaskStore } from '../adapters/sqlite-task-store.js';
 import { MockSlackSource } from '../adapters/mock-slack-source.js';
 import { LocalReportSink } from '../adapters/local-report-sink.js';
 import { SlackReceptionService, type SlackThreadReader } from '../application/receive-slack.js';
+import { pollSlackList } from '../application/poll-slack-list.js';
 import { HarnessError } from '../domain/errors.js';
 import type { SlackInbox } from '../domain/slack.js';
 import { parseSlackReceiverConfig } from '../policy/slack-ingestion.js';
@@ -29,9 +31,10 @@ const run = async (): Promise<void> => {
   const parentDisconnected = (): void => controller.abort();
   if (process.connected) process.on('disconnect', parentDisconnected);
   if (live && !options.config.liveReadEnabled) throw new HarnessError('SLACK_LIVE_READ_DISABLED');
-  const client = live ? new SlackReadClient({
-    appToken: process.env['SLACK_APP_TOKEN'] ?? '', webToken: process.env['SLACK_WEB_TOKEN'] ?? '',
-  }) : null;
+  const appToken = process.env['SLACK_APP_TOKEN'];
+  const webToken = process.env['SLACK_WEB_TOKEN'] ?? '';
+  const client = live ? new SlackReadClient({ ...(appToken ? { appToken } : {}), webToken }) : null;
+  const listClient = live && options.config.listId ? new SlackListExportClient(webToken) : null;
   delete process.env['SLACK_APP_TOKEN'];
   delete process.env['SLACK_WEB_TOKEN'];
   const threads: SlackThreadReader = client ? {
@@ -50,7 +53,7 @@ const run = async (): Promise<void> => {
       },
     ],
   }, { logger: false, abortOnError: false });
-  const inbox = application.get<SlackInbox>(INBOX);
+  const inbox = application.get<SqliteSlackInbox>(INBOX);
   const service = application.get(SlackReceptionService);
   const tasks = new SqliteTaskStore(databasePath);
   const reporter = new LocalReportSink(join(options.dataDirectory, 'reports'));
@@ -83,11 +86,13 @@ const run = async (): Promise<void> => {
   try {
     inbox.prune(new Date());
     const readOnly = options.command === 'slack-list' || options.command === 'slack-inspect';
-    const recovered = readOnly ? 0 : inbox.recoverInterrupted(new Date());
+    const channelEnabled = options.config.channelIds.length > 0;
+    const recovered = readOnly || !channelEnabled ? 0 : inbox.recoverInterrupted(new Date());
     await synchronizeReports();
     if (options.command === 'slack-list') {
       const requests = list();
       result({ requests: requests.slice(-100).map(({ text: _text, thread: _thread, ...metadata }) => metadata),
+        ...(options.config.listId ? { listMentions: inbox.listMentions() } : {}),
         total: requests.length, truncated: requests.length > 100, connection: inbox.connection(), connectionHistory: inbox.connectionHistory() });
     } else if (options.command === 'slack-inspect') {
       if (!options.config.channelIds.includes(options.channelId)) throw new HarnessError('SLACK_CHANNEL_DENIED');
@@ -110,29 +115,43 @@ const run = async (): Promise<void> => {
       const retentionTimer = setInterval(() => {
         try { inbox.prune(new Date()); } catch (error) { drainFailure = error; controller.abort(); }
       }, 60_000);
+      const activeSources: Promise<void>[] = [];
       try {
         try { await client.verifyWorkspace(options.config.workspaceId, controller.signal); } catch (error) {
           if (controller.signal.aborted) return;
           throw error;
         }
-        scheduleDrain();
+        if (channelEnabled) scheduleDrain();
         result({ status: 'starting', recovered });
-        await new SlackSocketTransport(client).run(async (envelope, acknowledge) => {
-          if (drainFailure) throw drainFailure;
-          await service.receive(envelope, acknowledge);
-          scheduleDrain();
-        }, controller.signal, (state, reason) => {
-          inbox.setConnection({ state, reason, at: new Date().toISOString() });
-          process.stdout.write(`${JSON.stringify({ connection: inbox.connection() })}\n`);
-        });
+        const { workspaceId, targetUserId, listId } = options.config;
+        if (listClient && listId) {
+          activeSources.push(pollSlackList({ workspaceId, targetUserId, listId }, listClient, inbox, controller.signal,
+            notice => process.stdout.write(`${JSON.stringify({ event: 'slack-list-poll', ...notice })}\n`)));
+        }
+        if (channelEnabled) {
+          const socket = new SlackSocketTransport(client).run(async (envelope, acknowledge) => {
+            if (drainFailure) throw drainFailure;
+            await service.receive(envelope, acknowledge);
+            scheduleDrain();
+          }, controller.signal, (state, reason) => {
+            inbox.setConnection({ state, reason, at: new Date().toISOString() });
+            process.stdout.write(`${JSON.stringify({ connection: inbox.connection() })}\n`);
+          });
+          activeSources.push(socket.catch((error: unknown) => {
+            if (!listClient || !(error instanceof HarnessError) || error.code !== 'SLACK_RECONNECT_LIMIT') throw error;
+            process.stdout.write(`${JSON.stringify({ event: 'slack-channel-stopped', reason: error.code })}\n`);
+          }));
+        }
+        await Promise.all(activeSources);
       } finally {
         controller.abort();
         clearInterval(retentionTimer);
+        await Promise.allSettled(activeSources);
         if (followup) await followup;
-        await service.drain();
+        if (channelEnabled) await service.drain();
         process.off('SIGINT', stop);
         process.off('SIGTERM', stop);
-        inbox.setConnection({ state: 'gap', reason: 'RECEIVER_STOPPED', at: new Date().toISOString() });
+        if (channelEnabled) inbox.setConnection({ state: 'gap', reason: 'RECEIVER_STOPPED', at: new Date().toISOString() });
       }
       if (drainFailure) throw drainFailure;
     } else throw new HarnessError('UNKNOWN_COMMAND');
