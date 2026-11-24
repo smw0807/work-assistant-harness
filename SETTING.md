@@ -1,4 +1,4 @@
-채널 멘션 수신과 분석에는 아래 설정을 사용합니다. 리스트 댓글 멘션도 감지하려면 리스트 URL의 `/list/` 다음에 있는 `F…` ID를 복사하세요. `pnpm start`는 아래 경로의 `slack.env`를 읽으므로 이 파일에 `SLACK_LIST_ID=FEXAMPLE,FSECOND`처럼 모든 ID를 한 줄에 지정하세요. 같은 키를 여러 줄에 쓰면 마지막 값이 적용됩니다. 재시작한 뒤 시작 로그의 `listIds`에서 감시 대상을 확인할 수 있습니다. 토큰은 비공개 설정 파일에 보관하세요. 본인이 볼 수 있는 리스트를 감시하려면 사용자 토큰에 `lists:read`를 부여하고 같은 파일의 `SLACK_LIST_USER_TOKEN`에 넣으세요. [리스트 권한과 실행 방법](docs/guides/slack.md#리스트-댓글-멘션-감시)
+채널 멘션 수신과 분석에는 아래 설정을 사용합니다. 리스트 댓글 멘션도 감지하려면 리스트 URL의 `/list/` 다음에 있는 `F…` ID를 복사하세요. `pnpm start`는 아래 경로의 `slack.env`를 읽으므로 이 파일에 `SLACK_LIST_ID=FEXAMPLE,FSECOND`처럼 모든 ID를 한 줄에 지정하세요. 같은 키를 여러 줄에 쓰면 마지막 값이 적용됩니다. 재시작한 뒤 시작 로그의 `listIds`에서 감시 대상을 확인할 수 있습니다. 토큰은 비공개 설정 파일에 보관하세요. 본인이 볼 수 있는 리스트를 감시하려면 본인 계정으로 승인한 토큰을 같은 파일의 `SLACK_LIST_USER_TOKEN`에 넣으세요. 내보내기에는 `lists:read`가 필요합니다. 내보내기에 빠진 답글까지 감지하려면 같은 토큰으로 해당 대화의 `conversations.replies`를 호출할 수 있어야 합니다. [리스트 권한과 실행 방법](docs/guides/slack.md#리스트-댓글-멘션-감시)
 
 먼저 [Slack 앱 관리 화면](https://api.slack.com/apps)에서 등록한 앱을 열고 설정해 주세요.
 

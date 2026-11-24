@@ -199,7 +199,7 @@ container는 3-B와 같은 nonroot·읽기 전용 root·네트워크 없음·cap
 
 Slack 토큰·네트워크는 수신부에만 제공한다. 조사 worker에는 상속하지 않으며 기존 네트워크·child process 차단을 유지한다. 수신부는 필요한 읽기 API와 전달 확인 ACK만 사용한다. ACK에는 업무 답변을 담지 않고 `response_url`이나 임의 URL을 사용하지 않는다. 외부 모델과 Slack 쓰기 API는 수집 경로에 제공하지 않는다.
 
-채널 수신 경로는 `auth.test`, `apps.connections.open`, `conversations.replies`를 사용한다. 워크스페이스 확인 후 명시한 리스트가 있으면 수신 worker가 `slackLists.download.start`·`slackLists.download.get`과 해당 리스트의 검증된 Slack 비공개 다운로드 URL을 사용한다. 리스트 전용 사용자 토큰을 지정하면 해당 토큰으로 워크스페이스와 멘션 대상 사용자를 확인한 뒤 리스트를 읽는다. 인증 실패 시 다음 순회에서 같은 토큰으로 재시도한다. 내보내기 원본은 메모리에서 처리하고 SQLite에는 댓글 중복 키와 새 직접 멘션의 마스킹한 발췌문을 기록한다. 리스트 댓글은 외부 모델에 전송하지 않는다. [리스트 조회와 보관](guides/slack.md#리스트-댓글-멘션-감시)
+채널 수신 경로는 `auth.test`, `apps.connections.open`, `conversations.replies`를 사용한다. 워크스페이스 확인 후 명시한 리스트가 있으면 수신 worker가 `slackLists.download.start`·`slackLists.download.get`과 해당 리스트의 검증된 Slack 비공개 다운로드 URL을 사용한다. 항목 스레드를 직접 읽을 때는 설정한 리스트 ID에서 정한 파일 대화와 내보내기에서 검증한 항목의 `thread_ts`로 `conversations.replies`를 호출한다. 내보내기와 직접 조회에는 같은 토큰을 사용한다. 리스트 전용 사용자 토큰을 지정하면 해당 토큰으로 워크스페이스와 멘션 대상 사용자를 확인하고, 생략하면 기존 Web API 토큰을 사용한다. 직접 조회 권한이 부족해도 내보내기는 계속한다. 원본은 메모리에서 처리하고 SQLite에는 항목별 스레드와 마지막 답글 시각, 댓글 중복 키, 새 직접 멘션의 마스킹한 발췌문을 기록한다. 리스트 댓글은 외부 모델에 전송하지 않는다. [리스트 조회와 보관](guides/slack.md#리스트-댓글-멘션-감시)
 
 수신부의 Node 네트워크 권한은 프로세스 전체에 적용된다. 목적지는 어댑터의 고정 Slack API·redirect 거부와 정확한 WSS 호스트 검증으로 제한한다. 이 검사를 호스트별 OS 네트워크 격리나 악성 코드 실행 sandbox로 설명하지 않는다. 수신 worker에는 토큰을 환경변수로만 전달한다. 부모 CLI는 `--config`와 함께 현재 프로세스의 토큰 환경변수를 사용하거나, `--env` 또는 명시적 `--env-file`에서 필요한 키만 읽는다. private env-file은 소유자 전용 `0600` 파일이어야 하며 전체 내용을 `process.env`로 주입하지 않는다. 세 설정 방식은 함께 사용할 수 없고 `.env` 자동 탐색도 하지 않는다. 토큰을 CLI 인자·수신 JSON/relay JSON 설정·저장 자료에 넣지 않는다.
 

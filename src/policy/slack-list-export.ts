@@ -1,8 +1,11 @@
 import { HarnessError } from '../domain/errors.js';
 import { containsSensitiveText, redactSlackText } from './redaction.js';
 import { asSlackRecord } from './slack-ingestion.js';
+import { isSlackTimestamp, slackTimestampTicks } from './slack-timestamp.js';
 
 export type SlackListComment = { itemId: string; commentId: string; mentionsTarget: boolean; text: string };
+export type SlackListThread = { itemId: string; threadTs: string };
+export type SlackListSnapshot = { comments: SlackListComment[]; threads: SlackListThread[] };
 
 const maxItems = 5_000;
 const maxComments = 20_000;
@@ -90,19 +93,26 @@ const excerpt = (text: string): string => {
   return bytes.toString('utf8', 0, end);
 };
 
-const parseComment = (raw: unknown, itemId: string, targetUserId: string): SlackListComment => {
+type CommentSource = 'export' | 'thread';
+
+const parseComment = (raw: unknown, itemId: string, targetUserId: string, origin: CommentSource): SlackListComment => {
   const value = record(raw);
   const ts = value['ts'];
-  const commentId = ts === undefined ? id(value['id'])
-    : typeof ts === 'string' && /^\d{1,20}\.\d{1,10}$/.test(ts) ? ts : invalid();
+  const commentId = ts === undefined && origin === 'export' ? id(value['id'])
+    : isSlackTimestamp(ts) ? ts : invalid();
   const ignored = { itemId, commentId, mentionsTarget: false, text: '' };
-  if (value['bot_id'] || value['bot_profile'] || value['subtype'] === 'bot_message'
-    || value['subtype'] === 'message_deleted' || value['hidden'] === true) return ignored;
+  const subtype = value['subtype'];
+  if (value['bot_id'] || value['bot_profile'] || subtype === 'bot_message'
+    || subtype === 'message_deleted' || value['hidden'] === true) return ignored;
+  const userReply = subtype === undefined || subtype === 'file_share' || subtype === 'thread_broadcast'
+    || (origin === 'thread' && subtype === 'me_message');
+  // replies에 섞인 시스템 메시지는 본문을 읽지 않아도 다음 답글의 조회 위치에 포함된다.
+  if (origin === 'thread' && typeof subtype === 'string' && !userReply) return ignored;
   const author = id(value['user'] ?? value['user_id']);
   if (!userIdPattern.test(author)) return invalid();
   if (author === targetUserId) return ignored;
   if (value['type'] !== undefined && value['type'] !== 'message') return invalid();
-  if (value['subtype'] !== undefined && value['subtype'] !== 'file_share' && value['subtype'] !== 'thread_broadcast') return invalid();
+  if (!userReply) return invalid();
   const text = value['text'] === undefined ? undefined : messageText(value['text']);
   const source = value['rich_text'] === undefined ? 'blocks' : 'rich_text';
   if (source === 'rich_text' && value['blocks'] !== undefined) return invalid();
@@ -112,6 +122,24 @@ const parseComment = (raw: unknown, itemId: string, targetUserId: string): Slack
   }
   if (text === undefined) return invalid();
   return hasTextMention(text, targetUserId) ? { itemId, commentId, mentionsTarget: true, text: excerpt(text) } : ignored;
+};
+
+const parseItemComments = (messages: readonly unknown[], itemId: string, targetUserId: string, origin: CommentSource): SlackListComment[] => {
+  const seen = new Set<string>();
+  const comments: SlackListComment[] = [];
+  for (const raw of messages) {
+    const comment = parseComment(raw, itemId, targetUserId, origin);
+    if (seen.has(comment.commentId)) return invalid();
+    seen.add(comment.commentId);
+    comments.push(comment);
+  }
+  return comments;
+};
+
+/** 직접 조회한 답글의 ts는 다음 조회의 시작점이므로 내보내기의 대체 ID를 허용하지 않는다. */
+export const parseSlackListReplyPage = (messages: readonly unknown[], itemId: string, targetUserId: string): SlackListComment[] => {
+  if (!userIdPattern.test(targetUserId)) return invalid();
+  return parseItemComments(boundedArray(messages, maxComments), id(itemId), targetUserId, 'thread');
 };
 
 const checkCount = (messages: unknown[], owner: Record<string, unknown>): unknown[] => {
@@ -126,7 +154,7 @@ const threadMessages = (row: Record<string, unknown>): unknown[] | null => {
   if (row['thread'] != null && row['comments'] != null) return invalid();
   const thread = row['thread'] ?? row['comments'];
   if (thread == null) {
-    if (['threads', 'replies', 'messages', 'thread_ts', 'discussion'].some(key => row[key] != null)) return invalid();
+    if (['threads', 'replies', 'messages', 'discussion'].some(key => row[key] != null)) return invalid();
     const counts = [row['reply_count'], row['comment_count']].filter(count => count !== undefined);
     if (counts.some(count => count !== 0)) return invalid();
     return counts.length ? [] : null;
@@ -146,16 +174,22 @@ const threadMessages = (row: Record<string, unknown>): unknown[] | null => {
 const alternateRecordFields = ['comments', 'threads', 'replies', 'messages', 'discussion', 'subtasks'];
 
 /** Slack 내보내기는 레코드와 그 댓글·자식 목록을 같은 객체의 별도 필드에 담는다. */
-const unwrapExportRecord = (node: Record<string, unknown>, listId: string): Record<string, unknown> => {
+const unwrapExportRecord = (node: Record<string, unknown>, listId: string, withComments: boolean): Record<string, unknown> => {
   const item = record(node['record']);
-  if (item['list_id'] !== listId || !complete(node) || !complete(item)
-    || !Array.isArray(node['children']) || item['children'] !== undefined || item['thread'] !== undefined
+  if (item['list_id'] !== listId || !Array.isArray(node['children']) || item['children'] !== undefined
+    || (node['list_id'] !== undefined && node['list_id'] !== listId)
+    || (node['id'] !== undefined && node['id'] !== item['id'])
+    || (node['thread_ts'] !== undefined && node['thread_ts'] !== item['thread_ts'])
+    || item['thread'] !== undefined
     || alternateRecordFields.some(key => node[key] !== undefined || item[key] !== undefined)) return invalid();
+  const row = { id: item['id'], thread_ts: item['thread_ts'], subtasks: node['children'] };
+  if (!withComments) return row;
+  if (!complete(node) || !complete(item)) return invalid();
   // 댓글이 없는 레코드도 thread_ts를 가질 수 있다. 댓글 포함 여부는 스냅샷 전체에서 확인한다.
   const thread = node['thread'] == null ? null : boundedArray(node['thread'], maxComments);
   checkCount(thread ?? [], node);
   checkCount(thread ?? [], item);
-  return { id: item['id'], thread, subtasks: node['children'] };
+  return { ...row, thread };
 };
 
 const truncationFlags = ['records_truncated', 'threads_truncated', 'thread_replies_truncated',
@@ -173,11 +207,12 @@ const hasCompleteRecordExport = (meta: unknown): boolean => {
  * 항목 정보와 댓글 데이터의 경계에서만 읽는다. 모르는 구조를 빈 내보내기로 처리하면
  * 잘못된 최초 기준점이 저장되므로 전체 스냅샷을 거부한다.
  */
-export const parseSlackListComments = (input: unknown, listId: string, targetUserId: string): SlackListComment[] => {
+const parseList = (input: unknown, listId: string, targetUserId: string | null): SlackListSnapshot => {
   const root = record(input);
   const list = asSlackRecord(root['list']);
+  const withComments = targetUserId !== null;
   const listIds = [root['list_id'], root['id'], list?.['id'], list?.['list_id']].filter(value => value !== undefined);
-  if (!/^F[A-Z0-9_]{1,63}$/.test(listId) || !userIdPattern.test(targetUserId)
+  if (!/^F[A-Z0-9_]{1,63}$/.test(listId)
     || listIds.some(value => value !== listId) || !complete(root) || (list && !complete(list))) return invalid();
   const hasRecords = root['records'] !== undefined;
   const tables = [root['items'], root['rows'], root['records'], list?.['items'], list?.['rows']].filter(table => table !== undefined);
@@ -187,29 +222,35 @@ export const parseSlackListComments = (input: unknown, listId: string, targetUse
   if (!listIds.length && (!items.length || items.some(item => record(item)['list_id'] !== listId))) return invalid();
   const includeThreads = [root['include_threads'], asSlackRecord(root['options'])?.['include_threads'],
     asSlackRecord(root['metadata'])?.['include_threads']].filter(flag => flag !== undefined);
-  if (includeThreads.some(flag => flag !== true)) return invalid();
-  const completeRecords = hasRecords && hasCompleteRecordExport(root['meta']);
+  if (withComments && includeThreads.some(flag => flag !== true)) return invalid();
+  const completeRecords = withComments && hasRecords && hasCompleteRecordExport(root['meta']);
   let sawThreadShape = includeThreads.length > 0 || completeRecords;
   let hasRowsWithoutThread = false;
   const pending = [...items].reverse();
   const seenItems = new Set<string>();
+  const seenThreads = new Set<bigint>();
   const comments: SlackListComment[] = [];
+  const threads: SlackListThread[] = [];
   while (pending.length) {
     const node = record(pending.pop());
-    const row = hasRecords ? unwrapExportRecord(node, listId) : node;
+    const row = hasRecords ? unwrapExportRecord(node, listId, withComments) : node;
     const itemId = id(row['id']);
     if (seenItems.has(itemId) || (row['list_id'] !== undefined && row['list_id'] !== listId)) return invalid();
     seenItems.add(itemId);
-    const messages = threadMessages(row);
-    if (messages === null) hasRowsWithoutThread = true;
-    else if (row['thread'] != null || row['comments'] != null) sawThreadShape = true;
-    if (comments.length + (messages?.length ?? 0) > maxComments) return invalid();
-    const seenComments = new Set<string>();
-    for (const raw of messages ?? []) {
-      const comment = parseComment(raw, itemId, targetUserId);
-      if (seenComments.has(comment.commentId)) return invalid();
-      seenComments.add(comment.commentId);
-      comments.push(comment);
+    const threadTs = row['thread_ts'];
+    if (threadTs != null) {
+      if (!isSlackTimestamp(threadTs)) return invalid();
+      const ticks = slackTimestampTicks(threadTs);
+      if (seenThreads.has(ticks)) return invalid();
+      seenThreads.add(ticks);
+      threads.push({ itemId, threadTs });
+    }
+    if (withComments) {
+      const messages = threadMessages(row);
+      if (messages === null) hasRowsWithoutThread = true;
+      else if (row['thread'] != null || row['comments'] != null) sawThreadShape = true;
+      if (comments.length + (messages?.length ?? 0) > maxComments) return invalid();
+      if (messages) comments.push(...parseItemComments(messages, itemId, targetUserId, 'export'));
     }
     if (row['subtasks'] !== undefined) {
       const children = boundedArray(row['subtasks'], maxItems - seenItems.size - pending.length);
@@ -217,5 +258,15 @@ export const parseSlackListComments = (input: unknown, listId: string, targetUse
     }
   }
   if (hasRowsWithoutThread && !sawThreadShape) return invalid();
-  return comments;
+  return { comments, threads };
 };
+
+export const parseSlackListSnapshot = (input: unknown, listId: string, targetUserId: string): SlackListSnapshot =>
+  userIdPattern.test(targetUserId) ? parseList(input, listId, targetUserId) : invalid();
+
+/** 댓글이 잘려도 현재 내보내기에서 다시 확인된 항목·스레드 연결만 복구한다. */
+export const parseSlackListThreadBindings = (input: unknown, listId: string): SlackListThread[] =>
+  parseList(input, listId, null).threads;
+
+export const parseSlackListComments = (input: unknown, listId: string, targetUserId: string): SlackListComment[] =>
+  parseSlackListSnapshot(input, listId, targetUserId).comments;

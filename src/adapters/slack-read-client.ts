@@ -1,9 +1,12 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { HarnessError } from '../domain/errors.js';
+import { compareSlackTimestamps, isSlackTimestamp } from '../policy/slack-timestamp.js';
 import { validateSlackSocketUrl } from './slack-socket-transport.js';
 
 const maxResponseBytes = 262_144;
 const maxRetryDelayMs = 60_000;
+const listReplyPageSize = 15;
+const maxListReplyCursorPages = 5;
 const timestampPattern = /^\d{1,20}\.\d{1,20}$/;
 const identifierPattern = /^[A-Za-z0-9_]{1,128}$/;
 type SlackApiOperation = 'socket' | 'thread' | 'identity';
@@ -11,10 +14,12 @@ const knownApiErrors = new Set([
   'invalid_auth', 'not_authed', 'missing_scope', 'not_allowed_token_type', 'token_expired', 'token_revoked',
   'account_inactive', 'access_denied', 'accesslimited', 'forbidden_team', 'missing_args',
 ]);
+const threadApiErrors = new Set(['channel_not_found', 'not_in_channel', 'thread_not_found', 'no_permission']);
 
 /** Only fixed API error categories can enter logs; response text and metadata stay private. */
 const apiRejectionCode = (operation: SlackApiOperation, response: Record<string, unknown>): string => {
-  if (response.ok !== false || typeof response.error !== 'string' || !knownApiErrors.has(response.error)) {
+  if (response.ok !== false || typeof response.error !== 'string'
+    || !(knownApiErrors.has(response.error) || (operation === 'thread' && threadApiErrors.has(response.error)))) {
     return 'SLACK_API_REJECTED';
   }
   return `SLACK_${operation.toUpperCase()}_API_${response.error.toUpperCase()}`;
@@ -35,6 +40,7 @@ export interface SlackThreadResult {
 interface SlackReadOptions {
   appToken?: string;
   webToken: string;
+  allowedListIds?: readonly string[];
   requestTimeoutMs?: number;
   maxRetries?: number;
 }
@@ -46,6 +52,30 @@ interface SlackReadDependencies {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+};
+
+const parseListReplyPage = (response: Record<string, unknown>, channel: string, threadTs: string, oldest: string) => {
+  if (!Array.isArray(response.messages) || response.messages.length > listReplyPageSize + 1
+    || (response.has_more !== undefined && typeof response.has_more !== 'boolean')
+    || (response.response_metadata !== undefined && !isRecord(response.response_metadata))) {
+    throw new HarnessError('SLACK_INVALID_RESPONSE');
+  }
+  const rawCursor = response.response_metadata?.next_cursor;
+  if (rawCursor != null && (typeof rawCursor !== 'string' || rawCursor.length > 2048)) throw new HarnessError('SLACK_INVALID_RESPONSE');
+  const nextCursor = rawCursor?.trim() ?? '';
+  const messages: unknown[] = [];
+  let lastTs = oldest;
+  for (const [index, message] of response.messages.entries()) {
+    if (!isRecord(message) || !isSlackTimestamp(message.ts)
+      || (message.channel !== undefined && message.channel !== channel)) throw new HarnessError('SLACK_INVALID_RESPONSE');
+    // 범위 밖의 부모도 응답 첫 항목에 포함될 수 있다. 부모 본문은 알림 또는 진행 기준으로 쓰지 않는다.
+    if (index === 0 && message.ts === threadTs && (message.thread_ts === undefined || message.thread_ts === threadTs)) continue;
+    if (message.thread_ts !== threadTs || compareSlackTimestamps(message.ts, lastTs) <= 0) throw new HarnessError('SLACK_INVALID_RESPONSE');
+    messages.push(message);
+    lastTs = message.ts;
+  }
+  if (messages.length > listReplyPageSize) throw new HarnessError('SLACK_INVALID_RESPONSE');
+  return { messages, hasMore: response.has_more === true || nextCursor !== '', nextCursor };
 };
 
 const validateInteger = (value: number, minimum: number, maximum: number): number => {
@@ -135,6 +165,32 @@ export class SlackReadClient {
     if (expectedUserId !== undefined && (response.user_id !== expectedUserId || Object.hasOwn(response, 'bot_id'))) {
       throw new HarnessError('SLACK_LIST_USER_MISMATCH');
     }
+  }
+
+  /** 리스트 ID에서 파일 대화 ID를 정한다. 내보내기나 댓글이 임의의 조회 채널을 지정할 수 없다. */
+  async readListThreadPage(listId: string, threadTs: string, oldest: string, signal: AbortSignal):
+    Promise<{ messages: unknown[]; hasMore: boolean }> {
+    if (!/^F[A-Z0-9]{1,63}$/.test(listId) || !this.options.allowedListIds?.includes(listId)) {
+      throw new HarnessError('SLACK_LIST_DENIED');
+    }
+    if (!isSlackTimestamp(threadTs) || !isSlackTimestamp(oldest) || compareSlackTimestamps(oldest, threadTs) < 0) {
+      throw new HarnessError('SLACK_INVALID_THREAD');
+    }
+    const channel = `C${listId.slice(1)}`;
+    const parameters = new URLSearchParams({
+      channel, ts: threadTs, oldest, inclusive: 'false', limit: String(listReplyPageSize),
+    });
+    const seenCursors = new Set<string>();
+    for (let page = 0; page < maxListReplyCursorPages; page++) {
+      const response = await this.request('thread', parameters, signal);
+      const { messages, hasMore, nextCursor } = parseListReplyPage(response, channel, threadTs, oldest);
+      if (messages.length || !hasMore) return { messages, hasMore };
+      // 비어 있거나 부모만 있는 중간 페이지에는 저장할 답글 ts가 없다. 같은 시간 경계에서 Slack 커서로 이어간다.
+      if (!nextCursor || seenCursors.has(nextCursor)) throw new HarnessError('SLACK_INVALID_RESPONSE');
+      seenCursors.add(nextCursor);
+      parameters.set('cursor', nextCursor);
+    }
+    throw new HarnessError('SLACK_THREAD_PAGE_LIMIT');
   }
 
   async readThread(channelId: string, threadTs: string, requestedLimits?: SlackThreadLimits, signal?: AbortSignal): Promise<SlackThreadResult> {

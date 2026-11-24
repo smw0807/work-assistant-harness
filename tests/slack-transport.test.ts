@@ -70,6 +70,127 @@ test('Slack API는 고정 읽기 메서드와 Authorization 헤더만 사용하�
   assert.equal('postMessage' in client, false);
 });
 
+test('등록된 리스트의 부모를 제외하고 oldest 이후의 답글을 정밀도 손실 없이 페이지별로 읽는다', async () => {
+  const listId = 'FSYNTH', channel = 'CSYNTH', threadTs = '1700000000.000001';
+  const oldest = '1700000000.1234567890';
+  const first = { ...threadMessage('1700000000.1234567891'), channel, thread_ts: threadTs,
+    blocks: [{ type: 'rich_text', elements: [] }], subtype: 'file_share' };
+  const second = { ...threadMessage('1700000000.1234567892'), thread_ts: threadTs };
+  const boundaries = [oldest, first.ts, second.ts, second.ts];
+  const pages = [
+    { messages: [{ ts: threadTs, channel }, first], has_more: true },
+    { messages: [second], response_metadata: { next_cursor: 'opaque' } },
+    { messages: [], has_more: false },
+    { messages: [{ ts: threadTs, thread_ts: threadTs }] },
+  ];
+  let calls = 0;
+  const client = new SlackReadClient({ ...credentials, allowedListIds: [listId] }, { fetch: async (input, init) => {
+    const url = new URL(String(input));
+    assert.equal(url.origin + url.pathname, 'https://slack.com/api/conversations.replies');
+    assert.deepEqual(Object.fromEntries(url.searchParams), { channel, ts: threadTs, oldest: boundaries[calls],
+      inclusive: 'false', limit: '15' });
+    assert.equal(init?.method, 'GET');
+    assert.equal(init.redirect, 'error');
+    assert.equal(new Headers(init.headers).get('authorization'), `Bearer ${credentials.webToken}`);
+    return jsonResponse({ ok: true, ...pages[calls++] });
+  } });
+  const signal = new AbortController().signal;
+  assert.deepEqual(await client.readListThreadPage(listId, threadTs, oldest, signal), { messages: [first], hasMore: true });
+  assert.deepEqual(await client.readListThreadPage(listId, threadTs, first.ts, signal), { messages: [second], hasMore: true });
+  for (let i = 0; i < 2; i++) {
+    assert.deepEqual(await client.readListThreadPage(listId, threadTs, second.ts, signal), { messages: [], hasMore: false });
+  }
+});
+
+test('리스트 스레드 응답의 범위, 순서와 다음 페이지 진행을 확인한다', async () => {
+  const listId = 'FTEST', threadTs = '1.000001', oldest = '2.000001', signal = new AbortController().signal;
+  const message = { ...threadMessage('3.000001'), thread_ts: threadTs };
+  for (const page of [
+    { messages: [{ ...message, ts: oldest }] },
+    { messages: [{ ...message, ts: '1.000002' }] },
+    { messages: [message, message] },
+    { messages: [{ ...message, ts: '4.000001' }, message] },
+    { messages: [message, { ts: threadTs }] },
+    { messages: [threadMessage('3.000001')] },
+    { messages: [{ ...message, channel: 'COTHER' }] },
+    { messages: [{ ...message, thread_ts: '2.000002' }] },
+    { messages: [{ ts: threadTs, thread_ts: '2.000002' }] },
+    { messages: Array.from({ length: 16 }, (_, i) => ({ ...message, ts: `${3 + i}.000001` })) },
+    { messages: [{ ts: threadTs }], has_more: true },
+    { messages: [message], has_more: 'true' },
+    { messages: [message], response_metadata: { next_cursor: 42 } },
+  ]) {
+    const client = new SlackReadClient({ ...credentials, allowedListIds: [listId] }, { fetch: async () => jsonResponse({ ok: true, ...page }) });
+    await assert.rejects(client.readListThreadPage(listId, threadTs, oldest, signal), hasCode('SLACK_INVALID_RESPONSE'));
+  }
+});
+
+test('답글이 없는 중간 페이지에서는 시간 경계를 유지한 채 다음 커서로 이동하고 null 커서에서 마친다', async () => {
+  const threadTs = '1.000001', oldest = '2.000001';
+  const reply = { ...threadMessage('3.000001'), thread_ts: threadTs };
+  const cursors: (string | null)[] = [];
+  const responses = [
+    { messages: [{ ts: threadTs }], response_metadata: { next_cursor: 'opaque+/=' } },
+    { messages: [], has_more: true, response_metadata: { next_cursor: 'second' } },
+    { messages: [reply], response_metadata: { next_cursor: null } },
+  ];
+  const client = new SlackReadClient({ ...credentials, allowedListIds: ['FTEST'] }, {
+    fetch: async (input) => {
+      const parameters = new URL(String(input)).searchParams;
+      assert.equal(parameters.get('channel'), 'CTEST');
+      assert.equal(parameters.get('ts'), threadTs);
+      assert.equal(parameters.get('oldest'), oldest);
+      assert.equal(parameters.get('inclusive'), 'false');
+      cursors.push(parameters.get('cursor'));
+      return jsonResponse({ ok: true, ...responses[cursors.length - 1] });
+    },
+  });
+  assert.deepEqual(await client.readListThreadPage('FTEST', threadTs, oldest, new AbortController().signal),
+    { messages: [reply], hasMore: false });
+  assert.deepEqual(cursors, [null, 'opaque+/=', 'second']);
+});
+
+test('답글이 없는 페이지의 커서가 순환하거나 조회 상한을 넘으면 응답 원문을 노출하지 않고 중단한다', async () => {
+  const threadTs = '1.000001';
+  for (const repeat of [true, false]) {
+    let calls = 0;
+    const client = new SlackReadClient({ ...credentials, allowedListIds: ['FTEST'] }, {
+      fetch: async () => {
+        calls++;
+        const cursor = repeat ? 'private-opaque-cursor' : `private-opaque-cursor-${calls}`;
+        return jsonResponse({ ok: true, messages: [], response_metadata: { next_cursor: cursor } });
+      },
+    });
+    await assert.rejects(client.readListThreadPage('FTEST', threadTs, threadTs, new AbortController().signal), (error) => {
+      assert.ok(error instanceof HarnessError);
+      assert.equal(error.code, repeat ? 'SLACK_INVALID_RESPONSE' : 'SLACK_THREAD_PAGE_LIMIT');
+      assert.equal(error.message.includes('private-opaque-cursor'), false);
+      return true;
+    });
+    assert.equal(calls, repeat ? 2 : 5);
+  }
+});
+
+test('등록 경계를 벗어난 직접 읽기와 취소는 HTTP 전에 차단하고 권한·제한 오류는 고정 코드로 반환한다', async () => {
+  const listId = 'FTEST', threadTs = '1.000001', signal = new AbortController().signal;
+  const disallow = new SlackReadClient({ ...credentials, allowedListIds: [listId] }, { fetch: async () => assert.fail() });
+  for (const id of ['FOTHER', 'CTEST', 'FTEST/../COTHER']) {
+    await assert.rejects(disallow.readListThreadPage(id, threadTs, threadTs, signal), hasCode('SLACK_LIST_DENIED'));
+  }
+  await assert.rejects(disallow.readListThreadPage(listId, threadTs, '1.0', signal), hasCode('SLACK_INVALID_THREAD'));
+  await assert.rejects(disallow.readListThreadPage(listId, threadTs, threadTs, AbortSignal.abort()), hasCode('SLACK_REQUEST_CANCELLED'));
+  for (const error of ['missing_scope', 'not_in_channel', 'channel_not_found', 'thread_not_found']) {
+    const denied = new SlackReadClient({ ...credentials, allowedListIds: [listId] }, {
+      fetch: async () => jsonResponse({ ok: false, error }),
+    });
+    await assert.rejects(denied.readListThreadPage(listId, threadTs, threadTs, signal), hasCode(`SLACK_THREAD_API_${error.toUpperCase()}`));
+  }
+  const limited = new SlackReadClient({ ...credentials, allowedListIds: [listId], maxRetries: 0 }, {
+    fetch: async () => new Response('', { status: 429, headers: { 'Retry-After': '3' } }),
+  });
+  await assert.rejects(limited.readListThreadPage(listId, threadTs, threadTs, signal), hasCode('SLACK_RATE_LIMITED'));
+});
+
 test('auth.test의 읽기 토큰 workspace를 확인하고 다른 workspace와 잘못된 응답을 정적 코드로 거부한다', async () => {
   const calls: { url: string; init: RequestInit | undefined }[] = [];
   const client = new SlackReadClient(credentials, {

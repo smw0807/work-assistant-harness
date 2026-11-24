@@ -39,7 +39,7 @@ const run = async (): Promise<void> => {
   const client = live && (channelEnabled || !listUserToken)
     ? new SlackReadClient({ ...(appToken ? { appToken } : {}), webToken }) : null;
   const listClient = live && listIds.length > 0 ? new SlackListExportClient(listUserToken || webToken) : null;
-  const listIdentity = live && listUserToken ? new SlackReadClient({ webToken: listUserToken }) : null;
+  const listThreads = listClient ? new SlackReadClient({ webToken: listUserToken || webToken, allowedListIds: listIds }) : null;
   delete process.env['SLACK_APP_TOKEN'];
   delete process.env['SLACK_WEB_TOKEN'];
   delete process.env['SLACK_LIST_USER_TOKEN'];
@@ -129,11 +129,12 @@ const run = async (): Promise<void> => {
         if (channelEnabled) scheduleDrain();
         result({ status: 'starting', recovered, ...(listIds.length > 0 ? { listIds, listAuth: listUserToken ? 'user' : 'web' } : {}) });
         const { workspaceId, targetUserId } = options.config;
-        if (listClient) {
-          const reader = listIdentity ? {
-            verifyIdentity: (signal: AbortSignal) => listIdentity.verifyWorkspace(workspaceId, signal, targetUserId),
+        if (listClient && listThreads) {
+          const reader = {
+            ...(listUserToken ? { verifyIdentity: (signal: AbortSignal) => listThreads.verifyWorkspace(workspaceId, signal, targetUserId) } : {}),
             read: listClient.read.bind(listClient),
-          } : listClient;
+            readListThreadPage: listThreads.readListThreadPage.bind(listThreads),
+          };
           activeSources.push(pollSlackLists({ workspaceId, targetUserId, listIds }, reader, inbox, controller.signal,
             notice => process.stdout.write(`${JSON.stringify({ event: 'slack-list-poll', ...notice })}\n`)));
         }

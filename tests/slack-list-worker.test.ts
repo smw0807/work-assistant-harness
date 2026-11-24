@@ -8,6 +8,9 @@ import { pathToFileURL } from 'node:url';
 import type { SlackWorkerOptions } from '../src/cli/slack.js';
 import { pollSlackLists } from '../src/application/poll-slack-list.js';
 
+const unexpectedThreadCall = (): never => assert.fail('이 fixture에는 등록된 스레드가 없습니다.');
+const emptyThreadInbox = { getListThreadCursor: unexpectedThreadCall, applyListThreadReplies: unexpectedThreadCall };
+
 const runSyntheticWorker = async (options: SlackWorkerOptions, preload: string, env: Record<string, string>,
   finished: (output: string) => boolean): Promise<string> => {
   const { dataDirectory, sourceRoot } = options;
@@ -39,13 +42,13 @@ test('리스트 하나가 실패해도 다음 리스트를 처리하고 다음 �
   const controller = new AbortController();
   const events: string[] = [];
   let calls = 0;
-  await pollSlackLists(scope, { async read(_workspaceId, listId) {
+  await pollSlackLists(scope, { readListThreadPage: unexpectedThreadCall, async read(_workspaceId, listId) {
     events.push(`read ${listId}`);
     calls++;
     if (calls === 1) throw new Error('private-response');
     if (calls === 5) controller.abort();
     return { list_id: listId, items: [] };
-  } }, { applyListSnapshot(listId) {
+  } }, { ...emptyThreadInbox, applyListSnapshot(listId) {
     events.push(`commit ${listId}`);
     return { baseline: true, mentions: [] };
   } }, controller.signal, notice => { events.push(`${notice.status} ${notice.listId}`); },
@@ -65,6 +68,7 @@ test('사용자 인증이 실패하면 리스트를 읽지 않고 다음 순회�
   const reads: [number, string][] = [];
   const notices: string[] = [];
   await pollSlackLists(scope, {
+    readListThreadPage: unexpectedThreadCall,
     async verifyIdentity() {
       verifiedAt.push(cycle);
       if (cycle === 1) throw new Error('synthetic private response');
@@ -73,7 +77,7 @@ test('사용자 인증이 실패하면 리스트를 읽지 않고 다음 순회�
       reads.push([cycle, listId]);
       return { list_id: listId, items: [] };
     },
-  }, { applyListSnapshot: () => ({ baseline: cycle === 2, mentions: [] }) }, controller.signal, notice => {
+  }, { ...emptyThreadInbox, applyListSnapshot: () => ({ baseline: cycle === 2, mentions: [] }) }, controller.signal, notice => {
     notices.push(notice.status === 'error' ? notice.reason : notice.status);
   }, async () => { if (++cycle > 3) controller.abort(); });
   assert.deepEqual(verifiedAt, [1, 2]);
@@ -90,12 +94,15 @@ test('리스트 단독 수신 worker의 첫 조회·재시작·실패 복구와 
   const options: SlackWorkerOptions = { command: 'slack-listen', config, dataDirectory, sourceRoot,
     eventsPath: '', channelId: '', messageTs: '' };
   const fixturePath = join(dataDirectory, 'synthetic-export.json');
+  const repliesPath = join(dataDirectory, 'synthetic-replies.json');
   const preload = join(dataDirectory, 'synthetic-fetch.mjs');
   const urls = { identity: 'https://slack.com/api/auth.test', start: 'https://slack.com/api/slackLists.download.start',
-    get: 'https://slack.com/api/slackLists.download.get', file: 'https://files.slack.com/files-pri/TTEST-FTEST/json/list' };
+    get: 'https://slack.com/api/slackLists.download.get', file: 'https://files.slack.com/files-pri/TTEST-FTEST/json/list',
+    replies: 'https://slack.com/api/conversations.replies' };
   await writeFile(preload, `
     import { readFile } from 'node:fs/promises';
     const urls = ${JSON.stringify(urls)};
+    const listToken = process.env.SLACK_LIST_USER_TOKEN;
     globalThis.fetch = async (url, init) => {
       if (url === urls.identity) return Response.json({ok:true, team_id:'TTEST', user_id:'UOWNER'});
       if (url === urls.start) {
@@ -106,6 +113,17 @@ test('리스트 단독 수신 worker의 첫 조회·재시작·실패 복구와 
       }
       if (url === urls.get) return Response.json({ok:true, status:'COMPLETED', download_url:urls.file});
       if (url === urls.file) return new Response(await readFile(${JSON.stringify(fixturePath)}));
+      const requestUrl = new URL(url);
+      if (requestUrl.origin + requestUrl.pathname === urls.replies) {
+        const page = JSON.parse(await readFile(${JSON.stringify(repliesPath)}, 'utf8'));
+        const query = requestUrl.searchParams;
+        if (init.method !== 'GET' || new Headers(init.headers).get('authorization') !== 'Bearer ' + listToken
+          || query.get('channel') !== 'CTEST' || query.get('ts') !== page.threadTs
+          || query.get('oldest') !== page.oldest || query.get('inclusive') !== 'false') {
+          return Response.json({ok:false,error:'invalid_arguments'});
+        }
+        return Response.json({ok:true,messages:page.messages,has_more:false});
+      }
       throw new Error('Unexpected URL in offline test');
     };
   `);
@@ -116,6 +134,8 @@ test('리스트 단독 수신 worker의 첫 조회·재시작·실패 복구와 
       const lastLine = output.trimEnd().split('\n').at(-1);
       if (!lastLine?.startsWith(noticePrefix)) return false;
       const lastNotice = JSON.parse(lastLine);
+      if (finalStatus === 'thread-mention') return lastNotice.listId === 'FTEST'
+        && (lastNotice.status === 'error' || lastNotice.source === 'thread');
       return lastNotice.listId === 'FTEST' && lastNotice.status === finalStatus;
     });
     assert.ok(!stdout.includes('private@example.test'));
@@ -128,11 +148,12 @@ test('리스트 단독 수신 worker의 첫 조회·재시작·실패 복구와 
     assert.equal(missing.reason, 'SLACK_LIST_API_LIST_NOT_FOUND');
     assert.equal(missing.method, 'slackLists.download.start');
     assert.ok(notices.every(notice => notice.listId === 'FTEST'));
+    if (finalStatus === 'thread-mention') assert.equal(notices.at(-1)?.status, 'mention', JSON.stringify(notices));
     return notices;
   };
   const row = (text: string, ts: string) => ({ text, ts, user_id: 'UAUTHOR' });
-  const snapshot = (thread: unknown[]) => ({ list: { id: 'FTEST' }, records: [
-    { record: { id: 'RecTEST', list_id: 'FTEST', fields: [{ user: ['UOWNER'] }] }, children: [], thread },
+  const snapshot = (thread: unknown[], threadTs?: string) => ({ list: { id: 'FTEST' }, records: [
+    { record: { id: 'RecTEST', list_id: 'FTEST', thread_ts: threadTs, fields: [{ user: ['UOWNER'] }] }, children: [], thread },
   ] });
   const old = row('<@UOWNER> 과거 멘션', '1700000000.000001');
   const normal = row('일반 댓글', '1700000000.000002');
@@ -154,6 +175,20 @@ test('리스트 단독 수신 worker의 첫 조회·재시작·실패 복구와 
   assert.equal(listMentions[0].listId, 'FTEST');
   assert.equal(listMentions[0].commentId, fresh.ts);
   assert.equal(listMentions[0].text, '<@UOWNER> 확인 [REDACTED_EMAIL]');
+
+  // 저장된 댓글 이후의 직접 조회에 누락 답글과 내보내기의 최신 답글이 함께 들어온다.
+  const threadTs = '1699999999.000001';
+  const missing = { ...row('<@UOWNER> 누락된 답글 private@example.test', '1700000000.000004'), thread_ts: threadTs, subtype: 'file_share' };
+  const overlap = { ...row('<@UOWNER> 내보내기에도 있는 답글', '1700000000.000005'), thread_ts: threadTs };
+  const newest = { ...row('<@UOWNER> 재시작 후 새 답글', '1700000000.000006'), thread_ts: threadTs };
+  const tokens = { SLACK_LIST_USER_TOKEN: 'synthetic-list-user', SLACK_WEB_TOKEN: 'synthetic-other-web' };
+  const root = { ts: threadTs, text: '합성 루트' };
+  await writeFile(repliesPath, JSON.stringify({ oldest: fresh.ts, threadTs, messages: [root, missing, overlap] }));
+  const first = await run(snapshot([old, normal, fresh, overlap], threadTs), 'thread-mention', tokens);
+  assert.deepEqual(first.filter(n => n.status === 'mention').map(n => [n.commentId, n.source]), [[overlap.ts, undefined], [missing.ts, 'thread']]);
+  await writeFile(repliesPath, JSON.stringify({ oldest: overlap.ts, threadTs, messages: [root, newest] }));
+  const restarted = await run(snapshot([old, normal, fresh, missing, overlap], threadTs), 'thread-mention', tokens);
+  assert.deepEqual(restarted.filter(n => n.status === 'mention').map(n => [n.commentId, n.source]), [[newest.ts, 'thread']]);
 });
 
 test('채널과 리스트를 함께 수신하면 토큰이 용도별로 분리되고 잘못된 사용자도 채널 수신을 막지 않는다', async context => {

@@ -60,26 +60,29 @@ SLACK_LIST_ID=FEXAMPLE,FSECOND
 
 ID는 서로 다른 값으로 최대 10개까지 지정할 수 있습니다. env 키는 `SLACK_LIST_ID`와 별칭 `SLACK_LIST_IDS` 중 하나만 사용합니다. JSON 설정은 기존 단일 값 `"listId": "FEXAMPLE"` 또는 배열 `"listIds": ["FEXAMPLE", "FSECOND"]`를 받습니다. 수신기를 재시작한 뒤 시작 로그의 `listIds`에 원하는 ID가 모두 있는지 확인하세요.
 
-**본인은 리스트를 열 수 있지만 앱에 직접 공유할 수 없는 경우**, 내 계정으로 리스트를 조회할 수 있습니다. Slack의 리스트 내보내기 API는 `lists:read` 권한의 사용자 OAuth 토큰을 지원합니다. [Slack 리스트 내보내기](https://docs.slack.dev/reference/methods/slackLists.download.start/)
+**본인은 리스트를 열 수 있지만 앱에 직접 공유할 수 없는 경우**, 내 계정으로 리스트를 조회할 수 있습니다. 하네스는 리스트 내보내기와 항목 스레드 직접 조회에 같은 토큰을 씁니다. 내보내기에는 `lists:read`가 필요합니다. 직접 조회에는 같은 토큰이 대상 대화를 열 수 있어야 하고, 대화 종류에 맞는 읽기 권한이 필요합니다. 공개 채널은 `channels:history`, 비공개 채널은 `groups:history`입니다. [Slack 리스트 내보내기](https://docs.slack.dev/reference/methods/slackLists.download.start/) · [Slack 스레드 조회와 권한](https://docs.slack.dev/reference/methods/conversations.replies/)
 
-1. Slack 앱 설정의 **OAuth & Permissions → Scopes → User Token Scopes → Add an OAuth Scope**에서 `lists:read`를 추가합니다.
+1. Slack 앱 설정의 **OAuth & Permissions → Scopes → User Token Scopes → Add an OAuth Scope**에서 `lists:read`와 대상 대화의 history scope를 추가합니다.
 2. 해당 워크스페이스에 앱을 재설치하고, 리스트를 열 수 있는 본인 계정으로 권한을 승인합니다. 이 계정의 멤버 ID가 `SLACK_TARGET_USER_ID`와 일치해야 합니다. [Slack의 사용자 토큰 발급 안내](https://docs.slack.dev/apis/web-api/using-web-api-with-postman/)
 3. **OAuth & Permissions → OAuth Tokens**의 **User OAuth Token** 값을 비공개 `slack.env`의 `SLACK_LIST_USER_TOKEN`에 넣고 수신기를 재시작합니다.
 
-시작 로그의 `"listAuth": "user"`는 리스트 전용 토큰을 선택했다는 뜻입니다. 하네스는 `auth.test`로 워크스페이스와 사용자 ID를 확인한 뒤, 그 토큰으로 설정한 모든 리스트를 조회합니다. `SLACK_LIST_USER_MISMATCH`가 나오면 토큰을 승인한 계정의 멤버 ID와 `SLACK_TARGET_USER_ID`를 확인하세요. 전용 토큰을 생략하면 `"listAuth": "web"`이 표시되고 `SLACK_WEB_TOKEN`으로 조회합니다. 채널도 감시할 때는 기존 `SLACK_APP_TOKEN`과 `SLACK_WEB_TOKEN`을 유지하세요. 리스트만 감시할 때는 `SLACK_LIST_USER_TOKEN` 하나로 충분합니다.
+시작 로그의 `"listAuth": "user"`는 리스트 전용 토큰을 선택했다는 뜻입니다. 하네스는 `auth.test`로 워크스페이스와 사용자 ID를 확인한 뒤, 그 토큰으로 설정한 모든 리스트를 조회합니다. `SLACK_LIST_USER_MISMATCH`가 나오면 토큰을 승인한 계정의 멤버 ID와 `SLACK_TARGET_USER_ID`를 확인하세요. 전용 토큰을 생략하면 `"listAuth": "web"`이 표시되고 `SLACK_WEB_TOKEN`으로 조회합니다. 채널도 감시할 때는 기존 `SLACK_APP_TOKEN`과 `SLACK_WEB_TOKEN`을 유지하세요. 리스트만 감시할 때는 두 조회 권한을 갖춘 `SLACK_LIST_USER_TOKEN` 하나를 사용할 수 있습니다.
 
-`slack-listen`은 `auth.test`로 워크스페이스를 확인한 뒤 리스트를 지정한 순서로 조회합니다. 각 리스트의 활성 항목과 댓글을 JSON으로 내보내며 첨부 메타데이터와 보관한 항목은 제외합니다. 한 리스트에서 오류가 나도 다음 리스트를 조회하며, 한 차례 순회를 마치고 5분 뒤 다시 시작합니다. 채널 ID를 함께 설정하면 Socket Mode 수신도 병행합니다. 리스트만 감시하는 경우 env의 채널 ID와 앱 토큰을 생략하고 JSON에서는 `channelIds: []`를 사용합니다. 채널용 Codex 분석은 채널을 함께 감시할 때만 실행할 수 있습니다. [내보내기 시작](https://docs.slack.dev/reference/methods/slackLists.download.start/) · [결과 조회](https://docs.slack.dev/reference/methods/slackLists.download.get/)
+`slack-listen`은 `auth.test`로 워크스페이스를 확인한 뒤 리스트를 지정한 순서로 조회합니다. 각 리스트의 활성 항목과 댓글을 JSON으로 내보내며 첨부 메타데이터와 보관한 항목은 제외합니다. 한 리스트에서 오류가 나도 다음 리스트를 조회합니다. 한 차례 순회가 끝나면 다음 내보내기까지 5분 동안, 내보내기에서 `record.thread_ts`가 확인된 항목의 스레드를 `conversations.replies`로 한 페이지씩 돌아가며 조회합니다. 채널 ID를 함께 설정하면 Socket Mode 수신도 병행합니다. 리스트만 감시하는 경우 env의 채널 ID와 앱 토큰을 생략하고 JSON에서는 `channelIds: []`를 사용합니다. 채널용 Codex 분석은 채널을 함께 감시할 때만 실행할 수 있습니다. [내보내기 시작](https://docs.slack.dev/reference/methods/slackLists.download.start/) · [결과 조회](https://docs.slack.dev/reference/methods/slackLists.download.get/)
 
-각 리스트의 첫 성공 시 기존 댓글의 식별자만 기록합니다. 이후 다른 사람이 **새 댓글에서 내 사용자 ID를 직접 멘션**하면 `slack-list-poll`의 `mention` 이벤트에 리스트·행·댓글 ID가 표시됩니다. `slack-list`의 `listMentions`에서 보관 기간 내 최근 100건의 마스킹한 발췌문과 감지 시각을 볼 수 있습니다. 기존 댓글 편집, 담당자 필드, 같은 댓글 재조회는 새 알림을 만들지 않습니다. 재시작 후에도 같은 데이터 디렉터리를 사용해야 이력이 이어집니다. 조회 사이에 생성 후 삭제된 댓글은 놓칠 수 있습니다.
+각 리스트의 첫 내보내기에 성공하면 기존 댓글 ID를 기록하고 그 요청의 시작 시각부터 스레드의 새 답글을 확인합니다. 업그레이드한 기존 DB에서는 항목별로 저장해 둔 마지막 Slack 댓글 시각을 사용합니다. 저장한 댓글 시각이 없으면 직전 내보내기 시각을 사용합니다. 이후에는 직접 조회로 저장한 페이지의 마지막 답글 다음부터 이어갑니다.
 
-내보내기 원본은 메모리에서 처리하고 리스트 댓글은 로컬에만 기록합니다. 전체 결과를 읽고 검증한 후 SQLite 트랜잭션으로 반영합니다. 발췌문은 보관 기간이 지나면 지우고, 재알림 방지용 댓글 식별자는 DB 수명 동안 유지하므로 댓글 수에 따라 저장량이 늘어납니다.
+다른 사람이 **새 댓글에서 내 사용자 ID를 직접 멘션**하면 `slack-list-poll`의 `mention` 이벤트에 리스트·항목·댓글 ID가 표시됩니다. 직접 조회에서 먼저 감지한 경우 `source: "thread"`가 붙고, 같은 답글이 내보내기에 뒤늦게 포함되어도 한 번만 알립니다. `slack-list`의 `listMentions`에서 보관 기간 내 최근 100건의 마스킹한 발췌문과 감지 시각을 볼 수 있습니다. 기존 댓글 편집, 담당자 필드, 같은 댓글 재조회는 새 알림을 만들지 않습니다. 재시작 후에도 같은 데이터 디렉터리를 사용해야 이력이 이어집니다. 조회 사이에 생성 후 삭제된 댓글은 놓칠 수 있습니다.
 
-`baseline`은 해당 리스트의 첫 기준점, `checked`는 이후 조회 성공을 뜻합니다. `error`가 발생하면 해당 리스트의 기존 기준점을 유지합니다. 오류 로그의 `listId`는 대상 리스트를, `method`는 실패한 Slack API 호출 또는 파일 다운로드 단계를 나타냅니다. HTTP 오류 응답을 받으면 `httpStatus`도 표시합니다.
+내보내기와 직접 조회의 응답 원본은 메모리에서 처리하고 리스트 댓글은 로컬에만 기록합니다. 내보내기는 전체 결과를 검증한 후 저장합니다. 직접 조회에서는 페이지마다 댓글과 마지막 답글 시각을 같은 SQLite 트랜잭션으로 저장합니다. 발췌문은 보관 기간이 지나면 지우고, 재알림 방지용 댓글 식별자는 DB 수명 동안 유지하므로 댓글 수에 따라 저장량이 늘어납니다.
+
+`baseline`은 해당 리스트의 첫 기준점, `checked`는 이후 내보내기 성공을 뜻합니다. 오류 로그의 `listId`는 대상 리스트를, `method`는 실패한 호출을 나타냅니다. 내보내기에서 HTTP 오류 응답을 받으면 `httpStatus`도 표시합니다. 직접 조회가 실패하면 해당 페이지의 마지막 저장 위치를 유지합니다. 호출 제한으로 중단한 항목은 다음 순회에서 이어갑니다.
 
 - `SLACK_LIST_API_LIST_NOT_FOUND`이면 오류의 ID를 리스트 URL과 대조하고 URL의 `T…`가 설정한 워크스페이스인지 확인하세요. 사용자 토큰을 설정했다면 토큰을 승인한 계정으로 해당 리스트를 열어 보세요. 봇 토큰으로 조회한다면 리스트의 **공유 → 채널**에서 보기 권한이 있는 채널에 그 봇이 참여하는지 확인하세요. [Slack 리스트 공유 권한](https://slack.com/help/articles/15678967614611-Manage-access-permissions-for-canvases-and-lists)
 - `SLACK_LIST_API_MISSING_SCOPE`이면 리스트 조회에 사용한 토큰에 `lists:read`가 부여되었는지 확인하세요. 사용자 토큰 권한은 **User Token Scopes**에서, 봇 토큰 권한은 **Bot Token Scopes**에서 설정합니다. [Slack 리스트 읽기 권한](https://docs.slack.dev/reference/scopes/lists.read/)
+- `method: "conversations.replies"`와 `SLACK_THREAD_API_MISSING_SCOPE`가 함께 나오면 스레드 직접 조회 권한이 부족한 상태입니다. 시작 로그의 `listAuth`로 실제 사용한 토큰을 확인하세요. 해당 토큰에 대상 대화의 history scope를 부여하고 앱을 재설치해 다시 승인한 뒤, 갱신한 토큰으로 같은 설정·데이터 디렉터리에서 수신기를 재시작하세요. `SLACK_THREAD_API_CHANNEL_NOT_FOUND` 또는 `SLACK_THREAD_API_NOT_IN_CHANNEL`이면 해당 계정이 리스트의 파일 대화를 읽을 수 있는지 확인하세요. 직접 조회가 실패해도 리스트 내보내기와 그 경로의 멘션 감지는 계속합니다. [Slack 스레드 조회](https://docs.slack.dev/reference/methods/conversations.replies/)
 - `method: "file.download"`에서 `SLACK_LIST_REDIRECT_DENIED`와 `httpStatus: 302`가 나오면 Slack이 내보내기를 완료했지만 파일 요청을 다른 주소로 돌려보낸 것입니다. Slack은 비공개 파일 다운로드에 `files:read`를 안내합니다. 리스트 전용 사용자 토큰에 이 권한이 없다면 **User Token Scopes**에 추가하고 본인 계정으로 재승인한 뒤 `slack.env`의 `SLACK_LIST_USER_TOKEN`을 갱신해 재시작하세요. 302만으로 원인을 확정할 수 없으므로, 권한이 이미 있다면 같은 계정의 파일 다운로드 제한도 확인하세요. [Slack 파일 다운로드 안내](https://docs.slack.dev/messaging/working-with-files/#downloading-files)
-- `SLACK_LIST_EXPORT_SCHEMA`가 나오면 파일 다운로드는 성공했지만 댓글 기준점을 저장하기 위한 구조 검증에 실패한 것입니다. 수신기는 Slack 내보내기의 `records[].record`로 항목을 식별하고, 같은 항목의 `thread`와 `children`을 읽습니다. `meta.complete`가 거짓이거나 레코드·댓글이 잘렸다고 표시된 응답은 기존 기준점을 유지하고 다음 조회에서 재시도합니다.
+- `SLACK_LIST_EXPORT_SCHEMA`는 내보내기가 잘렸거나 항목·댓글 형식을 검증할 수 없다는 뜻입니다. 해당 내보내기는 기준점과 댓글 목록에 반영하지 않고 다음 순회에서 재시도합니다. 댓글에 오류가 있어도 이번 응답에서 항목 ID와 `thread_ts`의 연결을 확인할 수 있으면, 이미 등록해 둔 같은 스레드는 저장된 위치부터 직접 조회합니다. 새로운 항목은 정상 내보내기에서 등록합니다.
 
 ## Slack 본인 멘션 자동 분석
 

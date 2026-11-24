@@ -41,8 +41,8 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 | `SLACK_CHANNEL_IDS` | 허용할 채널 ID, 여러 개는 쉼표로 구분 |
 | `SLACK_LIST_ID` | 리스트 URL의 `/list/` 다음 ID. 최대 10개까지 `FEXAMPLE,FSECOND`처럼 한 줄에 지정합니다. 리스트만 감시할 때는 채널 ID와 앱 토큰을 생략할 수 있습니다. |
 | `SLACK_APP_TOKEN` | Socket Mode용 app-level token |
-| `SLACK_WEB_TOKEN` | 채널 스레드 조회용 Web API 토큰. 리스트 전용 토큰을 생략하면 이 토큰으로 리스트도 조회합니다. |
-| `SLACK_LIST_USER_TOKEN` | 선택 사항. 본인이 볼 수 있는 리스트를 조회할 때 쓰는 `lists:read` 권한의 User OAuth Token. 리스트만 감시할 때는 이 토큰 하나로 충분합니다. |
+| `SLACK_WEB_TOKEN` | 채널 스레드 조회용 Web API 토큰. 리스트 전용 토큰을 생략하면 이 토큰으로 리스트 내보내기와 항목 스레드 조회도 수행합니다. |
+| `SLACK_LIST_USER_TOKEN` | 선택 사항. 본인이 볼 수 있는 리스트를 감시할 때 쓰는 User OAuth Token. 내보내기에는 `lists:read`, 스레드 직접 조회에는 해당 대화의 접근 권한과 history scope가 필요합니다. |
 | `SLACK_LIVE_READ_ENABLED` | 실제 수신을 켤 때 `true` |
 | `SLACK_ANALYSIS_ENABLED` | Codex 분석을 켤 때 `true` |
 | `SLACK_ANALYSIS_CODEX_CONFIG` | 하네스 전용 Codex relay JSON의 절대 경로 |
@@ -59,7 +59,7 @@ pnpm harness slack-listen --env-file /absolute/private/slack.env --data-dir /abs
 
 터미널에서 실행 상태를 유지하며 `Ctrl+C`로 종료합니다. `pnpm start`는 `package.json`의 `--env-file`에 지정된 `slack.env`만 읽습니다. 같은 파일에 `SLACK_LIST_ID`를 여러 줄 쓰면 마지막 값이 적용되므로 모든 ID를 한 줄에 넣고 재시작하세요.
 
-시작 로그의 `listIds`에서 감시 대상을 확인하세요. 수신기는 지정한 순서로 리스트를 조회하며, 한 리스트에서 오류가 나도 다음 리스트로 진행합니다. 전체 순회를 마치고 5분 뒤 다시 조회합니다. 각 리스트의 첫 성공은 기준점으로 기록합니다. 이후 새 댓글에서 `SLACK_TARGET_USER_ID`를 직접 멘션하면 터미널에 `slack-list-poll`의 `mention` 이벤트를 출력하고, `slack-list` 결과의 `listMentions`에 마스킹한 댓글을 표시합니다. [권한과 오류 확인 방법](docs/guides/slack.md#리스트-댓글-멘션-감시)
+시작 로그의 `listIds`에서 감시 대상을 확인하세요. 수신기는 지정한 순서로 리스트를 조회하며, 한 리스트에서 오류가 나도 다음 리스트로 진행합니다. 첫 내보내기에 성공하면 해당 리스트의 기준점을 기록합니다. 이후 내보내기 순회 사이의 5분 동안 항목별 스레드에서 마지막으로 저장한 답글 이후를 직접 조회합니다. 새 답글이 `SLACK_TARGET_USER_ID`를 직접 멘션하면 두 경로를 통틀어 한 번만 `slack-list-poll`의 `mention` 이벤트를 출력합니다. 직접 조회에서 발견한 이벤트에는 `source: "thread"`가 표시되며, `slack-list`의 `listMentions`에서 마스킹한 발췌문을 볼 수 있습니다. [권한과 오류 확인 방법](docs/guides/slack.md#리스트-댓글-멘션-감시)
 
 ### 3. 로컬 결과 확인
 
