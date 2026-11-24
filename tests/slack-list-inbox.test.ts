@@ -7,12 +7,13 @@ import { SqliteSlackInbox } from '../src/adapters/sqlite-slack-inbox.js';
 import type { SlackReceiverConfig } from '../src/domain/slack.js';
 import type { SlackListComment } from '../src/policy/slack-list-export.js';
 
-const config: SlackReceiverConfig = {
-  workspaceId: 'W_LOCAL', channelIds: ['C_TEST'], targetUserId: 'U_OWNER', listId: 'F_TEST',
+const receiverConfig = {
+  workspaceId: 'W_LOCAL', channelIds: ['C_TEST'], targetUserId: 'U_OWNER',
   liveReadEnabled: false, retentionHours: 1, maxPending: 10,
   thread: { maxMessages: 10, maxPages: 2, maxBytes: 16_384 },
 };
 const listId = 'F_TEST';
+const config: SlackReceiverConfig = { ...receiverConfig, listId };
 const now = Date.parse('2026-11-24T00:00:00Z');
 const comment = (commentId: string, text = '합성 <@U_OWNER> 요청', mentionsTarget = true): SlackListComment => ({
   itemId: 'RecTEST', commentId, text, mentionsTarget,
@@ -80,6 +81,42 @@ test('초기 실패는 기준점을 만들지 않으며 독립적인 리스트·
   const { listId: omittedListId, ...withoutList } = config;
   assert.deepEqual(db.open(withoutList).listMentions(now + 2), []);
   assert.throws(() => db.open(withoutList).applyListSnapshot(omittedListId!, [], now), { code: 'SLACK_LIST_DENIED' });
+});
+
+test('기존 리스트에 두 번째 리스트를 추가하면 기준점과 같은 댓글 ID를 리스트별로 처리한다', async (context) => {
+  const db = await openDatabase(context);
+  const first = db.open();
+  first.applyListSnapshot(listId, [], now);
+  db.close(first);
+
+  const secondListId = 'F_SECOND';
+  const listIds = [listId, secondListId];
+  const inbox = db.open({ ...receiverConfig, listIds });
+  listIds.splice(1, 1, 'F_OTHER');
+  assert.throws(() => inbox.applyListSnapshot('F_OTHER', [], now), { code: 'SLACK_LIST_DENIED' });
+  const existing = comment('A');
+  assert.deepEqual(inbox.applyListSnapshot(secondListId, [existing], now + 1), { baseline: true, mentions: [] });
+  const shared = comment('B');
+  const firstMentions = inbox.applyListSnapshot(listId, [shared], now + 2).mentions;
+  const secondMentions = inbox.applyListSnapshot(secondListId, [existing, shared], now + 3).mentions;
+  assert.deepEqual(firstMentions.map(row => [row.listId, row.commentId]), [[listId, 'B']]);
+  assert.deepEqual(secondMentions.map(row => [row.listId, row.commentId]), [[secondListId, 'B']]);
+  assert.deepEqual(inbox.listMentions(now + 3), [...secondMentions, ...firstMentions]);
+  assert.deepEqual(inbox.applyListSnapshot(secondListId, [existing, shared], now + 4).mentions, []);
+  assert.deepEqual(db.open().listMentions(now + 4), firstMentions);
+  assert.deepEqual(inbox.listMentions(now + 3_600_002), secondMentions);
+});
+
+test('설정된 모든 리스트에서 최신 멘션 100개를 한 번에 조회한다', async (context) => {
+  const db = await openDatabase(context);
+  const secondListId = 'F_SECOND';
+  const inbox = db.open({ ...receiverConfig, listIds: [listId, secondListId] });
+  const comments = Array.from({ length: 60 }, (_, index) => comment(String(index)));
+  inbox.applyListSnapshot(listId, [], now);
+  inbox.applyListSnapshot(secondListId, [], now);
+  const first = inbox.applyListSnapshot(listId, comments, now + 1).mentions;
+  const second = inbox.applyListSnapshot(secondListId, comments, now + 2).mentions;
+  assert.deepEqual(inbox.listMentions(now + 2), [...first, ...second].reverse().slice(0, 100));
 });
 
 test('완료된 스냅샷에서 수정과 삭제를 반영해도 기존 댓글을 새 멘션으로 발행하지 않는다', async (context) => {

@@ -78,6 +78,16 @@ test('리스트 수신을 함께 켜도 채널 분석의 근거와 hash는 유�
   const combined = { ...receiver, listId: 'FTEST123' };
   assert.equal(hashSlackAnalysisSource(request(), combined), hashSlackAnalysisSource(request(), receiver));
   assert.equal(buildSlackAnalysisPayload(request(), combined, config).dispatch.requestEnvelope.body.includes(combined.listId), false);
+  const multiple = { ...receiver, listIds: ['FFIRST', 'FSECOND'] };
+  assert.equal(hashSlackAnalysisSource(request(), multiple), hashSlackAnalysisSource(request(), receiver));
+  for (const listId of multiple.listIds) {
+    assert.equal(buildSlackAnalysisPayload(request(), multiple, config).dispatch.requestEnvelope.body.includes(listId), false);
+  }
+  let getterCalls = 0;
+  const lists = ['FFIRST'];
+  Object.defineProperty(lists, 0, { enumerable: true, get() { getterCalls++; return 'FFIRST'; } });
+  failure(() => hashSlackAnalysisSource(request(), { ...receiver, listIds: lists }), 'INVALID_CONFIG');
+  assert.equal(getterCalls, 0);
 });
 
 test('thread order, timestamp precision, duplicate aliases and older revisions fail closed', () => {

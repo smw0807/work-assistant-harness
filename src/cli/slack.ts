@@ -3,7 +3,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HarnessError } from '../domain/errors.js';
-import type { SlackReceiverConfig } from '../domain/slack.js';
+import { getSlackListIds, type SlackReceiverConfig } from '../domain/slack.js';
 import { parseSlackReceiverConfig } from '../policy/slack-ingestion.js';
 import { acquireRuntimeLease, assertSafeEventFile, defaultDataDirectory, prepareDataDirectory, safeReadFlag } from './runtime.js';
 import { parseSlackEnvironment, readSlackEnvironmentFile, type SlackEnvironmentSettings } from './slack-environment.js';
@@ -87,7 +87,8 @@ export const runSlackCommand = async (args: string[]): Promise<void> => {
     if (!live) {
       const output = execFileSync(executable, workerArgs, {
         cwd: sourceRoot, env: receiverEnvironment, encoding: 'utf8', timeout: 30_000,
-        maxBuffer: options.config.listId && options.command === 'slack-list' ? 2_000_000 : 512_000, stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: options.command === 'slack-list' && getSlackListIds(options.config).length > 0 ? 2_000_000 : 512_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
       process.stdout.write(appendSlackAnalysisResults(output, options));
       return;

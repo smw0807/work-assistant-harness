@@ -60,11 +60,13 @@ export const parseSlackAnalysisRelayConfig = (input: unknown): ReadonlyRelayConf
 };
 const receiverSnapshot = (input: unknown): SlackReceiverConfig => {
   try {
-    if ((!record(input, receiverKeys) && !record(input, [...receiverKeys, 'listId'])) || !array(input.channelIds, 10, 1)
+    if ((!record(input, receiverKeys) && !record(input, [...receiverKeys, 'listId']) && !record(input, [...receiverKeys, 'listIds']))
+      || (Object.hasOwn(input, 'listIds') && !array(input.listIds, 10, 1)) || !array(input.channelIds, 10, 1)
       || !record(input.thread, ['maxMessages', 'maxPages', 'maxBytes'])) fail('INVALID_CONFIG');
     const channelConfig = parseSlackReceiverConfig(input);
     // 리스트 감시 설정은 채널 분석의 자료나 기존 source hash에 포함하지 않는다.
     delete channelConfig.listId;
+    delete channelConfig.listIds;
     return channelConfig;
   } catch { return fail('INVALID_CONFIG'); }
 };

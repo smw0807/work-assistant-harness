@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { parseSlackEnvironment, readSlackEnvironmentFile, readSlackPrivateFile, SLACK_ENV_FILE_MAX_BYTES } from '../src/cli/slack-environment.js';
+import { getSlackListIds } from '../src/domain/slack.js';
+import { parseSlackReceiverConfig } from '../src/policy/slack-ingestion.js';
 
 const sourceRoot = resolve('.');
 const executable = join(sourceRoot, 'dist', 'src', 'cli', 'main.js');
@@ -83,8 +85,38 @@ test('리스트 하나를 채널과 함께 또는 단독으로 지정하고 잘�
   assert.equal(parseSlackEnvironment(settings).config.listId, 'FTEST123');
   assert.deepEqual(parseSlackEnvironment({ ...settings, SLACK_CHANNEL_IDS: undefined }).config.channelIds, []);
   assert.equal(parseSlackEnvironment({ ...settings, SLACK_CHANNEL_IDS: '', SLACK_ANALYSIS_ENABLED: 'true' }).analysisConfigPath, undefined);
-  for (const invalid of ['*', '', 'C123', 'FTEST,FB', 'https://app.slack.com/list/FTEST', ' FTEST']) {
+  for (const invalid of ['*', '', 'C123', 'FTEST,COTHER', 'https://app.slack.com/list/FTEST', 'F TEST']) {
     assert.throws(() => parseSlackEnvironment({ ...settings, SLACK_LIST_ID: invalid }), { code: 'SLACK_INVALID_ENV' });
+  }
+});
+
+test('두 리스트는 설정 이름에 관계없이 명시한 순서대로 각각의 ID로 전달한다', async context => {
+  const ids = ['FFIRST', 'FSECOND'];
+  for (const key of ['SLACK_LIST_ID', 'SLACK_LIST_IDS']) {
+    const { config } = parseSlackEnvironment({ ...environment(), SLACK_CHANNEL_IDS: '', [key]: ' FFIRST, FSECOND ' });
+    assert.deepEqual(config.listIds, ids);
+    assert.deepEqual(getSlackListIds(config), ids);
+    assert.equal(config.listId, undefined);
+    assert.deepEqual(parseSlackReceiverConfig(config), config);
+    const single = parseSlackEnvironment({ ...environment(), [key]: ids[0] }).config;
+    assert.equal(single.listId, ids[0]);
+    assert.deepEqual(getSlackListIds(single), ['FFIRST']);
+  }
+  const file = await privateFile(await temporaryDirectory(context), environmentText({ SLACK_LIST_ID: ids.join(',') }));
+  assert.deepEqual((await readSlackEnvironmentFile(file)).config.listIds, ids);
+});
+
+test('모호한 리스트 설정과 빈 항목, 중복, 10개 초과는 거부한다', () => {
+  const { config } = parseSlackEnvironment(environment());
+  assert.deepEqual(getSlackListIds(config), []);
+  const ten = Array.from({ length: 10 }, (_, index) => `F${index}`);
+  assert.deepEqual(parseSlackReceiverConfig({ ...config, listIds: ten }).listIds, ten);
+  for (const value of ['FFIRST,', ',FSECOND', 'FFIRST, FFIRST', 'FFIRST, ', [...ten, 'FEXTRA'].join(',')]) {
+    assert.throws(() => parseSlackEnvironment({ ...environment(), SLACK_LIST_ID: value }), { code: 'SLACK_INVALID_ENV' });
+  }
+  assert.throws(() => parseSlackEnvironment({ ...environment(), SLACK_LIST_ID: 'FFIRST', SLACK_LIST_IDS: 'FSECOND' }), { code: 'SLACK_INVALID_ENV' });
+  for (const fields of [{ listId: 'FFIRST', listIds: ['FSECOND'] }, { listId: 'FFIRST,FSECOND' }, { listIds: [] }, { listIds: [null] }]) {
+    assert.throws(() => parseSlackReceiverConfig({ ...config, ...fields }), { code: 'SLACK_INVALID_CONFIG' });
   }
 });
 

@@ -10,8 +10,22 @@ export const asSlackRecord = (value: unknown): Record<string, unknown> | null =>
 };
 const isId = (value: unknown): value is string => typeof value === 'string' && idPattern.test(value) && !containsSensitiveText(value);
 const isTimestamp = (value: unknown): value is string => typeof value === 'string' && timestampPattern.test(value);
+const isListId = (value: unknown): value is string => typeof value === 'string' && /^F[A-Z0-9]{1,63}$/.test(value);
 const isBoundedInteger = (value: unknown, minimum: number, maximum: number): value is number => {
   return typeof value === 'number' && Number.isInteger(value) && value >= minimum && value <= maximum;
+};
+
+const parseListIds = (value: Record<string, unknown>): string[] => {
+  if (Object.hasOwn(value, 'listId')) {
+    if (Object.hasOwn(value, 'listIds') || !isListId(value.listId)) throw new HarnessError('SLACK_INVALID_CONFIG');
+    return [value.listId];
+  }
+  if (!Object.hasOwn(value, 'listIds')) return [];
+  const ids = value.listIds;
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > 10) throw new HarnessError('SLACK_INVALID_CONFIG');
+  const selected = [...ids];
+  if (!selected.every(isListId) || new Set(selected).size !== selected.length) throw new HarnessError('SLACK_INVALID_CONFIG');
+  return selected;
 };
 
 /** 설정은 권한을 넓히는 입력이므로 알 수 없는 키나 비밀값을 받지 않는다. */
@@ -19,11 +33,10 @@ export const parseSlackReceiverConfig = (input: unknown): SlackReceiverConfig =>
   const value = asSlackRecord(input);
   const keys = ['workspaceId', 'channelIds', 'targetUserId', 'retentionHours', 'maxPending', 'thread', 'liveReadEnabled'];
   const thread = asSlackRecord(value?.['thread']);
-  const listId = value?.['listId'];
-  if (!value || !keys.every(key => Object.hasOwn(value, key)) || Object.keys(value).some(key => key !== 'listId' && !keys.includes(key))
-    || (Object.hasOwn(value, 'listId') && (typeof listId !== 'string' || !/^F[A-Z0-9]{1,63}$/.test(listId)))
+  const listIds = value ? parseListIds(value) : [];
+  if (!value || !keys.every(key => Object.hasOwn(value, key)) || Object.keys(value).some(key => key !== 'listId' && key !== 'listIds' && !keys.includes(key))
     || !isId(value['workspaceId']) || !isId(value['targetUserId'])
-    || !Array.isArray(value['channelIds']) || (!listId && value['channelIds'].length === 0) || value['channelIds'].length > 10
+    || !Array.isArray(value['channelIds']) || (listIds.length === 0 && value['channelIds'].length === 0) || value['channelIds'].length > 10
     || !value['channelIds'].every(isId) || new Set(value['channelIds']).size !== value['channelIds'].length
     || !isBoundedInteger(value['retentionHours'], 1, 168) || !isBoundedInteger(value['maxPending'], 1, 1_000)
     || typeof value['liveReadEnabled'] !== 'boolean' || !thread
@@ -34,7 +47,7 @@ export const parseSlackReceiverConfig = (input: unknown): SlackReceiverConfig =>
   }
   return {
     workspaceId: value['workspaceId'], channelIds: [...value['channelIds']], targetUserId: value['targetUserId'],
-    ...(typeof listId === 'string' ? { listId } : {}),
+    ...(listIds.length === 1 ? { listId: listIds[0]! } : listIds.length > 1 ? { listIds } : {}),
     retentionHours: value['retentionHours'], maxPending: value['maxPending'], liveReadEnabled: value['liveReadEnabled'],
     thread: { maxMessages: thread['maxMessages'], maxPages: thread['maxPages'], maxBytes: thread['maxBytes'] },
   };

@@ -2,6 +2,7 @@ import { chmodSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { HarnessError } from '../domain/errors.js';
 import { invalidateTaskRequest } from '../domain/state.js';
+import { getSlackListIds } from '../domain/slack.js';
 import type {
   SlackCollectedRequest, SlackConnectionState, SlackInbox, SlackInboxItem,
   SlackMessageChange, SlackReceiverConfig, SlackThreadSnapshot,
@@ -45,7 +46,7 @@ const parsePayload = <T>(payload: unknown): T => {
 
 export class SqliteSlackInbox implements SlackInbox {
   private readonly database: DatabaseSync;
-  private readonly config: SlackReceiverConfig;
+  private readonly config: SlackReceiverConfig & { listIds: string[] };
 
   constructor(filePath: string, config: SlackReceiverConfig) {
     if (!Number.isSafeInteger(config.maxPending) || config.maxPending < 1
@@ -55,7 +56,9 @@ export class SqliteSlackInbox implements SlackInbox {
         .every((value) => Number.isSafeInteger(value) && value > 0)) {
       throw new HarnessError('INVALID_SLACK_CONFIG');
     }
-    this.config = { ...config, channelIds: [...config.channelIds], thread: { ...config.thread } };
+    this.config = {
+      ...config, channelIds: [...config.channelIds], listIds: [...getSlackListIds(config)], thread: { ...config.thread },
+    };
     for (const suffix of ['', '-journal', '-wal', '-shm']) assertRuntimeFile(`${filePath}${suffix}`);
     this.database = new DatabaseSync(filePath, { enableForeignKeyConstraints: true });
     chmodSync(filePath, 0o600);
@@ -112,7 +115,7 @@ export class SqliteSlackInbox implements SlackInbox {
 
   /** 완전한 내보내기 한 건의 기준점과 중복 키를 함께 커밋해 재시작해도 과거 댓글을 알리지 않는다. */
   applyListSnapshot(listId: string, comments: readonly SlackListComment[], now: number): { baseline: boolean; mentions: SlackListMention[] } {
-    if (!listId || listId !== this.config.listId || !isId(listId)) throw new HarnessError('SLACK_LIST_DENIED');
+    if (!isId(listId) || !this.config.listIds.includes(listId)) throw new HarnessError('SLACK_LIST_DENIED');
     const scope = [this.config.workspaceId, listId, this.config.targetUserId] as const;
     const detectedAt = new Date(now).toISOString();
     const expiresAt = now + this.config.retentionHours * 3_600_000;
@@ -162,15 +165,16 @@ export class SqliteSlackInbox implements SlackInbox {
   }
 
   listMentions(now = Date.now()): SlackListMention[] {
-    const listId = this.config.listId;
-    if (!listId) return [];
+    const { workspaceId, listIds, targetUserId } = this.config;
+    if (listIds.length === 0) return [];
     this.pruneListMentions(now);
+    const placeholders = listIds.map(() => '?').join(', ');
     return this.database.prepare(`
-      SELECT item_id, comment_id, text, detected_at FROM slack_list_comments
-      WHERE workspace_id = ? AND list_id = ? AND target_id = ? AND text IS NOT NULL AND expires_at > ?
+      SELECT list_id, item_id, comment_id, text, detected_at FROM slack_list_comments
+      WHERE workspace_id = ? AND target_id = ? AND list_id IN (${placeholders}) AND text IS NOT NULL AND expires_at > ?
       ORDER BY detected_at DESC, rowid DESC LIMIT 100
-    `).all(this.config.workspaceId, listId, this.config.targetUserId, now).map(row => ({
-      listId, itemId: String(row.item_id), commentId: String(row.comment_id),
+    `).all(workspaceId, targetUserId, ...listIds, now).map(row => ({
+      listId: String(row.list_id), itemId: String(row.item_id), commentId: String(row.comment_id),
       text: String(row.text), detectedAt: new Date(Number(row.detected_at)).toISOString(),
     }));
   }

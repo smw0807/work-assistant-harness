@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SlackListExportClient } from '../src/adapters/slack-list-export.js';
-import { HarnessError } from '../src/domain/errors.js';
+import { HarnessError, SlackListApiError } from '../src/domain/errors.js';
 
 const workspaceId = 'T_LOCAL';
 const listId = 'F_LIST';
@@ -86,10 +86,23 @@ test('문서의 팀 접두사 생략 경로는 명시된 origin_team이 일치�
   assert.deepEqual(await mock.client.read('T12345', 'FLIST', signal()), { items: [] });
 });
 
+test('리스트 조회를 거부한 Slack API 메서드와 사유를 함께 전달한다', async () => {
+  for (const method of ['slackLists.download.start', 'slackLists.download.get'] as const) {
+    const rejection = Response.json({ ok: false, error: 'list_not_found' });
+    const mock = method === 'slackLists.download.start' ? mockExport(rejection) : mockExport(start(), rejection);
+    await assert.rejects(mock.client.read(workspaceId, listId, signal()), (error: unknown) => {
+      assert.ok(error instanceof SlackListApiError);
+      assert.equal(error.method, method);
+      return hasCode('API_LIST_NOT_FOUND')(error);
+    });
+  }
+});
+
 test('리스트 API의 허용된 거부 사유만 기록하고 네트워크와 응답의 원문을 노출하지 않는다', async () => {
   for (const [response, code] of [
     [Response.json({ ok: false, error: 'missing_scope' }), 'API_MISSING_SCOPE'],
     [Response.json({ ok: false, error: 'access_denied' }), 'API_ACCESS_DENIED'],
+    [Response.json({ ok: false, error: 'permission_denied' }), 'API_PERMISSION_DENIED'],
     [Response.json({ ok: false, error: token }), 'API_REJECTED'],
     [new Response(token), 'INVALID_RESPONSE'],
     [Response.json({ ok: true, job_id: 'private/job' }), 'INVALID_RESPONSE'],
@@ -98,8 +111,10 @@ test('리스트 API의 허용된 거부 사유만 기록하고 네트워크와 �
     await assert.rejects(mock.client.read(workspaceId, listId, signal()), hasCode(code));
     assert.equal(mock.calls.length, 1);
   }
-  const failing = new SlackListExportClient(token, { fetch: async () => { throw new HarnessError(token); } });
-  await assert.rejects(failing.read(workspaceId, listId, signal()), hasCode('REQUEST_FAILED'));
+  for (const injected of [new HarnessError(token), new SlackListApiError(token, 'slackLists.download.start')]) {
+    const failing = new SlackListExportClient(token, { fetch: async () => { throw injected; } });
+    await assert.rejects(failing.read(workspaceId, listId, signal()), hasCode('REQUEST_FAILED'));
+  }
   const invalid = mockExport();
   await assert.rejects(invalid.client.read('T_LOCAL/another', listId, signal()), hasCode('INVALID_TARGET'));
   await assert.rejects(invalid.client.read(workspaceId, 'C_UNRELATED', signal()), hasCode('INVALID_TARGET'));

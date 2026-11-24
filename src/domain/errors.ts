@@ -4,3 +4,9 @@ export class HarnessError extends Error {
     this.name = 'HarnessError';
   }
 }
+
+export class SlackListApiError extends HarnessError {
+  constructor(code: string, public readonly method: 'slackLists.download.start' | 'slackLists.download.get') {
+    super(code);
+  }
+}

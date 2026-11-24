@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { HarnessError } from '../domain/errors.js';
+import { HarnessError, SlackListApiError } from '../domain/errors.js';
 import { asSlackRecord } from '../policy/slack-ingestion.js';
 
 const maxApiBytes = 16_384;
@@ -7,7 +7,7 @@ const maxExportBytes = 8 * 1024 * 1024;
 const maxStatusChecks = 15;
 const maxRateRetries = 2;
 const apiErrors = new Set([
-  'missing_scope', 'list_not_found', 'job_not_found', 'access_denied', 'no_permission',
+  'missing_scope', 'list_not_found', 'job_not_found', 'access_denied', 'no_permission', 'permission_denied',
   'invalid_auth', 'not_authed', 'token_expired', 'token_revoked', 'not_allowed_token_type',
   'account_inactive', 'accesslimited', 'enterprise_is_restricted', 'ratelimited',
 ]);
@@ -19,6 +19,7 @@ interface SlackListExportOptions {
 }
 
 class SlackListExportError extends HarnessError {}
+class SlackApiRejection extends SlackListApiError {}
 const fail = (code: string): never => { throw new SlackListExportError(`SLACK_LIST_${code}`); };
 
 /** 내보내기 주소에 인증을 전달하는 범위를 설정한 리스트의 Slack 전용 파일 경로로 한정한다. */
@@ -106,6 +107,7 @@ export class SlackListExportClient {
     } catch (error) {
       if (signal.aborted) return fail('CANCELLED');
       if (deadline.signal.aborted) return fail('TIMEOUT');
+      if (error instanceof SlackApiRejection) throw new SlackListApiError(error.code, error.method);
       if (error instanceof SlackListExportError) throw error;
       return fail('REQUEST_FAILED');
     } finally {
@@ -134,11 +136,12 @@ export class SlackListExportClient {
   }
 
   private async callApi(method: 'start' | 'get', payload: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
-    const parsed = asSlackRecord(await this.requestJson(`https://slack.com/api/slackLists.download.${method}`, JSON.stringify(payload), maxApiBytes, signal));
+    const apiMethod = `slackLists.download.${method}` as const;
+    const parsed = asSlackRecord(await this.requestJson(`https://slack.com/api/${apiMethod}`, JSON.stringify(payload), maxApiBytes, signal));
     if (!parsed || typeof parsed.ok !== 'boolean') return fail('INVALID_RESPONSE');
     if (parsed.ok) return parsed;
-    if (typeof parsed.error === 'string' && apiErrors.has(parsed.error)) return fail(`API_${parsed.error.toUpperCase()}`);
-    return fail('API_REJECTED');
+    const reason = typeof parsed.error === 'string' && apiErrors.has(parsed.error) ? parsed.error.toUpperCase() : 'REJECTED';
+    throw new SlackApiRejection(`SLACK_LIST_API_${reason}`, apiMethod);
   }
 
   private async requestJson(url: string, body: string | null, maximum: number, signal: AbortSignal): Promise<unknown> {

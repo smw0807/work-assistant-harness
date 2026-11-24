@@ -10,9 +10,9 @@ import { SqliteTaskStore } from '../adapters/sqlite-task-store.js';
 import { MockSlackSource } from '../adapters/mock-slack-source.js';
 import { LocalReportSink } from '../adapters/local-report-sink.js';
 import { SlackReceptionService, type SlackThreadReader } from '../application/receive-slack.js';
-import { pollSlackList } from '../application/poll-slack-list.js';
+import { pollSlackLists } from '../application/poll-slack-list.js';
 import { HarnessError } from '../domain/errors.js';
-import type { SlackInbox } from '../domain/slack.js';
+import { getSlackListIds, type SlackInbox } from '../domain/slack.js';
 import { parseSlackReceiverConfig } from '../policy/slack-ingestion.js';
 import type { SlackWorkerOptions } from './slack.js';
 import { assertSlackReceiverPermissions } from './runtime.js';
@@ -34,7 +34,8 @@ const run = async (): Promise<void> => {
   const appToken = process.env['SLACK_APP_TOKEN'];
   const webToken = process.env['SLACK_WEB_TOKEN'] ?? '';
   const client = live ? new SlackReadClient({ ...(appToken ? { appToken } : {}), webToken }) : null;
-  const listClient = live && options.config.listId ? new SlackListExportClient(webToken) : null;
+  const listIds = getSlackListIds(options.config);
+  const listClient = live && listIds.length > 0 ? new SlackListExportClient(webToken) : null;
   delete process.env['SLACK_APP_TOKEN'];
   delete process.env['SLACK_WEB_TOKEN'];
   const threads: SlackThreadReader = client ? {
@@ -92,7 +93,7 @@ const run = async (): Promise<void> => {
     if (options.command === 'slack-list') {
       const requests = list();
       result({ requests: requests.slice(-100).map(({ text: _text, thread: _thread, ...metadata }) => metadata),
-        ...(options.config.listId ? { listMentions: inbox.listMentions() } : {}),
+        ...(listIds.length > 0 ? { listMentions: inbox.listMentions() } : {}),
         total: requests.length, truncated: requests.length > 100, connection: inbox.connection(), connectionHistory: inbox.connectionHistory() });
     } else if (options.command === 'slack-inspect') {
       if (!options.config.channelIds.includes(options.channelId)) throw new HarnessError('SLACK_CHANNEL_DENIED');
@@ -122,10 +123,10 @@ const run = async (): Promise<void> => {
           throw error;
         }
         if (channelEnabled) scheduleDrain();
-        result({ status: 'starting', recovered });
-        const { workspaceId, targetUserId, listId } = options.config;
-        if (listClient && listId) {
-          activeSources.push(pollSlackList({ workspaceId, targetUserId, listId }, listClient, inbox, controller.signal,
+        result({ status: 'starting', recovered, ...(listIds.length > 0 ? { listIds } : {}) });
+        const { workspaceId, targetUserId } = options.config;
+        if (listClient) {
+          activeSources.push(pollSlackLists({ workspaceId, targetUserId, listIds }, listClient, inbox, controller.signal,
             notice => process.stdout.write(`${JSON.stringify({ event: 'slack-list-poll', ...notice })}\n`)));
         }
         if (channelEnabled) {
