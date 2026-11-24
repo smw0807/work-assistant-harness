@@ -51,6 +51,25 @@ test('rich user tokens override fallback text and do not inspect attachments, co
   assert.equal(parse([item([comment('', { blocks: [listBlock] })])])[0]?.text, '<@U_OWNER> 확인');
 });
 
+test('exported rich_text identifies direct mentions and only falls back to plain text for an empty block array', () => {
+  const user = { type: 'user', user_id: target };
+  const section = { type: 'rich_text_section', elements: [user, { type: 'text', text: ' 확인' }] };
+  const parseRich = (richText: unknown, text = mentioned, extra: Record<string, unknown> = {}) =>
+    parse([item([{ ts: '1795000000.000001', user_id: 'U_COLLEAGUE', text, rich_text: richText, ...extra }])])[0]!;
+  assert.equal(parseRich([rich('rich_text_list', [section])], '').text, '<@U_OWNER> 확인');
+  for (const block of [rich('rich_text_quote', [user]), rich('rich_text_preformatted', [user]),
+    rich('rich_text_section', [{ ...user, style: { code: true } }]),
+    rich('rich_text_section', [{ type: 'text', text: mentioned }])]) {
+    assert.equal(parseRich([block]).mentionsTarget, false);
+  }
+  assert.equal(parseRich([], mentioned).mentionsTarget, true);
+  assert.equal(parseRich([], '업무 기록', { files: [{ text: mentioned }] }).mentionsTarget, false);
+  for (const malformed of [null, {}, [null], [{ type: 'unknown_block' }], [{ type: 'rich_text' }]]) {
+    fails(() => parseRich(malformed));
+  }
+  fails(() => parseRich([], mentioned, { blocks: [rich('rich_text_quote', [user])] }));
+});
+
 test('a wrong list, incomplete threads, unknown layouts or oversize data cannot advance the snapshot', () => {
   for (const items of [
     [{ id: 'Rec_SAMPLE', fields: [{ text: mentioned }] }], [item([{ user: target, text: mentioned }])],

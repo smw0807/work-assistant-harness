@@ -3,6 +3,7 @@ import { HarnessError, SlackListApiError } from '../domain/errors.js';
 import { parseSlackListComments, type SlackListComment } from '../policy/slack-list-export.js';
 
 interface ListReader {
+  verifyIdentity?(signal: AbortSignal): Promise<void>;
   read(workspaceId: string, listId: string, signal: AbortSignal): Promise<unknown>;
 }
 
@@ -16,7 +17,7 @@ interface ListInbox {
 type ListNotice =
   | { status: 'baseline' | 'checked'; listId: string; commentCount: number; mentionCount: number }
   | { status: 'mention'; listId: string; itemId: string; commentId: string }
-  | { status: 'error'; listId: string; reason: string; method?: SlackListApiError['method'] };
+  | { status: 'error'; listId: string; reason: string; method?: 'auth.test' | SlackListApiError['method']; httpStatus?: number };
 
 /** 한 리스트의 오류가 다음 리스트의 조회나 기준점에 영향을 주지 않게 순서대로 처리한다. */
 export const pollSlackLists = async (
@@ -26,9 +27,23 @@ export const pollSlackLists = async (
   waitForNext: (stop: AbortSignal) => Promise<void> = stop => delay(300_000, undefined, { signal: stop }),
 ): Promise<void> => {
   const { workspaceId, listIds, targetUserId } = scope;
+  let identityVerified = false;
   while (!signal.aborted) {
+    let identityError: string | undefined;
+    if (reader.verifyIdentity && !identityVerified) {
+      try {
+        await reader.verifyIdentity(signal);
+        identityVerified = true;
+      } catch (error) {
+        identityError = error instanceof HarnessError ? error.code : 'SLACK_LIST_IDENTITY_FAILED';
+      }
+    }
     for (const listId of listIds) {
       if (signal.aborted) return;
+      if (identityError) {
+        notify({ status: 'error', listId, reason: identityError, method: 'auth.test' });
+        continue;
+      }
       try {
         const data = await reader.read(workspaceId, listId, signal);
         if (signal.aborted) return;
@@ -38,8 +53,12 @@ export const pollSlackLists = async (
         for (const { itemId, commentId } of mentions) notify({ status: 'mention', listId, itemId, commentId });
       } catch (error) {
         if (signal.aborted) return;
-        notify({ status: 'error', listId, reason: error instanceof HarnessError ? error.code : 'SLACK_LIST_POLL_FAILED',
-          ...(error instanceof SlackListApiError ? { method: error.method } : {}) });
+        const notice: ListNotice = { status: 'error', listId, reason: error instanceof HarnessError ? error.code : 'SLACK_LIST_POLL_FAILED' };
+        if (error instanceof SlackListApiError) {
+          notice.method = error.method;
+          if (error.httpStatus !== undefined) notice.httpStatus = error.httpStatus;
+        }
+        notify(notice);
       }
     }
     if (signal.aborted) return;

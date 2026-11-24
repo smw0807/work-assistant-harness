@@ -6,7 +6,8 @@ export class HarnessError extends Error {
 }
 
 export class SlackListApiError extends HarnessError {
-  constructor(code: string, public readonly method: 'slackLists.download.start' | 'slackLists.download.get') {
+  constructor(code: string, public readonly method: 'slackLists.download.start' | 'slackLists.download.get' | 'file.download',
+    public readonly httpStatus?: number) {
     super(code);
   }
 }

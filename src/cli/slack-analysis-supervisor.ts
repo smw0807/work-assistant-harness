@@ -76,7 +76,7 @@ export const runSlackAnalysisPair = async (
   try {
     // Copy an allowlist even for the receiver so callers cannot accidentally forward ambient execution options.
     const receiverEnv: Record<string, string> = { LANG: 'C.UTF-8', TZ: 'UTC' };
-    for (const key of ['SLACK_APP_TOKEN', 'SLACK_WEB_TOKEN']) {
+    for (const key of ['SLACK_APP_TOKEN', 'SLACK_WEB_TOKEN', 'SLACK_LIST_USER_TOKEN']) {
       if (receiverEnvironment[key] !== undefined) receiverEnv[key] = receiverEnvironment[key]!;
     }
     const analysis = startChild(analysisArgs, { LANG: 'C.UTF-8', TZ: 'UTC', PATH: '/usr/bin:/bin' });

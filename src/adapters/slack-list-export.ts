@@ -18,9 +18,34 @@ interface SlackListExportOptions {
   timeoutMs?: number;
 }
 
-class SlackListExportError extends HarnessError {}
-class SlackApiRejection extends SlackListApiError {}
-const fail = (code: string): never => { throw new SlackListExportError(`SLACK_LIST_${code}`); };
+class SlackListExportError extends HarnessError {
+  constructor(code: string, readonly httpStatus?: number) { super(code); }
+}
+class SlackListRequestError extends SlackListApiError {}
+const fail = (code: string, httpStatus?: number): never => { throw new SlackListExportError(`SLACK_LIST_${code}`, httpStatus); };
+
+const transportReasons = new Map<string, string>([
+  ['ENOTFOUND', 'DNS_FAILED'], ['EAI_AGAIN', 'DNS_FAILED'],
+  ['ERR_TLS_CERT_ALTNAME_INVALID', 'TLS_FAILED'], ['CERT_HAS_EXPIRED', 'TLS_FAILED'],
+  ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'TLS_FAILED'], ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'TLS_FAILED'],
+  ['DEPTH_ZERO_SELF_SIGNED_CERT', 'TLS_FAILED'], ['SELF_SIGNED_CERT_IN_CHAIN', 'TLS_FAILED'],
+  ['ECONNRESET', 'CONNECTION_FAILED'], ['ECONNREFUSED', 'CONNECTION_FAILED'], ['UND_ERR_SOCKET', 'CONNECTION_FAILED'],
+  ['ETIMEDOUT', 'CONNECTION_TIMEOUT'], ['UND_ERR_CONNECT_TIMEOUT', 'CONNECTION_TIMEOUT'],
+  ['UND_ERR_HEADERS_TIMEOUT', 'CONNECTION_TIMEOUT'], ['UND_ERR_BODY_TIMEOUT', 'CONNECTION_TIMEOUT'],
+]);
+
+/** fetch나 응답 스트림의 예외에는 URL이 포함될 수 있어 고정 분류와 호출 단계만 전달한다. */
+const runSlackRequest = async <T>(method: SlackListApiError['method'], request: () => Promise<T>): Promise<T> => {
+  try {
+    return await request();
+  } catch (error) {
+    if (error instanceof SlackListExportError) throw new SlackListRequestError(error.code, method, error.httpStatus);
+    const cause = error instanceof Error ? error.cause : undefined;
+    const code = asSlackRecord(cause)?.code ?? asSlackRecord(error)?.code;
+    const reason = typeof code === 'string' && !(error instanceof HarnessError) ? transportReasons.get(code) : undefined;
+    throw new SlackListRequestError(`SLACK_LIST_${reason ?? 'REQUEST_FAILED'}`, method);
+  }
+};
 
 /** 내보내기 주소에 인증을 전달하는 범위를 설정한 리스트의 Slack 전용 파일 경로로 한정한다. */
 const getDownloadUrl = (raw: unknown, workspaceId: string, listId: string): string => {
@@ -107,7 +132,7 @@ export class SlackListExportClient {
     } catch (error) {
       if (signal.aborted) return fail('CANCELLED');
       if (deadline.signal.aborted) return fail('TIMEOUT');
-      if (error instanceof SlackApiRejection) throw new SlackListApiError(error.code, error.method);
+      if (error instanceof SlackListRequestError) throw new SlackListApiError(error.code, error.method, error.httpStatus);
       if (error instanceof SlackListExportError) throw error;
       return fail('REQUEST_FAILED');
     } finally {
@@ -125,7 +150,8 @@ export class SlackListExportClient {
       if (attempt) await this.sleep(2000, signal);
       const status = await this.callApi('get', { ...options, job_id: start.job_id }, signal);
       if (status.status === 'COMPLETED') {
-        return this.requestJson(getDownloadUrl(status.download_url, workspaceId, listId), null, maxExportBytes, signal);
+        return runSlackRequest('file.download', () =>
+          this.requestJson(getDownloadUrl(status.download_url, workspaceId, listId), null, maxExportBytes, signal));
       }
       if (typeof status.status !== 'string' || !/^[A-Z_]{1,40}$/.test(status.status)
         || ['FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'EXPIRED'].includes(status.status)) {
@@ -137,28 +163,33 @@ export class SlackListExportClient {
 
   private async callApi(method: 'start' | 'get', payload: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
     const apiMethod = `slackLists.download.${method}` as const;
-    const parsed = asSlackRecord(await this.requestJson(`https://slack.com/api/${apiMethod}`, JSON.stringify(payload), maxApiBytes, signal));
-    if (!parsed || typeof parsed.ok !== 'boolean') return fail('INVALID_RESPONSE');
-    if (parsed.ok) return parsed;
-    const reason = typeof parsed.error === 'string' && apiErrors.has(parsed.error) ? parsed.error.toUpperCase() : 'REJECTED';
-    throw new SlackApiRejection(`SLACK_LIST_API_${reason}`, apiMethod);
+    return runSlackRequest(apiMethod, async () => {
+      const parsed = asSlackRecord(await this.requestJson(`https://slack.com/api/${apiMethod}`, JSON.stringify(payload), maxApiBytes, signal));
+      if (!parsed || typeof parsed.ok !== 'boolean') return fail('INVALID_RESPONSE');
+      if (parsed.ok) return parsed;
+      const reason = typeof parsed.error === 'string' && apiErrors.has(parsed.error) ? parsed.error.toUpperCase() : 'REJECTED';
+      return fail(`API_${reason}`);
+    });
   }
 
   private async requestJson(url: string, body: string | null, maximum: number, signal: AbortSignal): Promise<unknown> {
     for (let attempt = 0; attempt <= maxRateRetries; attempt++) {
       signal.throwIfAborted();
       const response = await this.fetch(url, {
-        method: body === null ? 'GET' : 'POST', redirect: 'error', credentials: 'omit', signal,
+        method: body === null ? 'GET' : 'POST', redirect: 'manual', credentials: 'omit', signal,
         headers: { Authorization: `Bearer ${this.webToken}`, ...(body === null ? {} : { 'Content-Type': 'application/json' }) },
         body,
       });
       if (signal.aborted || response.redirected || !response.ok) {
         void response.body?.cancel().catch(() => {});
         signal.throwIfAborted();
-        if (response.redirected || response.status !== 429) return fail('HTTP_FAILED');
+        if (response.redirected || [301, 302, 303, 307, 308].includes(response.status)) return fail('REDIRECT_DENIED', response.status);
+        if (response.status === 401) return fail('HTTP_UNAUTHORIZED', response.status);
+        if (response.status === 403) return fail('HTTP_FORBIDDEN', response.status);
+        if (response.status !== 429) return fail('HTTP_FAILED', response.status);
         const retryHeader = response.headers.get('retry-after') ?? '';
         const seconds = Number(retryHeader);
-        if (!/^\d{1,2}$/.test(retryHeader) || seconds > 60 || attempt === maxRateRetries) return fail('RATE_LIMITED');
+        if (!/^\d{1,2}$/.test(retryHeader) || seconds > 60 || attempt === maxRateRetries) return fail('RATE_LIMITED', response.status);
         await this.sleep(Math.max(1, seconds) * 1000, signal);
         continue;
       }

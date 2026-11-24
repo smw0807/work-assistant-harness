@@ -33,11 +33,16 @@ const run = async (): Promise<void> => {
   if (live && !options.config.liveReadEnabled) throw new HarnessError('SLACK_LIVE_READ_DISABLED');
   const appToken = process.env['SLACK_APP_TOKEN'];
   const webToken = process.env['SLACK_WEB_TOKEN'] ?? '';
-  const client = live ? new SlackReadClient({ ...(appToken ? { appToken } : {}), webToken }) : null;
+  const channelEnabled = options.config.channelIds.length > 0;
   const listIds = getSlackListIds(options.config);
-  const listClient = live && listIds.length > 0 ? new SlackListExportClient(webToken) : null;
+  const listUserToken = listIds.length > 0 ? process.env['SLACK_LIST_USER_TOKEN'] : undefined;
+  const client = live && (channelEnabled || !listUserToken)
+    ? new SlackReadClient({ ...(appToken ? { appToken } : {}), webToken }) : null;
+  const listClient = live && listIds.length > 0 ? new SlackListExportClient(listUserToken || webToken) : null;
+  const listIdentity = live && listUserToken ? new SlackReadClient({ webToken: listUserToken }) : null;
   delete process.env['SLACK_APP_TOKEN'];
   delete process.env['SLACK_WEB_TOKEN'];
+  delete process.env['SLACK_LIST_USER_TOKEN'];
   const threads: SlackThreadReader = client ? {
     readThread: (channel, ts, limits) => client.readThread(channel, ts, limits, controller.signal),
   } : {
@@ -87,7 +92,6 @@ const run = async (): Promise<void> => {
   try {
     inbox.prune(new Date());
     const readOnly = options.command === 'slack-list' || options.command === 'slack-inspect';
-    const channelEnabled = options.config.channelIds.length > 0;
     const recovered = readOnly || !channelEnabled ? 0 : inbox.recoverInterrupted(new Date());
     await synchronizeReports();
     if (options.command === 'slack-list') {
@@ -109,7 +113,7 @@ const run = async (): Promise<void> => {
       await synchronizeReports();
       await service.drain();
       result({ recovered, ...counts, requests: list() });
-    } else if (live && client) {
+    } else if (live) {
       const stop = (): void => controller.abort();
       process.on('SIGINT', stop);
       process.on('SIGTERM', stop);
@@ -118,18 +122,22 @@ const run = async (): Promise<void> => {
       }, 60_000);
       const activeSources: Promise<void>[] = [];
       try {
-        try { await client.verifyWorkspace(options.config.workspaceId, controller.signal); } catch (error) {
+        try { await client?.verifyWorkspace(options.config.workspaceId, controller.signal); } catch (error) {
           if (controller.signal.aborted) return;
           throw error;
         }
         if (channelEnabled) scheduleDrain();
-        result({ status: 'starting', recovered, ...(listIds.length > 0 ? { listIds } : {}) });
+        result({ status: 'starting', recovered, ...(listIds.length > 0 ? { listIds, listAuth: listUserToken ? 'user' : 'web' } : {}) });
         const { workspaceId, targetUserId } = options.config;
         if (listClient) {
-          activeSources.push(pollSlackLists({ workspaceId, targetUserId, listIds }, listClient, inbox, controller.signal,
+          const reader = listIdentity ? {
+            verifyIdentity: (signal: AbortSignal) => listIdentity.verifyWorkspace(workspaceId, signal, targetUserId),
+            read: listClient.read.bind(listClient),
+          } : listClient;
+          activeSources.push(pollSlackLists({ workspaceId, targetUserId, listIds }, reader, inbox, controller.signal,
             notice => process.stdout.write(`${JSON.stringify({ event: 'slack-list-poll', ...notice })}\n`)));
         }
-        if (channelEnabled) {
+        if (channelEnabled && client) {
           const socket = new SlackSocketTransport(client).run(async (envelope, acknowledge) => {
             if (drainFailure) throw drainFailure;
             await service.receive(envelope, acknowledge);

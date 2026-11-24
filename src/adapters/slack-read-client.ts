@@ -124,13 +124,17 @@ export class SlackReadClient {
     return validateSlackSocketUrl(response.url);
   }
 
-  async verifyWorkspace(workspaceId: string, signal?: AbortSignal): Promise<void> {
+  async verifyWorkspace(workspaceId: string, signal?: AbortSignal, expectedUserId?: string): Promise<void> {
     if (!identifierPattern.test(workspaceId)) throw new HarnessError('SLACK_INVALID_WORKSPACE');
+    if (expectedUserId !== undefined && !identifierPattern.test(expectedUserId)) throw new HarnessError('SLACK_LIST_USER_MISMATCH');
     const response = await this.request('identity', new URLSearchParams(), signal);
     if (typeof response.team_id !== 'string' || !identifierPattern.test(response.team_id)) {
       throw new HarnessError('SLACK_INVALID_RESPONSE');
     }
     if (response.team_id !== workspaceId) throw new HarnessError('SLACK_WORKSPACE_MISMATCH');
+    if (expectedUserId !== undefined && (response.user_id !== expectedUserId || Object.hasOwn(response, 'bot_id'))) {
+      throw new HarnessError('SLACK_LIST_USER_MISMATCH');
+    }
   }
 
   async readThread(channelId: string, threadTs: string, requestedLimits?: SlackThreadLimits, signal?: AbortSignal): Promise<SlackThreadResult> {

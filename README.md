@@ -41,7 +41,8 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 | `SLACK_CHANNEL_IDS` | 허용할 채널 ID, 여러 개는 쉼표로 구분 |
 | `SLACK_LIST_ID` | 리스트 URL의 `/list/` 다음 ID. 최대 10개까지 `FEXAMPLE,FSECOND`처럼 한 줄에 지정합니다. 리스트만 감시할 때는 채널 ID와 앱 토큰을 생략할 수 있습니다. |
 | `SLACK_APP_TOKEN` | Socket Mode용 app-level token |
-| `SLACK_WEB_TOKEN` | 스레드 조회 권한이 있는 Web API token |
+| `SLACK_WEB_TOKEN` | 채널 스레드 조회용 Web API 토큰. 리스트 전용 토큰을 생략하면 이 토큰으로 리스트도 조회합니다. |
+| `SLACK_LIST_USER_TOKEN` | 선택 사항. 본인이 볼 수 있는 리스트를 조회할 때 쓰는 `lists:read` 권한의 User OAuth Token. 리스트만 감시할 때는 이 토큰 하나로 충분합니다. |
 | `SLACK_LIVE_READ_ENABLED` | 실제 수신을 켤 때 `true` |
 | `SLACK_ANALYSIS_ENABLED` | Codex 분석을 켤 때 `true` |
 | `SLACK_ANALYSIS_CODEX_CONFIG` | 하네스 전용 Codex relay JSON의 절대 경로 |

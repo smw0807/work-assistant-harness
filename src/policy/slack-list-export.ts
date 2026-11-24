@@ -34,7 +34,8 @@ const hasTextMention = (text: string, targetUserId: string): boolean => {
 };
 
 /** Slack rich_text의 실제 user 요소만 판정한다. 인용 블록·코드·첨부·미리보기는 순회하지 않는다. */
-const richComment = (blocks: unknown, targetUserId: string): { mentionsTarget: boolean; text: string } => {
+const richComment = (blocks: unknown, targetUserId: string, source: 'blocks' | 'rich_text'): { mentionsTarget: boolean; text: string } | null => {
+  let hasRichText = false;
   let mentionsTarget = false;
   const lines: string[] = [];
   let size = 0;
@@ -64,7 +65,11 @@ const richComment = (blocks: unknown, targetUserId: string): { mentionsTarget: b
   };
   for (const raw of boundedArray(blocks, 50)) {
     const block = record(raw);
-    if (block['type'] !== 'rich_text') continue;
+    if (block['type'] !== 'rich_text') {
+      if (source === 'rich_text') return invalid();
+      continue;
+    }
+    hasRichText = true;
     for (const rawSection of boundedArray(block['elements'], 256)) {
       const section = record(rawSection);
       if (section['type'] === 'rich_text_section') {
@@ -74,7 +79,7 @@ const richComment = (blocks: unknown, targetUserId: string): { mentionsTarget: b
       } else if (section['type'] !== 'rich_text_quote' && section['type'] !== 'rich_text_preformatted') return invalid();
     }
   }
-  return { mentionsTarget, text: lines.join('\n') };
+  return hasRichText ? { mentionsTarget, text: lines.join('\n') } : null;
 };
 
 const excerpt = (text: string): string => {
@@ -99,12 +104,21 @@ const parseComment = (raw: unknown, itemId: string, targetUserId: string): Slack
   if (value['type'] !== undefined && value['type'] !== 'message') return invalid();
   if (value['subtype'] !== undefined && value['subtype'] !== 'file_share' && value['subtype'] !== 'thread_broadcast') return invalid();
   const text = value['text'] === undefined ? undefined : messageText(value['text']);
-  if (value['blocks'] !== undefined && boundedArray(value['blocks'], 50).some(rawBlock => record(rawBlock)['type'] === 'rich_text')) {
-    const rich = richComment(value['blocks'], targetUserId);
-    return rich.mentionsTarget ? { itemId, commentId, mentionsTarget: true, text: excerpt(text || rich.text) } : ignored;
+  const source = value['rich_text'] === undefined ? 'blocks' : 'rich_text';
+  if (source === 'rich_text' && value['blocks'] !== undefined) return invalid();
+  if (value[source] !== undefined) {
+    const rich = richComment(value[source], targetUserId, source);
+    if (rich) return rich.mentionsTarget ? { itemId, commentId, mentionsTarget: true, text: excerpt(text || rich.text) } : ignored;
   }
   if (text === undefined) return invalid();
   return hasTextMention(text, targetUserId) ? { itemId, commentId, mentionsTarget: true, text: excerpt(text) } : ignored;
+};
+
+const checkCount = (messages: unknown[], owner: Record<string, unknown>): unknown[] => {
+  for (const count of [owner['reply_count'], owner['comment_count']]) {
+    if (count !== undefined && (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0 || count > messages.length)) return invalid();
+  }
+  return messages;
 };
 
 const threadMessages = (row: Record<string, unknown>): unknown[] | null => {
@@ -117,12 +131,6 @@ const threadMessages = (row: Record<string, unknown>): unknown[] | null => {
     if (counts.some(count => count !== 0)) return invalid();
     return counts.length ? [] : null;
   }
-  const checkCount = (messages: unknown[], owner: Record<string, unknown>): unknown[] => {
-    for (const count of [owner['reply_count'], owner['comment_count']]) {
-      if (count !== undefined && (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0 || count > messages.length)) return invalid();
-    }
-    return messages;
-  };
   if (Array.isArray(thread)) return checkCount(boundedArray(thread, maxComments), row);
   const wrapper = record(thread);
   if (!complete(wrapper)) return invalid();
@@ -135,6 +143,32 @@ const threadMessages = (row: Record<string, unknown>): unknown[] | null => {
   return checkCount(messages, row);
 };
 
+const alternateRecordFields = ['comments', 'threads', 'replies', 'messages', 'discussion', 'subtasks'];
+
+/** Slack 내보내기는 레코드와 그 댓글·자식 목록을 같은 객체의 별도 필드에 담는다. */
+const unwrapExportRecord = (node: Record<string, unknown>, listId: string): Record<string, unknown> => {
+  const item = record(node['record']);
+  if (item['list_id'] !== listId || !complete(node) || !complete(item)
+    || !Array.isArray(node['children']) || item['children'] !== undefined || item['thread'] !== undefined
+    || alternateRecordFields.some(key => node[key] !== undefined || item[key] !== undefined)) return invalid();
+  // 댓글이 없는 레코드도 thread_ts를 가질 수 있다. 댓글 포함 여부는 스냅샷 전체에서 확인한다.
+  const thread = node['thread'] == null ? null : boundedArray(node['thread'], maxComments);
+  checkCount(thread ?? [], node);
+  checkCount(thread ?? [], item);
+  return { id: item['id'], thread, subtasks: node['children'] };
+};
+
+const truncationFlags = ['records_truncated', 'threads_truncated', 'thread_replies_truncated',
+  'message_threads_truncated', 'attachments_truncated', 'max_subtask_depth_exceeded'] as const;
+
+/** include_threads로 요청한 records 내보내기는 빈 스레드를 생략한다. 일부만 반환되면 기준점을 갱신할 수 없다. */
+const hasCompleteRecordExport = (meta: unknown): boolean => {
+  if (meta === undefined) return false;
+  const value = record(meta);
+  if (value['complete'] !== true || !complete(value) || truncationFlags.some(flag => value[flag] !== undefined && value[flag] !== false)) return invalid();
+  return truncationFlags.every(flag => value[flag] === false);
+};
+
 /**
  * 항목 정보와 댓글 데이터의 경계에서만 읽는다. 모르는 구조를 빈 내보내기로 처리하면
  * 잘못된 최초 기준점이 저장되므로 전체 스냅샷을 거부한다.
@@ -145,20 +179,24 @@ export const parseSlackListComments = (input: unknown, listId: string, targetUse
   const listIds = [root['list_id'], root['id'], list?.['id'], list?.['list_id']].filter(value => value !== undefined);
   if (!/^F[A-Z0-9_]{1,63}$/.test(listId) || !userIdPattern.test(targetUserId)
     || listIds.some(value => value !== listId) || !complete(root) || (list && !complete(list))) return invalid();
-  const tables = [root['items'], root['rows'], list?.['items'], list?.['rows']].filter(table => table !== undefined);
-  if (tables.length !== 1 || root['threads'] !== undefined || list?.['threads'] !== undefined) return invalid();
+  const hasRecords = root['records'] !== undefined;
+  const tables = [root['items'], root['rows'], root['records'], list?.['items'], list?.['rows']].filter(table => table !== undefined);
+  if (tables.length !== 1 || (hasRecords && list?.['id'] !== listId)
+    || root['threads'] !== undefined || list?.['threads'] !== undefined || list?.['records'] !== undefined) return invalid();
   const items = boundedArray(tables[0], maxItems);
   if (!listIds.length && (!items.length || items.some(item => record(item)['list_id'] !== listId))) return invalid();
   const includeThreads = [root['include_threads'], asSlackRecord(root['options'])?.['include_threads'],
     asSlackRecord(root['metadata'])?.['include_threads']].filter(flag => flag !== undefined);
   if (includeThreads.some(flag => flag !== true)) return invalid();
-  let sawThreadShape = includeThreads.length > 0;
+  const completeRecords = hasRecords && hasCompleteRecordExport(root['meta']);
+  let sawThreadShape = includeThreads.length > 0 || completeRecords;
   let hasRowsWithoutThread = false;
   const pending = [...items].reverse();
   const seenItems = new Set<string>();
   const comments: SlackListComment[] = [];
   while (pending.length) {
-    const row = record(pending.pop());
+    const node = record(pending.pop());
+    const row = hasRecords ? unwrapExportRecord(node, listId) : node;
     const itemId = id(row['id']);
     if (seenItems.has(itemId) || (row['list_id'] !== undefined && row['list_id'] !== listId)) return invalid();
     seenItems.add(itemId);

@@ -11,10 +11,11 @@ export interface SlackEnvironmentSettings {
   config: SlackReceiverConfig;
   appToken: string | undefined;
   webToken: string | undefined;
+  listUserToken?: string;
   analysisConfigPath?: string;
 }
 const keys = ['SLACK_WORKSPACE_ID', 'SLACK_TARGET_USER_ID', 'SLACK_CHANNEL_IDS', 'SLACK_LIST_ID', 'SLACK_LIST_IDS', 'SLACK_LIVE_READ_ENABLED',
-  'SLACK_APP_TOKEN', 'SLACK_WEB_TOKEN', 'SLACK_ANALYSIS_ENABLED', 'SLACK_ANALYSIS_CODEX_CONFIG'] as const;
+  'SLACK_APP_TOKEN', 'SLACK_WEB_TOKEN', 'SLACK_LIST_USER_TOKEN', 'SLACK_ANALYSIS_ENABLED', 'SLACK_ANALYSIS_CODEX_CONFIG'] as const;
 const fail: (code: string) => never = code => { throw new HarnessError(code); };
 const booleanValue = (value: string | undefined, optional = false): boolean => {
   if (optional && value === undefined) return false;
@@ -51,6 +52,8 @@ export const parseSlackEnvironment = (input: Record<string, string | undefined>)
       liveReadEnabled: booleanValue(values['SLACK_LIVE_READ_ENABLED']),
       retentionHours: 24, maxPending: 100, thread: { maxMessages: 30, maxPages: 3, maxBytes: 16_384 } });
     const settings: SlackEnvironmentSettings = { config, appToken: tokenValue(values['SLACK_APP_TOKEN']), webToken: tokenValue(values['SLACK_WEB_TOKEN']) };
+    const listUserToken = tokenValue(values['SLACK_LIST_USER_TOKEN']);
+    if (listUserToken) settings.listUserToken = listUserToken;
     if (booleanValue(values['SLACK_ANALYSIS_ENABLED'], true) && config.channelIds.length > 0) {
       const path = values['SLACK_ANALYSIS_CODEX_CONFIG'];
       if (!path || !isAbsolute(path) || resolve(path) !== path || !noControls(path)) fail('SLACK_INVALID_ENV');

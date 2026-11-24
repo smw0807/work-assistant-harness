@@ -71,9 +71,17 @@ export const runSlackCommand = async (args: string[]): Promise<void> => {
   if (live) {
     const appToken = environment ? environment.appToken : process.env['SLACK_APP_TOKEN'];
     const webToken = environment ? environment.webToken : process.env['SLACK_WEB_TOKEN'];
-    if (!webToken || (options.config.channelIds.length > 0 && !appToken)) throw new HarnessError('SLACK_TOKENS_REQUIRED');
-    if (appToken && options.config.channelIds.length > 0) receiverEnvironment['SLACK_APP_TOKEN'] = appToken;
-    receiverEnvironment['SLACK_WEB_TOKEN'] = webToken;
+    const listUserToken = environment ? environment.listUserToken : process.env['SLACK_LIST_USER_TOKEN'];
+    if (options.config.channelIds.length > 0) {
+      if (!appToken || !webToken) throw new HarnessError('SLACK_TOKENS_REQUIRED');
+      receiverEnvironment['SLACK_APP_TOKEN'] = appToken;
+      receiverEnvironment['SLACK_WEB_TOKEN'] = webToken;
+    }
+    if (getSlackListIds(options.config).length > 0) {
+      if (listUserToken) receiverEnvironment['SLACK_LIST_USER_TOKEN'] = listUserToken;
+      else if (webToken) receiverEnvironment['SLACK_WEB_TOKEN'] = webToken;
+      else throw new HarnessError('SLACK_TOKENS_REQUIRED');
+    }
   }
   const readOnly = options.command === 'slack-list' || options.command === 'slack-inspect';
   const releaseLease = readOnly ? () => {} : acquireRuntimeLease(options.dataDirectory);

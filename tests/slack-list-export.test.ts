@@ -44,7 +44,7 @@ test('리스트 내보내기는 스레드 포함 옵션을 두 API에 일치시�
     [url, 'GET'],
   ]);
   for (const [i, call] of mock.calls.entries()) {
-    assert.equal(call.init?.redirect, 'error');
+    assert.equal(call.init?.redirect, 'manual');
     assert.equal(call.init?.credentials, 'omit');
     assert.equal(new Headers(call.init?.headers).get('authorization'), `Bearer ${token}`);
     if (i < 3) {
@@ -71,7 +71,11 @@ test('다운로드의 주소·경로·workspace·list 위조나 리디렉션에 
     assert.equal(mock.calls.length, 2);
   }
   const redirected = mockExport(start(), completed(), Response.redirect('https://outside.invalid/'));
-  await assert.rejects(redirected.client.read(workspaceId, listId, signal()), hasCode('HTTP_FAILED'));
+  await assert.rejects(redirected.client.read(workspaceId, listId, signal()), error => {
+    assert.ok(error instanceof SlackListApiError);
+    assert.equal(error.method, 'file.download');
+    return hasCode('REDIRECT_DENIED')(error);
+  });
   assert.equal(redirected.calls.length, 3);
 });
 
@@ -95,6 +99,35 @@ test('리스트 조회를 거부한 Slack API 메서드와 사유를 함께 전�
       assert.equal(error.method, method);
       return hasCode('API_LIST_NOT_FOUND')(error);
     });
+  }
+});
+
+test('전송·본문 읽기·HTTP 실패를 호출 단계와 고정 사유로만 기록한다', async () => {
+  const networkError = (code: string) => new TypeError(token, { cause: Object.assign(new Error(url), { code }) });
+  const readFailure = new Response(new ReadableStream({ start(controller) { controller.error(networkError('UND_ERR_SOCKET')); } }));
+  for (const [prefix, failure, method, code] of [
+    [[], networkError('ENOTFOUND'), 'slackLists.download.start', 'DNS_FAILED'],
+    [[start()], networkError('CERT_HAS_EXPIRED'), 'slackLists.download.get', 'TLS_FAILED'],
+    [[start(), completed()], readFailure, 'file.download', 'CONNECTION_FAILED'],
+    [[start(), completed()], networkError('UND_ERR_CONNECT_TIMEOUT'), 'file.download', 'CONNECTION_TIMEOUT'],
+    [[start(), completed()], networkError(token), 'file.download', 'REQUEST_FAILED'],
+    [[start()], Response.redirect(url), 'slackLists.download.get', 'REDIRECT_DENIED'],
+    [[start(), completed()], new Response(token, { status: 401 }), 'file.download', 'HTTP_UNAUTHORIZED'],
+    [[start(), completed()], new Response(token, { status: 403 }), 'file.download', 'HTTP_FORBIDDEN'],
+  ] as const) {
+    const sequence = [...prefix, failure];
+    const client = new SlackListExportClient(token, { fetch: async () => {
+      const step = sequence.shift();
+      if (!(step instanceof Response)) throw step;
+      return step;
+    } });
+    await assert.rejects(client.read(workspaceId, listId, signal()), error => {
+      assert.ok(error instanceof SlackListApiError);
+      assert.equal(error.method, method);
+      assert.equal(error.cause, undefined);
+      return hasCode(code)(error);
+    });
+    assert.equal(sequence.length, 0);
   }
 });
 

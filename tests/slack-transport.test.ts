@@ -103,6 +103,18 @@ test('auth.test의 읽기 토큰 workspace를 확인하고 다른 workspace와 �
   assert.equal(calls.length, 2);
 });
 
+test('리스트 사용자 토큰은 감시 대상과 같은 워크스페이스의 같은 사용자여야 한다', async () => {
+  const identity = { ok: true, team_id: 'W_LOCAL', user_id: 'U_OWNER' };
+  const asClient = (response: Record<string, unknown>) =>
+    new SlackReadClient(credentials, { fetch: async () => jsonResponse(response) });
+  await asClient(identity).verifyWorkspace('W_LOCAL', undefined, 'U_OWNER');
+  await assert.rejects(asClient(identity).verifyWorkspace('W_OTHER', undefined, 'U_OWNER'), hasCode('SLACK_WORKSPACE_MISMATCH'));
+  for (const other of [{ ...identity, user_id: 'U_OTHER' }, { ok: true, team_id: 'W_LOCAL' }, { ...identity, bot_id: 'B_SYNTHETIC' }]) {
+    await assert.rejects(asClient(other).verifyWorkspace('W_LOCAL', undefined, 'U_OWNER'), hasCode('SLACK_LIST_USER_MISMATCH'));
+  }
+  await asClient({ ...identity, bot_id: 'B_SYNTHETIC' }).verifyWorkspace('W_LOCAL');
+});
+
 test('workspace 검증도 abort로 취소하며 후속 API 요청을 하지 않는다', async () => {
   const controller = new AbortController();
   let requests = 0;

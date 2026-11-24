@@ -32,7 +32,8 @@ const cli = (args: string[], directory: string, settings: Record<string, string>
 );
 
 test('환경 설정은 명시된 Slack 키와 기존 자료 상한만 선택한다', () => {
-  const input = { ...environment(), SLACK_CHANNEL_IDS: ' C_ALLOWED, C_SECOND ', SLACK_APP_TOKEN: 'synthetic-app-value', SLACK_WEB_TOKEN: 'synthetic-web-value' };
+  const input = { ...environment(), SLACK_CHANNEL_IDS: ' C_ALLOWED, C_SECOND ', SLACK_APP_TOKEN: 'synthetic-app-value',
+    SLACK_WEB_TOKEN: 'synthetic-web-value', SLACK_LIST_USER_TOKEN: 'synthetic-list-user' };
   let unknownReads = 0;
   Object.defineProperty(input, 'NODE_OPTIONS', { get: () => { unknownReads += 1; throw new Error('must not read'); } });
   const settings = parseSlackEnvironment(input);
@@ -42,6 +43,7 @@ test('환경 설정은 명시된 Slack 키와 기존 자료 상한만 선택한�
   });
   assert.equal(settings.appToken, 'synthetic-app-value');
   assert.equal(settings.webToken, 'synthetic-web-value');
+  assert.equal(settings.listUserToken, 'synthetic-list-user');
   assert.equal(settings.analysisConfigPath, undefined);
   assert.equal(unknownReads, 0);
   assert.equal(JSON.stringify(settings.config).includes('synthetic-'), false);
@@ -69,7 +71,7 @@ test('선언된 키의 accessor와 Proxy를 실행하지 않으며 오류에 값
   Object.defineProperty(getter, 'SLACK_APP_TOKEN', { get: () => { reads += 1; return 'SYNTHETIC_SECRET'; } });
   for (const input of [getter, new Proxy(environment(), { getOwnPropertyDescriptor: () => { reads += 1; throw new Error('SYNTHETIC_SECRET'); } }),
     { ...environment(), SLACK_APP_TOKEN: 'SYNTHETIC_SECRET\n' }, { ...environment(), SLACK_WEB_TOKEN: 's'.repeat(4097) },
-    { ...environment(), SLACK_WORKSPACE_ID: '\ud800' }]) {
+    { ...environment(), SLACK_LIST_USER_TOKEN: 'SYNTHETIC_SECRET\n' }, { ...environment(), SLACK_WORKSPACE_ID: '\ud800' }]) {
     assert.throws(() => parseSlackEnvironment(input), error => {
       assert.equal((error as { code: string }).code, 'SLACK_INVALID_ENV');
       assert.equal(String(error).includes('SYNTHETIC_SECRET'), false);
@@ -147,12 +149,13 @@ test('파일에 없는 토큰·설정은 합성 ambient 값으로 보충하지 �
     const before = JSON.stringify(process.env);
     const settings = await readSlackEnvironmentFile(${JSON.stringify(path)});
     process.stdout.write(JSON.stringify({ appAbsent: settings.appToken === undefined, webAbsent: settings.webToken === undefined,
-      target: settings.config.targetUserId, unchanged: before === JSON.stringify(process.env) }));`;
+      listAbsent: !Object.hasOwn(settings, 'listUserToken'), target: settings.config.targetUserId, unchanged: before === JSON.stringify(process.env) }));`;
   const result = execFileSync(process.execPath, ['--input-type=module', '-e', code], {
     cwd: sourceRoot, encoding: 'utf8', timeout: 5_000,
-    env: { LANG: 'C.UTF-8', TZ: 'UTC', ...environment(), SLACK_TARGET_USER_ID: 'U_AMBIENT', SLACK_APP_TOKEN: 'synthetic-ambient-app', SLACK_WEB_TOKEN: 'synthetic-ambient-web' },
+    env: { LANG: 'C.UTF-8', TZ: 'UTC', ...environment(), SLACK_TARGET_USER_ID: 'U_AMBIENT', SLACK_APP_TOKEN: 'synthetic-ambient-app',
+      SLACK_WEB_TOKEN: 'synthetic-ambient-web', SLACK_LIST_USER_TOKEN: 'synthetic-ambient-list' },
   });
-  assert.deepEqual(JSON.parse(result), { appAbsent: true, webAbsent: true, target: 'U_OWNER', unchanged: true });
+  assert.deepEqual(JSON.parse(result), { appAbsent: true, webAbsent: true, listAbsent: true, target: 'U_OWNER', unchanged: true });
   await writeFile(path, 'SLACK_LIVE_READ_ENABLED=false\n');
   const failed = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
     cwd: sourceRoot, encoding: 'utf8', timeout: 5_000, env: { LANG: 'C.UTF-8', TZ: 'UTC', ...environment() },
@@ -265,4 +268,43 @@ test('실연결 환경 옵션도 명시적 live 허용과 토큰 없이는 worke
   assert.equal(absentTokens.status, 1);
   assert.match(absentTokens.stderr, /SLACK_TOKENS_REQUIRED/);
   assert.equal(absentTokens.stdout, '');
+});
+
+test('CLI가 채널과 리스트 구성에 맞는 토큰만 수신 환경에 넣고 실행 인자에서 제외한다', async context => {
+  const directory = await temporaryDirectory(context);
+  const preload = join(directory, 'capture-receiver.mjs');
+  await writeFile(preload, `
+    import childProcess from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { EventEmitter } from 'node:events';
+    childProcess.spawn = (_executable, args, options) => {
+      process.stdout.write(JSON.stringify({ keys: Object.keys(options.env).filter(k => k.startsWith('SLACK_')).sort(),
+        tokenInArgs: args.some(arg => arg.includes('synthetic-test-token')) }));
+      const child = new EventEmitter();
+      setImmediate(() => child.emit('exit', 0, null));
+      return child;
+    };
+    syncBuiltinESMExports();
+  `, { mode: 0o600 });
+  const app = 'SLACK_APP_TOKEN', web = 'SLACK_WEB_TOKEN', user = 'SLACK_LIST_USER_TOKEN';
+  const tokens = { [app]: 'synthetic-test-token-app', [web]: 'synthetic-test-token-web', [user]: 'synthetic-test-token-list' };
+  const live = { ...environment(), SLACK_LIVE_READ_ENABLED: 'true' };
+  const listsOnly = { ...live, SLACK_CHANNEL_IDS: '', SLACK_LIST_ID: 'FLIST' };
+  const check = (flags: string[], env: Record<string, string>, expected: string[]) => {
+    const output = execFileSync(process.execPath, ['--import', preload, '--', executable, 'slack-listen', ...flags,
+      '--data-dir', join(directory, 'runtime')], { env, encoding: 'utf8', timeout: 5000 });
+    assert.deepEqual(JSON.parse(output), { keys: expected.sort(), tokenInArgs: false });
+  };
+  check(['--env'], { ...live, ...tokens }, [app, web]);
+  check(['--env'], { ...live, ...tokens, SLACK_LIST_ID: 'FLIST' }, [app, web, user]);
+  check(['--env'], { ...listsOnly, ...tokens }, [user]);
+  const file = await privateFile(directory, environmentText({ ...listsOnly, [web]: tokens[web] }));
+  check(['--env-file', file], tokens, [web]);
+  const config = await privateFile(directory, JSON.stringify(parseSlackEnvironment(listsOnly).config), 'lists.json');
+  check(['--config', config], { [user]: tokens[user] }, [user]);
+  for (const missing of [app, web]) {
+    const result = cli(['slack-listen', '--env'], join(directory, 'runtime'), { ...live, SLACK_LIST_ID: 'FLIST', ...tokens, [missing]: '' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /SLACK_TOKENS_REQUIRED/);
+  }
 });

@@ -18,7 +18,7 @@ const fixture = async (context: TestContext): Promise<Fixture> => {
     const role = process.argv[2], behavior = process.argv[3];
     const mark = (name, value = String(Date.now())) => writeFileSync(join(directory, role + '.' + name), value, {mode:0o600});
     mark('pid', String(process.pid));
-    mark('env', JSON.stringify(Object.fromEntries(['LANG','TZ','PATH','HOME','NODE_OPTIONS','UNRELATED_SECRET','SLACK_APP_TOKEN','SLACK_WEB_TOKEN']
+    mark('env', JSON.stringify(Object.fromEntries(['LANG','TZ','PATH','HOME','NODE_OPTIONS','UNRELATED_SECRET','SLACK_APP_TOKEN','SLACK_WEB_TOKEN','SLACK_LIST_USER_TOKEN']
       .map(key => [key, process.env[key] ?? null]))));
     let ending = false;
     const active = setInterval(() => {}, 20);
@@ -52,11 +52,12 @@ const fixture = async (context: TestContext): Promise<Fixture> => {
     process.env.UNRELATED_SECRET = 'synthetic-ambient-secret';
     process.env.SLACK_APP_TOKEN = 'synthetic-ambient-app';
     process.env.SLACK_WEB_TOKEN = 'synthetic-ambient-web';
+    process.env.SLACK_LIST_USER_TOKEN = 'synthetic-ambient-list';
     const result = (outcome, code) => process.stdout.write(JSON.stringify({outcome, ...(code ? {code} : {}),
       sigintListeners:process.listenerCount('SIGINT'), sigtermListeners:process.listenerCount('SIGTERM')}));
     await runSlackAnalysisPair(${JSON.stringify(executable)}, ${JSON.stringify([worker, 'receiver', receiver])},
       ${JSON.stringify([worker, 'analysis', analysis])}, ${JSON.stringify(directory)}, {
-        SLACK_APP_TOKEN:'synthetic-receiver-app', SLACK_WEB_TOKEN:'synthetic-receiver-web',
+        SLACK_APP_TOKEN:'synthetic-receiver-app', SLACK_WEB_TOKEN:'synthetic-receiver-web', SLACK_LIST_USER_TOKEN:'synthetic-receiver-list',
         HOME:'/synthetic-accidental-home', NODE_OPTIONS:'--require=/synthetic-accidental-injection.js', UNRELATED_SECRET:'synthetic-accidental-secret'
       }).then(() => result('resolved'), error => result('rejected', error.code));
   ` };
@@ -86,9 +87,11 @@ test('분석 ready 이후에만 수신기를 시작하고 각 child에 필요한
   assert.ok(Number(await mark(setup, 'receiver', 'started')) >= Number(await mark(setup, 'analysis', 'ready')));
   assert.deepEqual(JSON.parse(await mark(setup, 'analysis', 'env')), {
     LANG: 'C.UTF-8', TZ: 'UTC', PATH: '/usr/bin:/bin', HOME: null, NODE_OPTIONS: null, UNRELATED_SECRET: null, SLACK_APP_TOKEN: null, SLACK_WEB_TOKEN: null,
+    SLACK_LIST_USER_TOKEN: null,
   });
   assert.deepEqual(JSON.parse(await mark(setup, 'receiver', 'env')), {
     LANG: 'C.UTF-8', TZ: 'UTC', PATH: null, HOME: null, NODE_OPTIONS: null, UNRELATED_SECRET: null, SLACK_APP_TOKEN: 'synthetic-receiver-app', SLACK_WEB_TOKEN: 'synthetic-receiver-web',
+    SLACK_LIST_USER_TOKEN: 'synthetic-receiver-list',
   });
   const terminated = Number(await mark(setup, 'analysis', 'term'));
   assert.ok(Number(await mark(setup, 'analysis', 'closed')) - terminated >= 100);
