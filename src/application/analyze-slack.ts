@@ -1,6 +1,6 @@
 import type { SlackAnalysisSource, SlackAnalysisSourceItem } from '../adapters/slack-analysis-source.js';
 import { SqliteSlackAnalysisStore, type SlackAnalysisRecord } from '../adapters/sqlite-slack-analysis.js';
-import type { SlackReceiverConfig } from '../domain/slack.js';
+import { getSlackListIds, type SlackConnectionState, type SlackReceiverConfig } from '../domain/slack.js';
 import type { ReadonlyRelayConfig } from '../domain/readonly-relay.js';
 import type { SlackAnalysisPayload, SlackAnalysisModelPort } from '../domain/slack-analysis.js';
 import { SLACK_ANALYSIS_POLICY } from '../domain/slack-analysis.js';
@@ -10,9 +10,9 @@ import { buildSlackAnalysisPayload, parseSlackAnalysisResponse } from '../policy
 
 export interface SlackAnalysisNotice {
   event: 'slack-analysis'; status: string; runId: string | null;
-  channelId?: string; messageTs?: string; failureCode: string | null;
+  channelId?: string; messageTs?: string; listId?: string; itemId?: string; commentId?: string; failureCode: string | null;
 }
-interface ActiveAnalysis { record: SlackAnalysisRecord; payload: SlackAnalysisPayload; controller: AbortController; pending: Promise<void> }
+interface ActiveAnalysis { record: SlackAnalysisRecord; payload: SlackAnalysisPayload; itemId: string | undefined; controller: AbortController; pending: Promise<void> }
 const policyHash = hashReadonlyValue(canonicalReadonlyJson({ policy: SLACK_ANALYSIS_POLICY,
   maximumDailyAttempts: 20, concurrency: 1, retries: 0, source: 'current-session-mentions-and-complete-threads',
   repositoryAccess: false, messageDelivery: false }));
@@ -29,7 +29,9 @@ export class SlackAnalysisService {
     private readonly model: (runId: string) => SlackAnalysisModelPort,
     private readonly startedAt: Date, private readonly notify: (notice: SlackAnalysisNotice) => void = () => {},
     private readonly now: () => Date = () => new Date()) {
-    this.scopeHash = hashReadonlyValue(canonicalReadonlyJson({ receiver, config, policyHash }));
+    const channelReceiver = { ...receiver };
+    delete channelReceiver.listAnalysisEnabled;
+    this.scopeHash = hashReadonlyValue(canonicalReadonlyJson({ receiver: channelReceiver, config, policyHash }));
   }
 
   recover(): number { return this.store.recover(this.now()); }
@@ -44,12 +46,12 @@ export class SlackAnalysisService {
       catch { this.active.controller.abort(); this.store.invalidate(this.active.record.runId, now); }
       return;
     }
-    const connection = this.source.connection();
-    if (!connection || connection.state !== 'connected' || connection.at < this.startedAt.toISOString()) return;
     if (this.limitedDay === now.toISOString().slice(0, 10)) return;
+    const connection = this.receiver.channelIds.length ? this.source.connection() : null;
     for (const item of this.source.list(now, this.startedAt)) {
-      // A reconnect cannot prove that an older collected thread is still current.
-      if (item.request.updatedAt < connection.at) continue;
+      // 리스트 스냅샷은 독립적인 HTTP 조회 결과이므로 채널 소켓 재연결과 무관하다.
+      const itemId = item.request.listItemId;
+      if (itemId === undefined && !this.hasCurrentSocket(connection, item.request.updatedAt)) continue;
       let payload: SlackAnalysisPayload | null = null;
       try { payload = buildSlackAnalysisPayload(item.request, this.receiver, this.config); } catch { /* Persist a body-free blocked outcome below. */ }
       const result = this.store.begin({ workspaceId: item.request.workspaceId, channelId: item.request.channelId,
@@ -66,10 +68,10 @@ export class SlackAnalysisService {
       if (!payload) {
         const blocked = this.store.finish(record.runId, { status: 'BLOCKED', failureCode:
           item.request.thread?.complete === true ? 'SLACK_ANALYSIS_INVALID_INPUT' : 'SLACK_ANALYSIS_INCOMPLETE_THREAD' }, now);
-        this.notice(blocked); continue;
+        this.notice(blocked, itemId); continue;
       }
-      const active: ActiveAnalysis = { record, payload, controller: new AbortController(), pending: Promise.resolve() };
-      this.active = active; this.notice(record);
+      const active: ActiveAnalysis = { record, payload, itemId, controller: new AbortController(), pending: Promise.resolve() };
+      this.active = active; this.notice(record, itemId);
       // Assign active before invoking a synchronous test port or any asynchronous native work.
       active.pending = Promise.resolve().then(() => this.analyze(active))
         .catch(error => { this.fatal = error; }).finally(() => { if (this.active === active) this.active = null; });
@@ -77,9 +79,15 @@ export class SlackAnalysisService {
     }
   }
 
-  private notice(record: SlackAnalysisRecord): void {
+  private hasCurrentSocket(connection: SlackConnectionState | null, updatedAt: string): boolean {
+    return connection?.state === 'connected' && connection.at >= this.startedAt.toISOString() && updatedAt >= connection.at;
+  }
+  private notice(record: SlackAnalysisRecord, itemId?: string): void {
+    const location = getSlackListIds(this.receiver).includes(record.channelId)
+      ? { listId: record.channelId, ...(itemId ? { itemId } : {}), commentId: record.messageTs }
+      : { channelId: record.channelId, messageTs: record.messageTs };
     this.notify({ event: 'slack-analysis', status: record.status, runId: record.runId,
-      channelId: record.channelId, messageTs: record.messageTs, failureCode: record.failureCode });
+      ...location, failureCode: record.failureCode });
   }
   private current(record: SlackAnalysisRecord): SlackAnalysisSourceItem | null {
     return this.source.find(record.workspaceId, record.channelId, record.messageTs, this.now());
@@ -87,19 +95,21 @@ export class SlackAnalysisService {
   private invalidateChangedReports(now: Date): void {
     for (const record of this.store.list(now)) {
       if (record.status !== 'REPORTED') continue;
+      if (!this.receiver.listAnalysisEnabled && getSlackListIds(this.receiver).includes(record.channelId)) continue;
       const item = this.current(record);
       let same = false;
       try { same = record.scopeHash === this.scopeHash && item !== null
         && buildSlackAnalysisPayload(item.request, this.receiver, this.config).sourceHash === record.sourceHash; } catch { /* Invalid or incomplete source no longer supports the report. */ }
-      if (!same) this.notice(this.store.invalidate(record.runId, now));
+      if (!same) this.notice(this.store.invalidate(record.runId, now), item?.request.listItemId);
     }
   }
   private assertCurrent(record: SlackAnalysisRecord, payload: SlackAnalysisPayload): void {
     if (this.stopped || this.active?.controller.signal.aborted) throw new HarnessError('SLACK_ANALYSIS_CANCELLED');
-    const now = this.now(), connection = this.source.connection();
+    const now = this.now();
     if (record.expiresAt <= now.toISOString()) throw new HarnessError('SLACK_ANALYSIS_EXPIRED');
-    if (!connection || connection.state !== 'connected' || connection.at < this.startedAt.toISOString()
-      || payload.source.updatedAt < connection.at) throw new HarnessError('SLACK_ANALYSIS_CONNECTION_GAP');
+    if (this.active?.itemId === undefined && !this.hasCurrentSocket(this.source.connection(), payload.source.updatedAt)) {
+      throw new HarnessError('SLACK_ANALYSIS_CONNECTION_GAP');
+    }
     const item = this.current(record);
     let sameSource = false;
     try { sameSource = item !== null && item.receivedAt >= this.startedAt.toISOString()
@@ -123,7 +133,7 @@ export class SlackAnalysisService {
       }
       const report = parseSlackAnalysisResponse(raw.text, payload);
       this.assertCurrent(record, payload);
-      this.notice(this.store.finish(record.runId, { status: 'REPORTED', report, responseHash: raw.responseHash }, this.now()));
+      this.notice(this.store.finish(record.runId, { status: 'REPORTED', report, responseHash: raw.responseHash }, this.now()), active.itemId);
     } catch (error) {
       const unsafe = error instanceof HarnessError
         && ['READONLY_RELAY_LIFECYCLE_UNSAFE', 'SLACK_ANALYSIS_NATIVE_REVIEW_REQUIRED'].includes(error.code);
@@ -136,7 +146,7 @@ export class SlackAnalysisService {
         : error instanceof HarnessError && ['SLACK_ANALYSIS_SOURCE_CHANGED', 'SLACK_ANALYSIS_CONNECTION_GAP', 'SLACK_ANALYSIS_EXPIRED'].includes(error.code)
           ? error.code as 'SLACK_ANALYSIS_SOURCE_CHANGED' | 'SLACK_ANALYSIS_CONNECTION_GAP' | 'SLACK_ANALYSIS_EXPIRED'
           : responseReceived ? 'SLACK_ANALYSIS_INVALID_RESPONSE' : 'SLACK_ANALYSIS_MODEL_FAILED';
-      this.notice(this.store.finish(record.runId, { status: 'FAILED', failureCode }, this.now()));
+      this.notice(this.store.finish(record.runId, { status: 'FAILED', failureCode }, this.now()), active.itemId);
       if (unsafe) throw error;
     }
   }

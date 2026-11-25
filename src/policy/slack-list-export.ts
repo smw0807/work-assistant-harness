@@ -36,16 +36,16 @@ const hasTextMention = (text: string, targetUserId: string): boolean => {
   return false;
 };
 
-/** Slack rich_text의 실제 user 요소만 판정한다. 인용 블록·코드·첨부·미리보기는 순회하지 않는다. */
-const richComment = (blocks: unknown, targetUserId: string, source: 'blocks' | 'rich_text'): { mentionsTarget: boolean; text: string } | null => {
+/** 인용과 코드의 user 요소는 직접 멘션에서 제외한다. 분석 입력은 표시된 rich_text의 문맥도 보존한다. */
+const richComment = (blocks: unknown, targetUserId: string, source: 'blocks' | 'rich_text', fullText: boolean): { mentionsTarget: boolean; text: string } | null => {
   let hasRichText = false;
   let mentionsTarget = false;
   const lines: string[] = [];
   let size = 0;
   let elementCount = 0;
-  const appendSection = (raw: unknown): void => {
+  const appendSection = (raw: unknown, quoted = false): void => {
     const section = record(raw);
-    if (section['type'] !== 'rich_text_section') return invalid();
+    if (!quoted && section['type'] !== 'rich_text_section') return invalid();
     const elements = boundedArray(section['elements'], 1_024);
     elementCount += 1 + elements.length;
     if (elementCount > 4_096) return invalid();
@@ -55,21 +55,42 @@ const richComment = (blocks: unknown, targetUserId: string, source: 'blocks' | '
       let fragment = '';
       if (element['type'] === 'user') {
         const userId = id(element['user_id']);
-        if (userId === targetUserId && !asSlackRecord(element['style'])?.['code']) mentionsTarget = true;
+        if (!quoted && userId === targetUserId && !asSlackRecord(element['style'])?.['code']) mentionsTarget = true;
         fragment = `<@${userId}>`;
       } else if (element['type'] === 'text') {
         fragment = messageText(element['text']);
+      } else if (fullText) {
+        switch (element['type']) {
+          case 'link': {
+            const url = messageText(element['url']);
+            fragment = element['text'] === undefined ? url : `<${url}|${messageText(element['text'])}>`;
+            break;
+          }
+          case 'emoji': {
+            const name = element['name'];
+            if (typeof name !== 'string' || !/^[a-zA-Z0-9_+-]{1,128}$/.test(name)) return invalid();
+            fragment = `:${name}:`;
+            break;
+          }
+          case 'channel': fragment = `<#${id(element['channel_id'])}>`; break;
+          case 'usergroup': fragment = `<!subteam^${id(element['usergroup_id'])}>`; break;
+          case 'broadcast': fragment = `<!${id(element['range'])}>`; break;
+          default: return invalid();
+        }
       }
+      if (fullText && asSlackRecord(element['style'])?.['code']) fragment = '`' + fragment + '`';
       size += Buffer.byteLength(fragment);
       if (size > maxMessageBytes) return invalid();
       parts.push(fragment);
     }
-    lines.push(parts.join(''));
+    const body = parts.join('');
+    lines.push(section['type'] === 'rich_text_quote' ? body.split('\n').map(line => `> ${line}`).join('\n')
+      : section['type'] === 'rich_text_preformatted' ? ['```', body, '```'].join('\n') : body);
   };
   for (const raw of boundedArray(blocks, 50)) {
     const block = record(raw);
     if (block['type'] !== 'rich_text') {
-      if (source === 'rich_text') return invalid();
+      if (source === 'rich_text' || fullText) return invalid();
       continue;
     }
     hasRichText = true;
@@ -79,7 +100,9 @@ const richComment = (blocks: unknown, targetUserId: string, source: 'blocks' | '
         appendSection(section);
       } else if (section['type'] === 'rich_text_list') {
         for (const listSection of boundedArray(section['elements'], 256)) appendSection(listSection);
-      } else if (section['type'] !== 'rich_text_quote' && section['type'] !== 'rich_text_preformatted') return invalid();
+      } else if (section['type'] === 'rich_text_quote' || section['type'] === 'rich_text_preformatted') {
+        if (fullText) appendSection(section, true);
+      } else return invalid();
     }
   }
   return hasRichText ? { mentionsTarget, text: lines.join('\n') } : null;
@@ -95,6 +118,42 @@ const excerpt = (text: string): string => {
 
 type CommentSource = 'export' | 'thread';
 
+const isUserReply = (subtype: unknown, origin: CommentSource): boolean =>
+  subtype === undefined || subtype === 'file_share' || subtype === 'thread_broadcast'
+  || (origin === 'thread' && subtype === 'me_message');
+
+const readCommentBody = (value: Record<string, unknown>, targetUserId: string, analysis = false) => {
+  const text = value['text'] === undefined ? undefined : messageText(value['text']);
+  const source = value['rich_text'] === undefined ? 'blocks' : 'rich_text';
+  if (source === 'rich_text' && value['blocks'] !== undefined) return invalid();
+  const rich = value[source] === undefined ? null : richComment(value[source], targetUserId, source, analysis);
+  if (rich) {
+    // Slack text는 접근성·알림용으로 축약될 수 있다. 분석에 표시된 본문 전체가 필요하다.
+    if (analysis) return rich.text || !text ? rich : invalid();
+    return { mentionsTarget: rich.mentionsTarget, text: text || rich.text };
+  }
+  if (text === undefined) return invalid();
+  return { mentionsTarget: hasTextMention(text, targetUserId), text };
+};
+
+/** 스레드 원본은 멘션 이외의 답글도 보존한다. 첨부나 리스트 필드는 분석 근거로 펼치지 않는다. */
+export const parseSlackListAnalysisMessage = (value: Record<string, unknown>, targetUserId: string, root: boolean) => {
+  const ts = value['ts'];
+  const subtype = value['subtype'];
+  if (!isSlackTimestamp(ts) || !userIdPattern.test(targetUserId)
+    || (value['type'] !== undefined && value['type'] !== 'message')
+    || (subtype !== undefined && typeof subtype !== 'string') || value['hidden'] === true
+    || subtype === 'tombstone' || subtype === 'message_deleted' || subtype === 'message_changed') return invalid();
+  const user = id(value['user'] ?? value['user_id'] ?? asSlackRecord(value['bot_profile'])?.['user_id'] ?? value['bot_id']);
+  const body = readCommentBody(value, targetUserId, true);
+  const mentionsTarget = !root && body.mentionsTarget && userIdPattern.test(user) && user !== targetUserId
+    && !value['bot_id'] && !value['bot_profile'] && isUserReply(subtype, 'thread');
+  const text = mentionsTarget
+    ? body.text.replace(new RegExp(`<@${targetUserId}\\|[^<>\\n]*>`, 'g'), `<@${targetUserId}>`)
+    : body.text;
+  return { message: { ts, user, text: redactSlackText(text) }, mentionsTarget };
+};
+
 const parseComment = (raw: unknown, itemId: string, targetUserId: string, origin: CommentSource): SlackListComment => {
   const value = record(raw);
   const ts = value['ts'];
@@ -104,8 +163,7 @@ const parseComment = (raw: unknown, itemId: string, targetUserId: string, origin
   const subtype = value['subtype'];
   if (value['bot_id'] || value['bot_profile'] || subtype === 'bot_message'
     || subtype === 'message_deleted' || value['hidden'] === true) return ignored;
-  const userReply = subtype === undefined || subtype === 'file_share' || subtype === 'thread_broadcast'
-    || (origin === 'thread' && subtype === 'me_message');
+  const userReply = isUserReply(subtype, origin);
   // replies에 섞인 시스템 메시지는 본문을 읽지 않아도 다음 답글의 조회 위치에 포함된다.
   if (origin === 'thread' && typeof subtype === 'string' && !userReply) return ignored;
   const author = id(value['user'] ?? value['user_id']);
@@ -113,15 +171,8 @@ const parseComment = (raw: unknown, itemId: string, targetUserId: string, origin
   if (author === targetUserId) return ignored;
   if (value['type'] !== undefined && value['type'] !== 'message') return invalid();
   if (!userReply) return invalid();
-  const text = value['text'] === undefined ? undefined : messageText(value['text']);
-  const source = value['rich_text'] === undefined ? 'blocks' : 'rich_text';
-  if (source === 'rich_text' && value['blocks'] !== undefined) return invalid();
-  if (value[source] !== undefined) {
-    const rich = richComment(value[source], targetUserId, source);
-    if (rich) return rich.mentionsTarget ? { itemId, commentId, mentionsTarget: true, text: excerpt(text || rich.text) } : ignored;
-  }
-  if (text === undefined) return invalid();
-  return hasTextMention(text, targetUserId) ? { itemId, commentId, mentionsTarget: true, text: excerpt(text) } : ignored;
+  const body = readCommentBody(value, targetUserId);
+  return body.mentionsTarget ? { itemId, commentId, mentionsTarget: true, text: excerpt(body.text) } : ignored;
 };
 
 const parseItemComments = (messages: readonly unknown[], itemId: string, targetUserId: string, origin: CommentSource): SlackListComment[] => {

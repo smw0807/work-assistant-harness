@@ -20,6 +20,8 @@ SLACK_APP_TOKEN=xapp-발급받은앱토큰
 SLACK_WEB_TOKEN=xoxb-발급받은봇토큰
 
 SLACK_ANALYSIS_ENABLED=true
+# 리스트 멘션의 전체 스레드까지 분석할 때 사용합니다.
+SLACK_LIST_ANALYSIS_ENABLED=true
 SLACK_ANALYSIS_CODEX_CONFIG=/기존/설정파일/절대경로/codex-relay.json
 ```
 

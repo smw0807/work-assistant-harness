@@ -9,4 +9,6 @@
 
 터미널의 `slack-list-poll` 이벤트는 `status: "mention"`과 리스트·항목·댓글 ID를 출력한다. 직접 조회로 발견한 멘션에는 `source: "thread"`가 붙는다. 권한 오류는 `status: "error"`, `method: "conversations.replies"`로 표시되며, 내보내기는 계속한다. 같은 설정과 데이터 디렉터리로 `slack-list`를 실행하면 `listMentions`에서 보관 중인 발췌문을 읽을 수 있다. [조회 결과 조립](../../src/cli/slack-worker.ts) · [리스트 권한과 오류 확인](../guides/slack.md#리스트-댓글-멘션-감시)
 
+리스트 스레드 분석을 켜면 새 멘션이 발생한 항목의 전체 대화가 [답변 초안](thread-reply.md)의 입력이 된다. 최초 기준점의 댓글은 분석 대상에서 제외한다. 결과를 보려면 같은 설정으로 `slack-inspect <list-id> <comment-ts>`를 실행한다. [설정과 결과 조회](../guides/slack.md#slack-본인-멘션-자동-분석)
+
 [전체 흐름 목록](README.md)

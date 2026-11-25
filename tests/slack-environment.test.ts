@@ -108,6 +108,23 @@ test('두 리스트는 설정 이름에 관계없이 명시한 순서대로 각�
   assert.deepEqual((await readSlackEnvironmentFile(file)).config.listIds, ids);
 });
 
+test('리스트 스레드 분석은 기존 분석 설정에서 별도로 선택하며 채널 없이도 시작할 수 있다', () => {
+  const path = '/synthetic-private/codex.json';
+  const listOnly = { ...environment(), SLACK_CHANNEL_IDS: '', SLACK_LIST_ID: 'FFIRST,FSECOND',
+    SLACK_ANALYSIS_CODEX_CONFIG: path };
+  const enabled = { ...listOnly, SLACK_ANALYSIS_ENABLED: 'true', SLACK_LIST_ANALYSIS_ENABLED: 'true' };
+  const settings = parseSlackEnvironment(enabled);
+  assert.equal(settings.analysisConfigPath, path);
+  assert.equal(settings.config.listAnalysisEnabled, true);
+  assert.deepEqual(parseSlackReceiverConfig(settings.config), settings.config);
+  assert.equal(parseSlackEnvironment({ ...listOnly, SLACK_ANALYSIS_ENABLED: 'true' }).config.listAnalysisEnabled, undefined);
+  assert.equal(parseSlackEnvironment({ ...listOnly, SLACK_LIST_ANALYSIS_ENABLED: 'true' }).analysisConfigPath, undefined);
+  for (const change of [{ SLACK_LIST_ANALYSIS_ENABLED: 'yes' }, { SLACK_LIST_ID: '' },
+    { SLACK_ANALYSIS_CODEX_CONFIG: 'relative.json' }, { SLACK_CHANNEL_IDS: 'FFIRST' }]) {
+    assert.throws(() => parseSlackEnvironment({ ...enabled, ...change }), { code: 'SLACK_INVALID_ENV' });
+  }
+});
+
 test('모호한 리스트 설정과 빈 항목, 중복, 10개 초과는 거부한다', () => {
   const { config } = parseSlackEnvironment(environment());
   assert.deepEqual(getSlackListIds(config), []);

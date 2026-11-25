@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test, type TestContext } from 'node:test';
-import { SlackAnalysisService } from '../src/application/analyze-slack.js';
+import { SlackAnalysisService, type SlackAnalysisNotice } from '../src/application/analyze-slack.js';
 import { SlackReceptionService } from '../src/application/receive-slack.js';
 import { SqliteSlackAnalysisSource } from '../src/adapters/slack-analysis-source.js';
 import { SqliteSlackAnalysisStore } from '../src/adapters/sqlite-slack-analysis.js';
@@ -60,17 +60,17 @@ type ModelCall = { dispatch: ReadonlyRelayDispatch; signal: AbortSignal; beforeT
 type ModelBehavior = (call: ModelCall) => Promise<ReadonlyRelayTransmissionResult>;
 
 /** Only the model is fake: intake, current-source lookup, one-use ledger and result invalidation use their real adapters. */
-const fixture = async (context: TestContext) => {
+const fixture = async (context: TestContext, settings: SlackReceiverConfig = receiver) => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'harness-slack-analysis-service-')));
   await chmod(directory, 0o700);
   let clock = new Date(startedAt.getTime() + 2000), calls = 0, credentials = 0, transmissions = 0, acknowledgements = 0;
   const now = () => new Date(clock);
-  const inbox = new SqliteSlackInbox(join(directory, 'tasks.sqlite'), receiver);
-  inbox.setConnection({ state: 'connected', reason: 'SYNTHETIC_CONNECTED', at: new Date(startedAt.getTime() + 1000).toISOString() });
+  const inbox = new SqliteSlackInbox(join(directory, 'tasks.sqlite'), settings);
+  if (settings.channelIds.length) inbox.setConnection({ state: 'connected', reason: 'SYNTHETIC_CONNECTED', at: new Date(startedAt.getTime() + 1000).toISOString() });
   const store = new SqliteSlackAnalysisStore(join(directory, 'slack-analysis.sqlite'));
-  const source = new SqliteSlackAnalysisSource(join(directory, 'tasks.sqlite'), receiver);
+  const source = new SqliteSlackAnalysisSource(join(directory, 'tasks.sqlite'), settings);
   let snapshot: (ts: string) => SlackThreadSnapshot = ts => ({ messages: [{ ts, user: 'U_REQUESTER', text: requestText }], complete: true, reason: null });
-  const reception = new SlackReceptionService(receiver, inbox, { readThread: async (_channel, ts) => snapshot(ts) }, now);
+  const reception = new SlackReceptionService(settings, inbox, { readThread: async (_channel, ts) => snapshot(ts) }, now);
   let behavior: ModelBehavior = async call => {
     call.beforeCredentialAccess(); call.beforeTransmission(); return response();
   };
@@ -82,12 +82,13 @@ const fixture = async (context: TestContext) => {
         beforeTransmission: () => { beforeTransmission(); transmissions += 1; } });
     } });
   const services: SlackAnalysisService[] = [];
+  const notices: SlackAnalysisNotice[] = [];
   const closers: (() => void)[] = [];
   const serviceFor = (sessionStart = startedAt, reopened = false) => {
-    const currentSource = reopened ? new SqliteSlackAnalysisSource(join(directory, 'tasks.sqlite'), receiver) : source;
+    const currentSource = reopened ? new SqliteSlackAnalysisSource(join(directory, 'tasks.sqlite'), settings) : source;
     const currentStore = reopened ? new SqliteSlackAnalysisStore(join(directory, 'slack-analysis.sqlite')) : store;
     if (reopened) closers.push(() => { currentSource.close(); currentStore.close(); });
-    const service = new SlackAnalysisService(currentSource, currentStore, receiver, config, model, sessionStart, () => {}, now);
+    const service = new SlackAnalysisService(currentSource, currentStore, settings, config, model, sessionStart, notice => notices.push(notice), now);
     services.push(service); return service;
   };
   const service = serviceFor();
@@ -106,7 +107,7 @@ const fixture = async (context: TestContext) => {
     try { assert.equal(database.prepare('SELECT report_json FROM slack_analysis_runs WHERE run_id = ?').get(runId)?.report_json, null); }
     finally { database.close(); }
   };
-  return { directory, now, inbox, store, source, reception, service, serviceFor, receive, assertReportRemoved,
+  return { directory, now, inbox, store, source, reception, service, serviceFor, receive, assertReportRemoved, notices,
     setNow: (value: Date) => { clock = value; }, advance: () => { clock = new Date(clock.getTime() + 1000); },
     setSnapshot: (value: (ts: string) => SlackThreadSnapshot) => { snapshot = value; },
     setBehavior: (value: ModelBehavior) => { behavior = value; },
@@ -127,6 +128,78 @@ test('complete reception runs one fake analysis and duplicate delivery or reopen
   const reopened = value.serviceFor(startedAt, true);
   assert.equal(reopened.recover(), 0); reopened.tick(); await reopened.waitForIdle();
   assert.equal(value.store.list(value.now()).length, 1); assert.equal(value.counts().calls, 1);
+});
+
+const listId = 'FTESTLIST', itemId = 'RecSynthetic', threadTs = '1795000000.000000';
+const listSettings: SlackReceiverConfig = { ...receiver, channelIds: [], listId, listAnalysisEnabled: true };
+const listThread = (): SlackThreadSnapshot => ({ complete: true, reason: null, messages: [
+  { ts: threadTs, user: 'U_COLLEAGUE', text: '합성 스레드 앞선 대화입니다.' },
+  { ts: messageTs, user: 'U_REQUESTER', text: requestText },
+] });
+const registerListMention = (inbox: SqliteSlackInbox, now: number, thread = listThread()): void => {
+  const bindings = [{ itemId, threadTs }];
+  inbox.applyListSnapshot(listId, [], now - 1, bindings);
+  inbox.applyListSnapshot(listId, [{ itemId, commentId: messageTs, mentionsTarget: true, text: requestText }], now, bindings, true);
+  inbox.refreshListAnalysisThread(listId, itemId, threadTs, { thread, mentionTs: [messageTs] }, now);
+};
+
+test('리스트 단독 세션이 앞선 대화와 멘션을 한 번 분석하고 문맥 편집 후 초안을 무효화한다', async context => {
+  const value = await fixture(context, listSettings);
+  registerListMention(value.inbox, value.now().getTime());
+  assert.equal(value.source.connection(), null);
+  value.setBehavior(async call => {
+    assert.ok(call.dispatch.requestEnvelope.body.includes('합성 스레드 앞선 대화입니다.'));
+    call.beforeCredentialAccess(); call.beforeTransmission(); return response();
+  });
+  value.service.tick(); await value.service.waitForIdle(); value.service.tick();
+  const record = value.store.list(value.now())[0]!;
+  assert.deepEqual(record.report, report());
+  assert.deepEqual(value.notices.map(notice => [notice.status, notice.listId, notice.itemId, notice.commentId]), [
+    ['RUNNING', listId, itemId, messageTs], ['REPORTED', listId, itemId, messageTs],
+  ]);
+  value.advance();
+  const edited = listThread();
+  edited.messages[0]!.text = '일정이 변경되었습니다.';
+  value.inbox.refreshListAnalysisThread(listId, itemId, threadTs, { thread: edited, mentionTs: [messageTs] }, value.now().getTime());
+  value.service.tick();
+  assert.equal(value.store.find(record.runId, value.now())?.status, 'INVALIDATED');
+  value.assertReportRemoved(record.runId);
+  assert.equal(value.counts().transmissions, 1);
+});
+
+test('채널 연결 공백 중에도 리스트 멘션을 분석하고 불완전한 스레드는 한 번만 차단한다', async context => {
+  const value = await fixture(context, { ...listSettings, channelIds: receiver.channelIds });
+  await value.receive();
+  value.inbox.setConnection({ state: 'gap', reason: 'SYNTHETIC_GAP', at: value.now().toISOString() });
+  registerListMention(value.inbox, value.now().getTime(), { messages: [], complete: false, reason: 'SLACK_THREAD_PAGE_LIMIT' });
+  value.service.tick(); await value.service.waitForIdle(); value.service.tick();
+  const records = value.store.list(value.now());
+  assert.equal(records.length, 1); assert.equal(records[0]?.channelId, listId);
+  assert.equal(records[0]?.status, 'BLOCKED'); assert.equal(records[0]?.failureCode, 'SLACK_ANALYSIS_INCOMPLETE_THREAD');
+  assert.equal(value.counts().calls, 0);
+});
+
+test('현재 세션 시작 이전 발견한 리스트 멘션은 이후 스레드 재확인으로 분석되지 않는다', async context => {
+  const value = await fixture(context, listSettings);
+  registerListMention(value.inbox, startedAt.getTime() - 1000);
+  value.inbox.refreshListAnalysisThread(listId, itemId, threadTs, { thread: listThread(), mentionTs: [messageTs] }, value.now().getTime());
+  value.service.tick(); await value.service.waitForIdle();
+  assert.equal(value.counts().calls, 0); assert.equal(value.store.list(value.now()).length, 0);
+});
+
+test('리스트 스레드의 멘션이 실행 도중 삭제되면 뒤늦은 분석 결과를 저장하지 않는다', async context => {
+  const value = await fixture(context, listSettings);
+  registerListMention(value.inbox, value.now().getTime());
+  value.setBehavior(async call => {
+    call.beforeCredentialAccess(); call.beforeTransmission();
+    value.advance();
+    const deleted = listThread(); deleted.messages.pop();
+    value.inbox.refreshListAnalysisThread(listId, itemId, threadTs, { thread: deleted, mentionTs: [] }, value.now().getTime());
+    return response();
+  });
+  value.service.tick(); await value.service.waitForIdle();
+  const record = value.store.list(value.now())[0]!;
+  assert.equal(record.failureCode, 'SLACK_ANALYSIS_SOURCE_CHANGED'); value.assertReportRemoved(record.runId);
 });
 
 test('a new session skips prior-session intake and disconnected or pre-session connection states', async context => {

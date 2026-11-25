@@ -90,6 +90,21 @@ test('리스트 수신을 함께 켜도 채널 분석의 근거와 hash는 유�
   assert.equal(getterCalls, 0);
 });
 
+test('리스트 분석 범위에 허용된 항목과 문맥을 결합하고 다른 목록과 항목 식별자를 모델 입력에서 제외한다', () => {
+  const settings = { ...receiver, channelIds: [], listAnalysisEnabled: true as const, listIds: ['FALLOWED', 'FOTHER'] };
+  const value: SlackCollectedRequest = { ...request(), listItemId: 'RecSelected', channelId: 'FALLOWED' };
+  const result = buildSlackAnalysisPayload(value, settings, config);
+  assertSlackAnalysisDispatch(result.dispatch, config);
+  assert.equal(result.dispatch.requestEnvelope.body.includes('RecSelected'), false);
+  assert.equal(result.dispatch.requestEnvelope.body.includes('FOTHER'), false);
+  assert.notEqual(hashSlackAnalysisSource({ ...value, listItemId: 'RecOther' }, settings), result.sourceHash);
+  failure(() => buildSlackAnalysisPayload(value, { ...receiver, listId: 'FALLOWED' }, config), 'SOURCE_SCOPE');
+  failure(() => buildSlackAnalysisPayload({ ...value, channelId: 'FDENIED' }, settings, config), 'SOURCE_SCOPE');
+  failure(() => buildSlackAnalysisPayload({ ...value, channelId: 'C_SYNTHETIC' }, { ...settings, channelIds: receiver.channelIds }, config), 'SOURCE_SCOPE');
+  failure(() => buildSlackAnalysisPayload({ ...request(), channelId: 'FALLOWED' }, settings, config), 'SOURCE_SCOPE');
+  assert.equal(hashSlackAnalysisSource(request(), { ...settings, channelIds: receiver.channelIds }), hashSlackAnalysisSource(request(), receiver));
+});
+
 test('thread order, timestamp precision, duplicate aliases and older revisions fail closed', () => {
   const reversed = request(); reversed.thread!.messages.reverse();
   const duplicate = request(); duplicate.thread!.messages.push({ ...duplicate.thread!.messages[1]! });

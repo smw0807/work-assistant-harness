@@ -2,7 +2,7 @@ import { types } from 'node:util';
 import { HarnessError } from '../domain/errors.js';
 import type { ReadonlyReport } from '../domain/readonly-investigation.js';
 import type { ReadonlyRelayConfig, ReadonlyRelayDispatch } from '../domain/readonly-relay.js';
-import type { SlackCollectedRequest, SlackReceiverConfig } from '../domain/slack.js';
+import { getSlackListIds, type SlackCollectedRequest, type SlackReceiverConfig } from '../domain/slack.js';
 import { SLACK_ANALYSIS_POLICY, type SlackAnalysisEvidence, type SlackAnalysisPayload, type SlackAnalysisSource } from '../domain/slack-analysis.js';
 import { canonicalReadonlyJson, hashReadonlyValue, parseReadonlyEvidenceReport, READONLY_LIMITS, READONLY_OUTPUT_SCHEMA } from './readonly-investigation-policy.js';
 import { buildAnyReadonlyRelayRequestEnvelope, getAnyReadonlyRelayConfigHash, getAnyReadonlyRelayLimits,
@@ -60,14 +60,11 @@ export const parseSlackAnalysisRelayConfig = (input: unknown): ReadonlyRelayConf
 };
 const receiverSnapshot = (input: unknown): SlackReceiverConfig => {
   try {
-    if ((!record(input, receiverKeys) && !record(input, [...receiverKeys, 'listId']) && !record(input, [...receiverKeys, 'listIds']))
-      || (Object.hasOwn(input, 'listIds') && !array(input.listIds, 10, 1)) || !array(input.channelIds, 10, 1)
+    if (typeof input !== 'object' || input === null || types.isProxy(input)) fail('INVALID_CONFIG');
+    const keys = [...receiverKeys, ...['listId', 'listIds', 'listAnalysisEnabled'].filter(key => Object.hasOwn(input, key))];
+    if (!record(input, keys) || (Object.hasOwn(input, 'listIds') && !array(input.listIds, 10, 1)) || !array(input.channelIds, 10)
       || !record(input.thread, ['maxMessages', 'maxPages', 'maxBytes'])) fail('INVALID_CONFIG');
-    const channelConfig = parseSlackReceiverConfig(input);
-    // 리스트 감시 설정은 채널 분석의 자료나 기존 source hash에 포함하지 않는다.
-    delete channelConfig.listId;
-    delete channelConfig.listIds;
-    return channelConfig;
+    return parseSlackReceiverConfig(input);
   } catch { return fail('INVALID_CONFIG'); }
 };
 const validateSource: (value: unknown) => asserts value is SlackAnalysisSource = value => {
@@ -130,15 +127,20 @@ const dispatchWire = (input: unknown) => {
 const prepareSource = (request: SlackCollectedRequest, receiverInput: SlackReceiverConfig) => {
   try {
     const receiver = receiverSnapshot(receiverInput);
-    if (!record(request, requestKeys) || request.status !== 'RECORDED' || request.failureCode !== null
-      || !text(request.text, 16_384) || !record(request.thread, ['messages', 'complete', 'reason'])
+    if (!record(request, requestKeys) && !record(request, [...requestKeys, 'listItemId'])) fail('INVALID_SOURCE');
+    const isList = Object.hasOwn(request, 'listItemId');
+    if (request.status !== 'RECORDED' || request.failureCode !== null
+      || !text(request.text, isList ? receiver.thread.maxBytes : 16_384) || !record(request.thread, ['messages', 'complete', 'reason'])
       || request.thread.complete !== true || request.thread.reason !== null
       || !array(request.thread.messages, receiver.thread.maxMessages, 1)) fail('INVALID_SOURCE');
     const source: SlackAnalysisSource = { workspaceId: request.workspaceId, channelId: request.channelId, messageTs: request.messageTs,
       threadTs: request.threadTs, requesterId: request.requesterId, targetUserId: receiver.targetUserId, revision: request.revision,
       eventId: request.eventId, updatedAt: request.updatedAt };
     validateSource(source);
-    if (source.workspaceId !== receiver.workspaceId || !receiver.channelIds.includes(source.channelId)) fail('SOURCE_SCOPE');
+    if (source.workspaceId !== receiver.workspaceId) fail('SOURCE_SCOPE');
+    if (isList) {
+      if (!receiver.listAnalysisEnabled || !id(request.listItemId) || !getSlackListIds(receiver).includes(source.channelId)) fail('SOURCE_SCOPE');
+    } else if (!receiver.channelIds.includes(source.channelId)) fail('SOURCE_SCOPE');
     let originalBytes = 2;
     const evidence: SlackAnalysisEvidence[] = request.thread.messages.map((message, index) => {
       if (!record(message, ['ts', 'user', 'text']) || !ts(message.ts) || !id(message.user)
@@ -152,7 +154,14 @@ const prepareSource = (request: SlackCollectedRequest, receiverInput: SlackRecei
     validateEvidence(evidence, source);
     if (evidence.find(entry => entry.ts === source.messageTs)!.excerpt !== redactSlackText(request.text)
       || Buffer.byteLength(JSON.stringify(evidence.map(entry => ({ ts: entry.ts, user: entry.user, text: entry.excerpt })))) > receiver.thread.maxBytes) fail('SOURCE_MISMATCH');
-    const receiverHash = hashReadonlyValue(canonicalReadonlyJson(receiver)), input = wireInput(source, evidence, receiverHash);
+    // 채널의 기존 hash를 유지하고 리스트 항목 ID는 전송하는 대신 로컬 범위 hash에 결합한다.
+    const scope = isList ? { receiver, listItemId: request.listItemId } : receiver;
+    if (!isList) {
+      delete receiver.listId;
+      delete receiver.listIds;
+      delete receiver.listAnalysisEnabled;
+    }
+    const receiverHash = hashReadonlyValue(canonicalReadonlyJson(scope)), input = wireInput(source, evidence, receiverHash);
     const inputText = canonicalReadonlyJson(input);
     if (Buffer.byteLength(inputText) > READONLY_LIMITS.inputBytes || containsSensitiveText(inputText)) fail('INPUT_LIMIT');
     return { source, evidence, receiverHash, sourceHash: input.sourceHash, inputText };

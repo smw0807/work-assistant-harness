@@ -34,10 +34,13 @@ export const parseSlackReceiverConfig = (input: unknown): SlackReceiverConfig =>
   const keys = ['workspaceId', 'channelIds', 'targetUserId', 'retentionHours', 'maxPending', 'thread', 'liveReadEnabled'];
   const thread = asSlackRecord(value?.['thread']);
   const listIds = value ? parseListIds(value) : [];
-  if (!value || !keys.every(key => Object.hasOwn(value, key)) || Object.keys(value).some(key => key !== 'listId' && key !== 'listIds' && !keys.includes(key))
+  const allowedKeys = [...keys, 'listId', 'listIds', 'listAnalysisEnabled'];
+  if (!value || !keys.every(key => Object.hasOwn(value, key)) || Object.keys(value).some(key => !allowedKeys.includes(key))
+    || (Object.hasOwn(value, 'listAnalysisEnabled') && (value.listAnalysisEnabled !== true || !listIds.length))
     || !isId(value['workspaceId']) || !isId(value['targetUserId'])
     || !Array.isArray(value['channelIds']) || (listIds.length === 0 && value['channelIds'].length === 0) || value['channelIds'].length > 10
     || !value['channelIds'].every(isId) || new Set(value['channelIds']).size !== value['channelIds'].length
+    || value.channelIds.some(channelId => listIds.includes(channelId))
     || !isBoundedInteger(value['retentionHours'], 1, 168) || !isBoundedInteger(value['maxPending'], 1, 1_000)
     || typeof value['liveReadEnabled'] !== 'boolean' || !thread
     || Object.keys(thread).length !== 3 || Object.keys(thread).some((key) => !['maxMessages', 'maxPages', 'maxBytes'].includes(key))
@@ -48,6 +51,7 @@ export const parseSlackReceiverConfig = (input: unknown): SlackReceiverConfig =>
   return {
     workspaceId: value['workspaceId'], channelIds: [...value['channelIds']], targetUserId: value['targetUserId'],
     ...(listIds.length === 1 ? { listId: listIds[0]! } : listIds.length > 1 ? { listIds } : {}),
+    ...(value.listAnalysisEnabled === true ? { listAnalysisEnabled: true } : {}),
     retentionHours: value['retentionHours'], maxPending: value['maxPending'], liveReadEnabled: value['liveReadEnabled'],
     thread: { maxMessages: thread['maxMessages'], maxPages: thread['maxPages'], maxBytes: thread['maxBytes'] },
   };

@@ -68,7 +68,7 @@ ID는 서로 다른 값으로 최대 10개까지 지정할 수 있습니다. env
 
 시작 로그의 `"listAuth": "user"`는 리스트 전용 토큰을 선택했다는 뜻입니다. 하네스는 `auth.test`로 워크스페이스와 사용자 ID를 확인한 뒤, 그 토큰으로 설정한 모든 리스트를 조회합니다. `SLACK_LIST_USER_MISMATCH`가 나오면 토큰을 승인한 계정의 멤버 ID와 `SLACK_TARGET_USER_ID`를 확인하세요. 전용 토큰을 생략하면 `"listAuth": "web"`이 표시되고 `SLACK_WEB_TOKEN`으로 조회합니다. 채널도 감시할 때는 기존 `SLACK_APP_TOKEN`과 `SLACK_WEB_TOKEN`을 유지하세요. 리스트만 감시할 때는 두 조회 권한을 갖춘 `SLACK_LIST_USER_TOKEN` 하나를 사용할 수 있습니다.
 
-`slack-listen`은 `auth.test`로 워크스페이스를 확인한 뒤 리스트를 지정한 순서로 조회합니다. 각 리스트의 활성 항목과 댓글을 JSON으로 내보내며 첨부 메타데이터와 보관한 항목은 제외합니다. 한 리스트에서 오류가 나도 다음 리스트를 조회합니다. 한 차례 순회가 끝나면 다음 내보내기까지 5분 동안, 내보내기에서 `record.thread_ts`가 확인된 항목의 스레드를 `conversations.replies`로 한 페이지씩 돌아가며 조회합니다. 채널 ID를 함께 설정하면 Socket Mode 수신도 병행합니다. 리스트만 감시하는 경우 env의 채널 ID와 앱 토큰을 생략하고 JSON에서는 `channelIds: []`를 사용합니다. 채널용 Codex 분석은 채널을 함께 감시할 때만 실행할 수 있습니다. [내보내기 시작](https://docs.slack.dev/reference/methods/slackLists.download.start/) · [결과 조회](https://docs.slack.dev/reference/methods/slackLists.download.get/)
+`slack-listen`은 `auth.test`로 워크스페이스를 확인한 뒤 리스트를 지정한 순서로 조회합니다. 각 리스트의 활성 항목과 댓글을 JSON으로 내보내며 첨부 메타데이터와 보관한 항목은 제외합니다. 한 리스트에서 오류가 나도 다음 리스트를 조회합니다. 한 차례 순회가 끝나면 다음 내보내기까지 5분 동안, 내보내기에서 `record.thread_ts`가 확인된 항목의 스레드를 `conversations.replies`로 한 페이지씩 돌아가며 조회합니다. 채널 ID를 함께 설정하면 Socket Mode 수신도 병행합니다. 리스트만 감시하는 경우 env의 채널 ID와 앱 토큰을 생략하고 JSON에서는 `channelIds: []`를 사용합니다. 아래의 리스트 분석 설정을 켜면 채널을 등록하지 않아도 새 멘션 스레드를 분석할 수 있습니다. [내보내기 시작](https://docs.slack.dev/reference/methods/slackLists.download.start/) · [결과 조회](https://docs.slack.dev/reference/methods/slackLists.download.get/)
 
 각 리스트의 첫 내보내기에 성공하면 기존 댓글 ID를 기록하고 그 요청의 시작 시각부터 스레드의 새 답글을 확인합니다. 업그레이드한 기존 DB에서는 항목별로 저장해 둔 마지막 Slack 댓글 시각을 사용합니다. 저장한 댓글 시각이 없으면 직전 내보내기 시각을 사용합니다. 이후에는 직접 조회로 저장한 페이지의 마지막 답글 다음부터 이어갑니다.
 
@@ -85,6 +85,16 @@ ID는 서로 다른 값으로 최대 10개까지 지정할 수 있습니다. env
 - `SLACK_LIST_EXPORT_SCHEMA`는 내보내기가 잘렸거나 항목·댓글 형식을 검증할 수 없다는 뜻입니다. 해당 내보내기는 기준점과 댓글 목록에 반영하지 않고 다음 순회에서 재시도합니다. 댓글에 오류가 있어도 이번 응답에서 항목 ID와 `thread_ts`의 연결을 확인할 수 있으면, 이미 등록해 둔 같은 스레드는 저장된 위치부터 직접 조회합니다. 새로운 항목은 정상 내보내기에서 등록합니다.
 
 ## Slack 본인 멘션 자동 분석
+
+리스트 댓글도 분석하려면 수신에 사용하는 env 파일에서 `SLACK_ANALYSIS_ENABLED=true`, `SLACK_LIST_ANALYSIS_ENABLED=true`와 `SLACK_ANALYSIS_CODEX_CONFIG`를 설정한 뒤 수신기를 재시작하세요. 리스트만 등록해도 동작합니다. 기본 설정에서는 리스트 멘션 감지와 발췌문 조회까지만 수행합니다.
+
+새 직접 멘션을 감지하면 수신기가 그 항목의 루트부터 댓글까지 다시 조회합니다. 분석기는 한도 안에서 전체 스레드와 원문 멘션을 확인한 뒤 초안을 만듭니다. 터미널에서 `slack-list-poll`의 `mention`에 이어 `slack-analysis`의 `RUNNING`과 `REPORTED`를 확인할 수 있습니다. 조회 권한이나 페이지·메시지·바이트 한도 때문에 문맥이 불완전하면 모델 호출을 건너뜁니다. 후속 조회에서 스레드 변경·삭제를 확인하거나 읽기 오류로 문맥을 확인할 수 없게 되면 기존 초안을 무효화합니다. 시작 로그의 `listAnalysisEnabled`에서 현재 수신기에 적용된 설정을 볼 수 있습니다.
+
+`mention` 로그의 `listId`와 타임스탬프 형식의 `commentId`를 사용해 결과를 조회하세요. 한국어 답변 초안은 `analysis.results[].report.answerDraft`에 있습니다.
+
+```sh
+pnpm harness slack-inspect "$LIST_ID" "$COMMENT_ID" --env-file "$SLACK_ENV_FILE" --data-dir "$SLACK_DATA_DIR"
+```
 
 `slack-listen --env-file <private-env>`로 본인 멘션과 해당 스레드만 기존 Codex relay에 연결할 수 있습니다. 새 설정 예시는 [.env.example](../../.env.example)입니다. 파일은 저장소 밖의 소유자 전용 0600 파일로 준비합니다. 채널 이름 대신 **채널 ID**를 쉼표로 구분하고 Slack의 workspace ID·본인 사용자 ID도 지정합니다. `.env`를 자동 탐색하지 않으며 `--env`는 현재 프로세스 환경만, `--env-file`은 지정한 파일만 사용합니다. 둘과 기존 `--config`는 함께 사용할 수 없습니다.
 

@@ -45,6 +45,7 @@ pnpm harness inspect <task-id> --data-dir /private/tmp/harness-demo-data
 | `SLACK_LIST_USER_TOKEN` | 선택 사항. 본인이 볼 수 있는 리스트를 감시할 때 쓰는 User OAuth Token. 내보내기에는 `lists:read`, 스레드 직접 조회에는 해당 대화의 접근 권한과 history scope가 필요합니다. |
 | `SLACK_LIVE_READ_ENABLED` | 실제 수신을 켤 때 `true` |
 | `SLACK_ANALYSIS_ENABLED` | Codex 분석을 켤 때 `true` |
+| `SLACK_LIST_ANALYSIS_ENABLED` | 리스트에서 새로 멘션된 항목의 스레드도 Codex에 보내려면 `true`. 기본값은 `false`이며 위 분석 설정을 함께 켭니다. |
 | `SLACK_ANALYSIS_CODEX_CONFIG` | 하네스 전용 Codex relay JSON의 절대 경로 |
 
 채널 이름 대신 ID를 사용합니다. `.env`는 자동으로 읽지 않으며, env 파일 안의 `~`·`$HOME`도 확장하지 않습니다. 토큰을 JSON이나 Git에 넣지 않습니다. Slack 앱 권한, JSON 필드, 지원 Codex 바이너리와 SHA-256은 [Slack 설정 가이드](docs/guides/slack.md)를 따릅니다.
@@ -68,6 +69,7 @@ pnpm harness slack-listen --env-file /absolute/private/slack.env --data-dir /abs
 ```sh
 pnpm harness slack-list --env-file /absolute/private/slack.env --data-dir /absolute/private/slack-data
 pnpm harness slack-inspect <channel-id> <message-ts> --env-file /absolute/private/slack.env --data-dir /absolute/private/slack-data
+pnpm harness slack-inspect <list-id> <comment-ts> --env-file /absolute/private/slack.env --data-dir /absolute/private/slack-data
 ```
 
 `slack-list`는 요청별 분석 상태를, `slack-inspect`는 수집 문맥과 분석 결과를 보여 줍니다. 이번 세션에 받은 완전한 스레드만 분석하며 같은 revision은 한 번만 시도합니다. 동시 분석은 1건, runtime별 UTC 하루 최대 20시도이고 실패 후 자동 재시도는 없습니다. 과거 메시지나 연결이 끊긴 동안의 누락을 자동으로 채우지 않습니다.

@@ -100,8 +100,10 @@ const run = async (): Promise<void> => {
         ...(listIds.length > 0 ? { listMentions: inbox.listMentions() } : {}),
         total: requests.length, truncated: requests.length > 100, connection: inbox.connection(), connectionHistory: inbox.connectionHistory() });
     } else if (options.command === 'slack-inspect') {
-      if (!options.config.channelIds.includes(options.channelId)) throw new HarnessError('SLACK_CHANNEL_DENIED');
-      const request = inbox.find(options.config.workspaceId, options.channelId, options.messageTs);
+      const isList = listIds.includes(options.channelId);
+      if (!isList && !options.config.channelIds.includes(options.channelId)) throw new HarnessError('SLACK_CHANNEL_DENIED');
+      const request = isList ? inbox.findListAnalysisRequest(options.channelId, options.messageTs)
+        : inbox.find(options.config.workspaceId, options.channelId, options.messageTs);
       if (!request) throw new HarnessError('SLACK_REQUEST_NOT_FOUND');
       result({ request });
     } else if (options.command === 'slack-replay') {
@@ -127,13 +129,19 @@ const run = async (): Promise<void> => {
           throw error;
         }
         if (channelEnabled) scheduleDrain();
-        result({ status: 'starting', recovered, ...(listIds.length > 0 ? { listIds, listAuth: listUserToken ? 'user' : 'web' } : {}) });
+        result({ status: 'starting', recovered, ...(listIds.length > 0 ? {
+          listIds, listAuth: listUserToken ? 'user' : 'web', listAnalysisEnabled: options.config.listAnalysisEnabled === true,
+        } : {}) });
         const { workspaceId, targetUserId } = options.config;
         if (listClient && listThreads) {
           const reader = {
             ...(listUserToken ? { verifyIdentity: (signal: AbortSignal) => listThreads.verifyWorkspace(workspaceId, signal, targetUserId) } : {}),
             read: listClient.read.bind(listClient),
             readListThreadPage: listThreads.readListThreadPage.bind(listThreads),
+            ...(options.config.listAnalysisEnabled ? {
+              readListAnalysisThread: (listId: string, itemId: string, threadTs: string, signal: AbortSignal) =>
+                listThreads.readListAnalysisThread(listId, itemId, threadTs, targetUserId, options.config.thread, signal),
+            } : {}),
           };
           activeSources.push(pollSlackLists({ workspaceId, targetUserId, listIds }, reader, inbox, controller.signal,
             notice => process.stdout.write(`${JSON.stringify({ event: 'slack-list-poll', ...notice })}\n`)));

@@ -9,7 +9,9 @@ import type { SlackWorkerOptions } from '../src/cli/slack.js';
 import { pollSlackLists } from '../src/application/poll-slack-list.js';
 
 const unexpectedThreadCall = (): never => assert.fail('이 fixture에는 등록된 스레드가 없습니다.');
-const emptyThreadInbox = { getListThreadCursor: unexpectedThreadCall, applyListThreadReplies: unexpectedThreadCall };
+const emptyThreadInbox = { getListThreadCursor: unexpectedThreadCall, applyListThreadReplies: unexpectedThreadCall,
+  listAnalysisThreads: unexpectedThreadCall, refreshListAnalysisThread: unexpectedThreadCall,
+  invalidateListAnalysis: unexpectedThreadCall, recoverListAnalysis: unexpectedThreadCall };
 
 const runSyntheticWorker = async (options: SlackWorkerOptions, preload: string, env: Record<string, string>,
   finished: (output: string) => boolean): Promise<string> => {

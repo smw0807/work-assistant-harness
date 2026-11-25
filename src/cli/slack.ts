@@ -21,7 +21,7 @@ export interface SlackWorkerOptions {
   analysisConfigPath?: string;
 }
 
-export const slackUsage = 'pnpm harness slack-replay [--events <synthetic-json>] [--config <json> | --env | --env-file <private-env>] [--data-dir <private-directory>]\npnpm harness slack-list [--config <json> | --env | --env-file <private-env>] [--data-dir <private-directory>]\npnpm harness slack-inspect <channel-id> <message-ts> [--config <json> | --env | --env-file <private-env>] [--data-dir <private-directory>]\npnpm harness slack-listen (--config <json> | --env | --env-file <private-env>) [--data-dir <private-directory>]';
+export const slackUsage = 'pnpm harness slack-replay [--events <synthetic-json>] [--config <json> | --env | --env-file <private-env>] [--data-dir <private-directory>]\npnpm harness slack-list [--config <json> | --env | --env-file <private-env>] [--data-dir <private-directory>]\npnpm harness slack-inspect <channel-or-list-id> <message-ts> [--config <json> | --env | --env-file <private-env>] [--data-dir <private-directory>]\npnpm harness slack-listen (--config <json> | --env | --env-file <private-env>) [--data-dir <private-directory>]';
 
 interface ParsedArguments { options: SlackWorkerOptions; environment: SlackEnvironmentSettings | null }
 const parseArguments = async (args: string[], sourceRoot: string): Promise<ParsedArguments> => {
@@ -55,6 +55,9 @@ const parseArguments = async (args: string[], sourceRoot: string): Promise<Parse
   const config = environment ? environment.config : parseSlackReceiverConfig(JSON.parse(await readFile(await assertSafeEventFile(
     flags.get('--config') ?? join(sourceRoot, 'config', 'slack.example.json')), 'utf8')));
   if (command === 'slack-listen' && !config.liveReadEnabled) throw new HarnessError('SLACK_LIVE_READ_DISABLED');
+  if (command === 'slack-listen' && config.listAnalysisEnabled && !environment?.analysisConfigPath) {
+    throw new HarnessError('SLACK_ANALYSIS_CONFIG_REQUIRED');
+  }
   const eventsPath = command === 'slack-replay'
     ? await assertSafeEventFile(flags.get('--events') ?? join(sourceRoot, 'fixtures', 'slack', 'receive.json')) : '';
   const dataDirectory = await prepareDataDirectory(flags.get('--data-dir') ?? defaultDataDirectory(), sourceRoot);
@@ -101,7 +104,7 @@ export const runSlackCommand = async (args: string[]): Promise<void> => {
       process.stdout.write(appendSlackAnalysisResults(output, options));
       return;
     }
-    if (analysisConfigPath && options.config.channelIds.length > 0) {
+    if (analysisConfigPath) {
       await runSlackAnalysisPair(executable, workerArgs,
         [join(sourceRoot, 'dist', 'src', 'cli', 'slack-analysis-worker.js'), JSON.stringify(options)], sourceRoot, receiverEnvironment);
       return;

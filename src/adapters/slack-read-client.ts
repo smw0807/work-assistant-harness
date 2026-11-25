@@ -1,5 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { HarnessError } from '../domain/errors.js';
+import type { SlackListAnalysisThread } from '../domain/slack.js';
+import { parseSlackListAnalysisMessage } from '../policy/slack-list-export.js';
 import { compareSlackTimestamps, isSlackTimestamp } from '../policy/slack-timestamp.js';
 import { validateSlackSocketUrl } from './slack-socket-transport.js';
 
@@ -54,15 +56,30 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 };
 
+const matchesListItem = (message: Record<string, unknown>, listId: string, itemId: string, channel: string): boolean => {
+  if ((message.channel !== undefined && message.channel !== channel)
+    || (message.list_id !== undefined && message.list_id !== listId)
+    || [message.item_id, message.record_id, message.list_record_id].some(id => id !== undefined && id !== itemId)) return false;
+  if (message.list_record === undefined) return true;
+  if (!isRecord(message.list_record)) return false;
+  const row = message.list_record.record ?? message.list_record;
+  return isRecord(row) && (row.list_id === undefined || row.list_id === listId)
+    && [row.record_id, row.id].every(id => id === undefined || id === itemId);
+};
+
+const listPageCursor = (response: Record<string, unknown>): string => {
+  if ((response.has_more !== undefined && typeof response.has_more !== 'boolean')
+    || (response.response_metadata !== undefined && !isRecord(response.response_metadata))) throw new HarnessError('SLACK_INVALID_RESPONSE');
+  const raw = response.response_metadata?.next_cursor;
+  if (raw != null && (typeof raw !== 'string' || raw.length > 2048)) throw new HarnessError('SLACK_INVALID_RESPONSE');
+  return raw?.trim() ?? '';
+};
+
 const parseListReplyPage = (response: Record<string, unknown>, channel: string, threadTs: string, oldest: string) => {
-  if (!Array.isArray(response.messages) || response.messages.length > listReplyPageSize + 1
-    || (response.has_more !== undefined && typeof response.has_more !== 'boolean')
-    || (response.response_metadata !== undefined && !isRecord(response.response_metadata))) {
+  if (!Array.isArray(response.messages) || response.messages.length > listReplyPageSize + 1) {
     throw new HarnessError('SLACK_INVALID_RESPONSE');
   }
-  const rawCursor = response.response_metadata?.next_cursor;
-  if (rawCursor != null && (typeof rawCursor !== 'string' || rawCursor.length > 2048)) throw new HarnessError('SLACK_INVALID_RESPONSE');
-  const nextCursor = rawCursor?.trim() ?? '';
+  const nextCursor = listPageCursor(response);
   const messages: unknown[] = [];
   let lastTs = oldest;
   for (const [index, message] of response.messages.entries()) {
@@ -167,16 +184,20 @@ export class SlackReadClient {
     }
   }
 
-  /** 리스트 ID에서 파일 대화 ID를 정한다. 내보내기나 댓글이 임의의 조회 채널을 지정할 수 없다. */
-  async readListThreadPage(listId: string, threadTs: string, oldest: string, signal: AbortSignal):
-    Promise<{ messages: unknown[]; hasMore: boolean }> {
+  private listChannel(listId: string): string {
     if (!/^F[A-Z0-9]{1,63}$/.test(listId) || !this.options.allowedListIds?.includes(listId)) {
       throw new HarnessError('SLACK_LIST_DENIED');
     }
+    return `C${listId.slice(1)}`;
+  }
+
+  /** 리스트 ID에서 파일 대화 ID를 정한다. 내보내기나 댓글이 임의의 조회 채널을 지정할 수 없다. */
+  async readListThreadPage(listId: string, threadTs: string, oldest: string, signal: AbortSignal):
+    Promise<{ messages: unknown[]; hasMore: boolean }> {
+    const channel = this.listChannel(listId);
     if (!isSlackTimestamp(threadTs) || !isSlackTimestamp(oldest) || compareSlackTimestamps(oldest, threadTs) < 0) {
       throw new HarnessError('SLACK_INVALID_THREAD');
     }
-    const channel = `C${listId.slice(1)}`;
     const parameters = new URLSearchParams({
       channel, ts: threadTs, oldest, inclusive: 'false', limit: String(listReplyPageSize),
     });
@@ -191,6 +212,76 @@ export class SlackReadClient {
       parameters.set('cursor', nextCursor);
     }
     throw new HarnessError('SLACK_THREAD_PAGE_LIMIT');
+  }
+
+  /** 현재 내보내기에 등록된 항목의 루트부터 다시 읽는다. 불완전한 응답은 분석 근거를 반환하지 않는다. */
+  async readListAnalysisThread(listId: string, itemId: string, threadTs: string, targetUserId: string,
+    limits: SlackThreadLimits, signal: AbortSignal): Promise<SlackListAnalysisThread> {
+    const channel = this.listChannel(listId);
+    if (!isSlackTimestamp(threadTs) || !/^[A-Za-z0-9_-]{1,128}$/.test(itemId) || !/^[UW][A-Z0-9_]{1,63}$/.test(targetUserId)) {
+      throw new HarnessError('SLACK_INVALID_THREAD');
+    }
+    validateInteger(limits.maxMessages, 1, 100);
+    validateInteger(limits.maxPages, 1, 10);
+    validateInteger(limits.maxBytes, 1, 65_536);
+    const messages: SlackThreadResult['messages'] = [];
+    const mentionTs: string[] = [];
+    const incomplete = (reason: string): SlackListAnalysisThread => ({ thread: { complete: false, reason, messages: [] }, mentionTs: [] });
+    const seenCursors = new Set<string>();
+    const parameters = new URLSearchParams({ channel, ts: threadTs, limit: String(Math.min(listReplyPageSize, limits.maxMessages)) });
+    let replyCount: number | undefined;
+    let latestReply: string | undefined;
+    let totalBytes = 2;
+    try {
+      for (let page = 0; page < limits.maxPages; page++) {
+        const response = await this.request('thread', parameters, signal);
+        if (signal.aborted) return incomplete('SLACK_REQUEST_CANCELLED');
+        if (response.is_limited === true || !Array.isArray(response.messages) || response.messages.length > listReplyPageSize + 1) {
+          return incomplete('SLACK_INVALID_RESPONSE');
+        }
+        const cursor = listPageCursor(response);
+        for (const [index, raw] of response.messages.entries()) {
+          if (!isRecord(raw) || !matchesListItem(raw, listId, itemId, channel)) return incomplete('SLACK_INVALID_RESPONSE');
+          const root = raw.ts === threadTs;
+          if (root ? index !== 0 || (raw.thread_ts !== undefined && raw.thread_ts !== threadTs)
+            : !messages.length || raw.thread_ts !== threadTs) return incomplete('SLACK_INVALID_RESPONSE');
+          const { message, mentionsTarget } = parseSlackListAnalysisMessage(raw, targetUserId, root);
+          if (root) {
+            if (typeof raw.reply_count !== 'number' || !Number.isSafeInteger(raw.reply_count) || raw.reply_count < 0
+              || (raw.latest_reply !== undefined && !isSlackTimestamp(raw.latest_reply))) return incomplete('SLACK_INVALID_RESPONSE');
+            if (raw.reply_count + 1 > limits.maxMessages) return incomplete('SLACK_THREAD_MESSAGE_LIMIT');
+            if (messages.length > 0) {
+              // 일부 페이지가 부모를 반복한다. 페이지 사이에서 답글 수나 루트의 내용이 달라지면 다시 수집해야 한다.
+              if (replyCount !== raw.reply_count || latestReply !== raw.latest_reply || messages[0]!.user !== message.user
+                || messages[0]!.text !== message.text) return incomplete('SLACK_INVALID_RESPONSE');
+              continue;
+            }
+            replyCount = raw.reply_count;
+            latestReply = raw.latest_reply;
+          } else if (compareSlackTimestamps(message.ts, messages.at(-1)!.ts) <= 0) {
+            return incomplete('SLACK_INVALID_RESPONSE');
+          }
+          if (messages.length >= limits.maxMessages) return incomplete('SLACK_THREAD_MESSAGE_LIMIT');
+          totalBytes += Buffer.byteLength(JSON.stringify(message)) + (messages.length ? 1 : 0);
+          if (totalBytes > limits.maxBytes) return incomplete('SLACK_THREAD_BYTE_LIMIT');
+          messages.push(message);
+          if (mentionsTarget) mentionTs.push(message.ts);
+        }
+        if (!cursor) {
+          if (response.has_more === true) return incomplete('SLACK_THREAD_MISSING_CURSOR');
+          if (replyCount !== messages.length - 1 || (latestReply !== undefined && latestReply !== messages.at(-1)?.ts)) {
+            return incomplete('SLACK_INVALID_RESPONSE');
+          }
+          return { thread: { messages, complete: true, reason: null }, mentionTs };
+        }
+        if (seenCursors.has(cursor)) return incomplete('SLACK_THREAD_REPEATED_CURSOR');
+        seenCursors.add(cursor);
+        parameters.set('cursor', cursor);
+      }
+      return incomplete('SLACK_THREAD_PAGE_LIMIT');
+    } catch (error) {
+      return incomplete(error instanceof HarnessError ? error.code : 'SLACK_THREAD_READ_FAILED');
+    }
   }
 
   async readThread(channelId: string, threadTs: string, requestedLimits?: SlackThreadLimits, signal?: AbortSignal): Promise<SlackThreadResult> {

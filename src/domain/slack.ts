@@ -3,6 +3,7 @@ import type { IngestionPolicy } from './types.js';
 export interface SlackReceiverConfig extends IngestionPolicy {
   listId?: string;
   listIds?: string[];
+  listAnalysisEnabled?: true;
   retentionHours: number;
   maxPending: number;
   thread: { maxMessages: number; maxPages: number; maxBytes: number };
@@ -31,6 +32,11 @@ export interface SlackThreadSnapshot {
   reason: string | null;
 }
 
+export interface SlackListAnalysisThread {
+  thread: SlackThreadSnapshot;
+  mentionTs: string[];
+}
+
 export interface SlackInboxItem {
   event: SlackMessageChange;
   state: 'pending' | 'processing' | 'done' | 'blocked';
@@ -42,6 +48,7 @@ export interface SlackInboxItem {
 export interface SlackCollectedRequest {
   workspaceId: string;
   channelId: string;
+  listItemId?: string;
   messageTs: string;
   threadTs: string;
   requesterId: string;
