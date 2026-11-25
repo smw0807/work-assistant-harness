@@ -2,6 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { HarnessError } from '../domain/errors.js';
 import type { SlackListAnalysisThread } from '../domain/slack.js';
 import { parseSlackListAnalysisMessage } from '../policy/slack-list-export.js';
+import { SLACK_THREAD_LIMITS } from '../policy/slack-ingestion.js';
 import { compareSlackTimestamps, isSlackTimestamp } from '../policy/slack-timestamp.js';
 import { validateSlackSocketUrl } from './slack-socket-transport.js';
 
@@ -9,7 +10,6 @@ const maxResponseBytes = 262_144;
 const maxRetryDelayMs = 60_000;
 const listReplyPageSize = 15;
 const maxListReplyCursorPages = 5;
-const timestampPattern = /^\d{1,20}\.\d{1,20}$/;
 const identifierPattern = /^[A-Za-z0-9_]{1,128}$/;
 type SlackApiOperation = 'socket' | 'thread' | 'identity';
 const knownApiErrors = new Set([
@@ -56,9 +56,15 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 };
 
-const matchesListItem = (message: Record<string, unknown>, listId: string, itemId: string, channel: string): boolean => {
-  if ((message.channel !== undefined && message.channel !== channel)
-    || (message.list_id !== undefined && message.list_id !== listId)
+const parseChannelThreadMessage = (raw: Record<string, unknown>) => {
+  if (!isSlackTimestamp(raw.ts) || typeof raw.user !== 'string' || !identifierPattern.test(raw.user) || typeof raw.text !== 'string') {
+    throw new HarnessError('SLACK_THREAD_UNSUPPORTED_MESSAGE');
+  }
+  return { message: { ts: raw.ts, user: raw.user, text: raw.text }, mentionsTarget: false };
+};
+
+const matchesListItem = (message: Record<string, unknown>, listId: string, itemId: string): boolean => {
+  if ((message.list_id !== undefined && message.list_id !== listId)
     || [message.item_id, message.record_id, message.list_record_id].some(id => id !== undefined && id !== itemId)) return false;
   if (message.list_record === undefined) return true;
   if (!isRecord(message.list_record)) return false;
@@ -67,7 +73,7 @@ const matchesListItem = (message: Record<string, unknown>, listId: string, itemI
     && [row.record_id, row.id].every(id => id === undefined || id === itemId);
 };
 
-const listPageCursor = (response: Record<string, unknown>): string => {
+const threadPageCursor = (response: Record<string, unknown>): string => {
   if ((response.has_more !== undefined && typeof response.has_more !== 'boolean')
     || (response.response_metadata !== undefined && !isRecord(response.response_metadata))) throw new HarnessError('SLACK_INVALID_RESPONSE');
   const raw = response.response_metadata?.next_cursor;
@@ -79,7 +85,7 @@ const parseListReplyPage = (response: Record<string, unknown>, channel: string, 
   if (!Array.isArray(response.messages) || response.messages.length > listReplyPageSize + 1) {
     throw new HarnessError('SLACK_INVALID_RESPONSE');
   }
-  const nextCursor = listPageCursor(response);
+  const nextCursor = threadPageCursor(response);
   const messages: unknown[] = [];
   let lastTs = oldest;
   for (const [index, message] of response.messages.entries()) {
@@ -221,42 +227,60 @@ export class SlackReadClient {
     if (!isSlackTimestamp(threadTs) || !/^[A-Za-z0-9_-]{1,128}$/.test(itemId) || !/^[UW][A-Z0-9_]{1,63}$/.test(targetUserId)) {
       throw new HarnessError('SLACK_INVALID_THREAD');
     }
-    validateInteger(limits.maxMessages, 1, 100);
-    validateInteger(limits.maxPages, 1, 10);
-    validateInteger(limits.maxBytes, 1, 65_536);
+    return this.collectThread(channel, threadTs, limits, signal, { listId, itemId, targetUserId });
+  }
+
+  async readThread(channelId: string, threadTs: string, limits: SlackThreadLimits = SLACK_THREAD_LIMITS, signal?: AbortSignal): Promise<SlackThreadResult> {
+    if (!identifierPattern.test(channelId) || !isSlackTimestamp(threadTs)) throw new HarnessError('SLACK_INVALID_THREAD');
+    return (await this.collectThread(channelId, threadTs, limits, signal)).thread;
+  }
+
+  private async collectThread(channel: string, threadTs: string, limits: SlackThreadLimits, signal?: AbortSignal,
+    list?: { listId: string; itemId: string; targetUserId: string }): Promise<SlackListAnalysisThread> {
+    validateInteger(limits.maxMessages, 1, SLACK_THREAD_LIMITS.maxMessages);
+    validateInteger(limits.maxPages, 1, SLACK_THREAD_LIMITS.maxPages);
+    validateInteger(limits.maxBytes, 1, SLACK_THREAD_LIMITS.maxBytes);
     const messages: SlackThreadResult['messages'] = [];
     const mentionTs: string[] = [];
-    const incomplete = (reason: string): SlackListAnalysisThread => ({ thread: { complete: false, reason, messages: [] }, mentionTs: [] });
+    const incomplete = (reason: string): SlackListAnalysisThread => ({
+      thread: { complete: false, reason, messages: list ? [] : messages }, mentionTs: [],
+    });
     const seenCursors = new Set<string>();
-    const parameters = new URLSearchParams({ channel, ts: threadTs, limit: String(Math.min(listReplyPageSize, limits.maxMessages)) });
+    const pageSize = Math.min(list ? listReplyPageSize : 100, limits.maxMessages);
+    const parameters = new URLSearchParams({ channel, ts: threadTs, limit: String(pageSize) });
     let replyCount: number | undefined;
     let latestReply: string | undefined;
     let totalBytes = 2;
+    if (signal?.aborted) return incomplete('SLACK_REQUEST_CANCELLED');
+    if (totalBytes > limits.maxBytes) return incomplete('SLACK_THREAD_BYTE_LIMIT');
     try {
       for (let page = 0; page < limits.maxPages; page++) {
         const response = await this.request('thread', parameters, signal);
-        if (signal.aborted) return incomplete('SLACK_REQUEST_CANCELLED');
-        if (response.is_limited === true || !Array.isArray(response.messages) || response.messages.length > listReplyPageSize + 1) {
+        if (signal?.aborted) return incomplete('SLACK_REQUEST_CANCELLED');
+        if (response.is_limited === true || !Array.isArray(response.messages) || response.messages.length > pageSize + 1) {
           return incomplete('SLACK_INVALID_RESPONSE');
         }
-        const cursor = listPageCursor(response);
+        const cursor = threadPageCursor(response);
         for (const [index, raw] of response.messages.entries()) {
-          if (!isRecord(raw) || !matchesListItem(raw, listId, itemId, channel)) return incomplete('SLACK_INVALID_RESPONSE');
+          if (!isRecord(raw) || (raw.channel !== undefined && raw.channel !== channel)
+            || (list && !matchesListItem(raw, list.listId, list.itemId))) return incomplete('SLACK_INVALID_RESPONSE');
           const root = raw.ts === threadTs;
           if (root ? index !== 0 || (raw.thread_ts !== undefined && raw.thread_ts !== threadTs)
             : !messages.length || raw.thread_ts !== threadTs) return incomplete('SLACK_INVALID_RESPONSE');
-          const { message, mentionsTarget } = parseSlackListAnalysisMessage(raw, targetUserId, root);
+          const { message, mentionsTarget } = list ? parseSlackListAnalysisMessage(raw, list.targetUserId, root) : parseChannelThreadMessage(raw);
           if (root) {
-            if (typeof raw.reply_count !== 'number' || !Number.isSafeInteger(raw.reply_count) || raw.reply_count < 0
-              || (raw.latest_reply !== undefined && !isSlackTimestamp(raw.latest_reply))) return incomplete('SLACK_INVALID_RESPONSE');
-            if (raw.reply_count + 1 > limits.maxMessages) return incomplete('SLACK_THREAD_MESSAGE_LIMIT');
+            const count = raw.reply_count;
+            if (list && count === undefined) return incomplete('SLACK_INVALID_RESPONSE');
+            if (count !== undefined && (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0)) return incomplete('SLACK_INVALID_RESPONSE');
+            if (raw.latest_reply !== undefined && !isSlackTimestamp(raw.latest_reply)) return incomplete('SLACK_INVALID_RESPONSE');
+            if (count !== undefined && count + 1 > limits.maxMessages) return incomplete('SLACK_THREAD_MESSAGE_LIMIT');
             if (messages.length > 0) {
-              // 일부 페이지가 부모를 반복한다. 페이지 사이에서 답글 수나 루트의 내용이 달라지면 다시 수집해야 한다.
-              if (replyCount !== raw.reply_count || latestReply !== raw.latest_reply || messages[0]!.user !== message.user
+              // 페이지 앞에 반복된 부모는 한 번만 센다. 페이지 사이에서 바뀐 스레드는 완전한 스냅샷이 아니다.
+              if (replyCount !== count || latestReply !== raw.latest_reply || messages[0]!.user !== message.user
                 || messages[0]!.text !== message.text) return incomplete('SLACK_INVALID_RESPONSE');
               continue;
             }
-            replyCount = raw.reply_count;
+            replyCount = count;
             latestReply = raw.latest_reply;
           } else if (compareSlackTimestamps(message.ts, messages.at(-1)!.ts) <= 0) {
             return incomplete('SLACK_INVALID_RESPONSE');
@@ -269,9 +293,8 @@ export class SlackReadClient {
         }
         if (!cursor) {
           if (response.has_more === true) return incomplete('SLACK_THREAD_MISSING_CURSOR');
-          if (replyCount !== messages.length - 1 || (latestReply !== undefined && latestReply !== messages.at(-1)?.ts)) {
-            return incomplete('SLACK_INVALID_RESPONSE');
-          }
+          if (!messages.length || (replyCount !== undefined && replyCount !== messages.length - 1)
+            || (latestReply !== undefined && latestReply !== messages.at(-1)?.ts)) return incomplete('SLACK_INVALID_RESPONSE');
           return { thread: { messages, complete: true, reason: null }, mentionTs };
         }
         if (seenCursors.has(cursor)) return incomplete('SLACK_THREAD_REPEATED_CURSOR');
@@ -282,61 +305,6 @@ export class SlackReadClient {
     } catch (error) {
       return incomplete(error instanceof HarnessError ? error.code : 'SLACK_THREAD_READ_FAILED');
     }
-  }
-
-  async readThread(channelId: string, threadTs: string, requestedLimits?: SlackThreadLimits, signal?: AbortSignal): Promise<SlackThreadResult> {
-    if (!identifierPattern.test(channelId) || !timestampPattern.test(threadTs)) throw new HarnessError('SLACK_INVALID_THREAD');
-    const limits = requestedLimits ?? { maxMessages: 50, maxPages: 5, maxBytes: 65_536 };
-    validateInteger(limits.maxMessages, 1, 200);
-    validateInteger(limits.maxPages, 1, 20);
-    validateInteger(limits.maxBytes, 1, maxResponseBytes);
-    const messages: SlackThreadResult['messages'] = [];
-    const seenCursors = new Set<string>();
-    let cursor = '';
-    let totalBytes = 2;
-    let unsupportedMessage = false;
-    const incomplete = (reason: string): SlackThreadResult => ({ messages, complete: false, reason });
-    if (signal?.aborted) return incomplete('SLACK_REQUEST_CANCELLED');
-    if (totalBytes > limits.maxBytes) return incomplete('SLACK_THREAD_BYTE_LIMIT');
-    for (let page = 0; page < limits.maxPages; page += 1) {
-      if (signal?.aborted) return incomplete('SLACK_REQUEST_CANCELLED');
-      let response: Record<string, unknown>;
-      try {
-        response = await this.request('thread', new URLSearchParams({
-          channel: channelId, ts: threadTs, limit: String(Math.min(100, limits.maxMessages - messages.length)),
-          ...(cursor === '' ? {} : { cursor }),
-        }), signal);
-      } catch (error: unknown) {
-        return incomplete(error instanceof HarnessError ? error.code : 'SLACK_THREAD_READ_FAILED');
-      }
-      if (signal?.aborted) return incomplete('SLACK_REQUEST_CANCELLED');
-      if (!Array.isArray(response.messages)) return incomplete('SLACK_INVALID_RESPONSE');
-      for (const rawMessage of response.messages as unknown[]) {
-        if (!isRecord(rawMessage) || typeof rawMessage.ts !== 'string' || !timestampPattern.test(rawMessage.ts)
-          || typeof rawMessage.user !== 'string' || !identifierPattern.test(rawMessage.user) || typeof rawMessage.text !== 'string') {
-          unsupportedMessage = true;
-          continue;
-        }
-        if (messages.length >= limits.maxMessages) return incomplete('SLACK_THREAD_MESSAGE_LIMIT');
-        const message = { ts: rawMessage.ts, user: rawMessage.user, text: rawMessage.text };
-        totalBytes += Buffer.byteLength(JSON.stringify(message)) + (messages.length > 0 ? 1 : 0);
-        if (totalBytes > limits.maxBytes) return incomplete('SLACK_THREAD_BYTE_LIMIT');
-        messages.push(message);
-      }
-      const metadata = response.response_metadata;
-      if (metadata !== undefined && !isRecord(metadata)) return incomplete('SLACK_INVALID_RESPONSE');
-      const nextCursor = isRecord(metadata) ? metadata.next_cursor : undefined;
-      if (nextCursor !== undefined && (typeof nextCursor !== 'string' || nextCursor.length > 2048)) return incomplete('SLACK_INVALID_RESPONSE');
-      cursor = typeof nextCursor === 'string' ? nextCursor.trim() : '';
-      if (cursor === '') {
-        if (response.has_more === true) return incomplete('SLACK_THREAD_MISSING_CURSOR');
-        return unsupportedMessage ? incomplete('SLACK_THREAD_UNSUPPORTED_MESSAGE') : { messages, complete: true, reason: null };
-      }
-      if (seenCursors.has(cursor)) return incomplete('SLACK_THREAD_REPEATED_CURSOR');
-      seenCursors.add(cursor);
-      if (messages.length >= limits.maxMessages) return incomplete('SLACK_THREAD_MESSAGE_LIMIT');
-    }
-    return incomplete('SLACK_THREAD_PAGE_LIMIT');
   }
 
   private async request(operation: SlackApiOperation, parameters = new URLSearchParams(), signal?: AbortSignal): Promise<Record<string, unknown>> {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -32,7 +32,7 @@ test('리스트 단독 감지부터 전체 문맥 분석과 CLI 초안 조회까
   const root = { type: 'message', user: 'UAUTHOR', ts: rootTs, text: '합성 항목의 질문', reply_count: 2 };
   const prior = { type: 'message', user: 'UOTHER', ts: priorTs, thread_ts: rootTs, text: '기존 논의에서 정한 일정입니다.' };
   const mention = { type: 'message', user: 'UAUTHOR', ts: commentTs, thread_ts: rootTs, text: '<@UOWNER> 위 일정을 확인해 주세요.' };
-  const inbox = new SqliteSlackInbox(join(directory, 'tasks.sqlite'), config);
+  const inbox = new SqliteSlackInbox(join(directory, 'tasks.sqlite'), config, request => service.acceptSnapshot(request));
   const source = new SqliteSlackAnalysisSource(join(directory, 'tasks.sqlite'), config);
   const store = new SqliteSlackAnalysisStore(join(directory, 'slack-analysis.sqlite'));
   let calls = 0;
@@ -84,6 +84,12 @@ test('리스트 단독 감지부터 전체 문맥 분석과 CLI 초안 조회까
   assert.equal(listed.analysis.results[0].commentId, commentTs);
   assert.equal(listed.analysis.results[0].report, undefined);
   const inspected = cli('slack-inspect', listId, commentTs);
-  assert.deepEqual(inspected.request.thread.messages.map((message: { ts: string }) => message.ts), [rootTs, priorTs, commentTs]);
+  assert.deepEqual(inspected.request.thread.messages, []);
+  assert.equal(inspected.request.messageCount, 3);
+  const persisted = await Promise.all(['tasks.sqlite', 'slack-analysis.sqlite'].map(name => readFile(join(directory, name))));
+  for (const { text } of [root, prior, mention]) {
+    assert.ok(!JSON.stringify([listed, inspected]).includes(text));
+    assert.ok(persisted.every(database => !database.includes(Buffer.from(text))));
+  }
   assert.equal(inspected.analysis.results[0].report.answerDraft, answerDraft);
 });

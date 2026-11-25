@@ -385,7 +385,7 @@ test('스레드 pagination을 수집하며 페이지·메시지·바이트 상�
       urls.push(new URL(String(url)));
       return urls.length === 1
         ? jsonResponse({ ok: true, messages: [threadMessage()], response_metadata: { next_cursor: 'next-page' } })
-        : jsonResponse({ ok: true, messages: [threadMessage('1700000000.000002')], response_metadata: { next_cursor: '' } });
+        : jsonResponse({ ok: true, messages: [{ ...threadMessage('1700000000.000002'), thread_ts: '1700000000.000001' }], response_metadata: { next_cursor: '' } });
     },
   });
   const result = await client.readThread('C_ALLOWED', '1700000000.000001', limits);
@@ -394,7 +394,7 @@ test('스레드 pagination을 수집하며 페이지·메시지·바이트 상�
   assert.equal(urls[1]?.searchParams.get('cursor'), 'next-page');
   const cases: [unknown, typeof limits, string][] = [
     [{ ok: true, messages: [threadMessage()], response_metadata: { next_cursor: 'next' } }, { ...limits, maxPages: 1 }, 'SLACK_THREAD_PAGE_LIMIT'],
-    [{ ok: true, messages: [threadMessage(), threadMessage('1700000000.000002')] }, { ...limits, maxMessages: 1 }, 'SLACK_THREAD_MESSAGE_LIMIT'],
+    [{ ok: true, messages: [threadMessage(), { ...threadMessage('1700000000.000002'), thread_ts: '1700000000.000001' }] }, { ...limits, maxMessages: 1 }, 'SLACK_THREAD_MESSAGE_LIMIT'],
     [{ ok: true, messages: [threadMessage()] }, { ...limits, maxBytes: 1 }, 'SLACK_THREAD_BYTE_LIMIT'],
     [{ ok: true, messages: [threadMessage()], has_more: true }, limits, 'SLACK_THREAD_MISSING_CURSOR'],
     [{ ok: true, messages: [threadMessage()], response_metadata: { next_cursor: 'repeated' } }, limits, 'SLACK_THREAD_REPEATED_CURSOR'],

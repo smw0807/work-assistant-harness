@@ -15,6 +15,8 @@ const isBoundedInteger = (value: unknown, minimum: number, maximum: number): val
   return typeof value === 'number' && Number.isInteger(value) && value >= minimum && value <= maximum;
 };
 
+export const SLACK_THREAD_LIMITS = Object.freeze({ maxMessages: 200, maxPages: 20, maxBytes: 65_536 });
+
 const parseListIds = (value: Record<string, unknown>): string[] => {
   if (Object.hasOwn(value, 'listId')) {
     if (Object.hasOwn(value, 'listIds') || !isListId(value.listId)) throw new HarnessError('SLACK_INVALID_CONFIG');
@@ -44,8 +46,9 @@ export const parseSlackReceiverConfig = (input: unknown): SlackReceiverConfig =>
     || !isBoundedInteger(value['retentionHours'], 1, 168) || !isBoundedInteger(value['maxPending'], 1, 1_000)
     || typeof value['liveReadEnabled'] !== 'boolean' || !thread
     || Object.keys(thread).length !== 3 || Object.keys(thread).some((key) => !['maxMessages', 'maxPages', 'maxBytes'].includes(key))
-    || !isBoundedInteger(thread['maxMessages'], 1, 100) || !isBoundedInteger(thread['maxPages'], 1, 10)
-    || !isBoundedInteger(thread['maxBytes'], 1_024, 65_536)) {
+    || !isBoundedInteger(thread['maxMessages'], 1, SLACK_THREAD_LIMITS.maxMessages)
+    || !isBoundedInteger(thread['maxPages'], 1, SLACK_THREAD_LIMITS.maxPages)
+    || !isBoundedInteger(thread['maxBytes'], 1_024, SLACK_THREAD_LIMITS.maxBytes)) {
     throw new HarnessError('SLACK_INVALID_CONFIG');
   }
   return {

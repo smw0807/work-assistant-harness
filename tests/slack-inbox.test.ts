@@ -75,7 +75,8 @@ test('수신은 영속 저장하고 중복·claim·재시작 후 기록을 보�
   assert.equal(reopened.pending().length, 0);
   assert.equal(reopened.list().length, 1);
   assert.equal(reopened.list()[0]?.status, 'RECORDED');
-  assert.deepEqual(reopened.list()[0]?.thread, thread);
+  assert.deepEqual(reopened.list()[0]?.thread, { ...thread, messages: [] });
+  assert.equal(reopened.list()[0]?.messageCount, 1);
   assert.equal(reopened.receive(event(), now), 'duplicate');
   assert.equal((await stat(path)).mode & 0o777, 0o600);
 });
@@ -147,7 +148,7 @@ test('멘션을 유지한 편집도 큐 포화 시 계획을 취소하고 최신
   const request = inbox.find(edited.workspaceId, edited.channelId, edited.messageTs);
   assert.equal(request?.status, 'BLOCKED');
   assert.equal(request?.failureCode, 'SLACK_INBOX_FULL');
-  assert.equal(request?.text, edited.text);
+  assert.equal(request?.text, '');
   assert.equal(request?.thread, null);
   assert.equal(tasks.find('full_edited')?.status, 'CANCELLED');
   assert.equal(tasks.find('full_edited')?.plan, null);
@@ -164,7 +165,7 @@ test('편집의 멘션 추가를 수집하고 늦게 온 원본과 이전 revisi
   const edited = event({ kind: 'edited', eventId: 'Ev_edit_first', revision: '1700000002.000001', text: '<@U_OWNER> 편집된 합성 요청' });
   assert.equal(inbox.receive(edited, now), 'accepted');
   assert.equal(inbox.receive(event(), now), 'ignored');
-  assert.equal(inbox.list()[0]?.text, edited.text);
+  assert.equal(inbox.list()[0]?.text, '');
   assert.equal(inbox.pending().length, 1);
   assert.equal(inbox.receive(event({ kind: 'edited', eventId: 'Ev_stale', revision: '1700000001.000001' }), now), 'ignored');
   assert.equal(inbox.list()[0]?.revision, edited.revision);
@@ -250,7 +251,7 @@ test('다른 reply의 변경·삭제는 cached·pending·processing 스레드 �
   assert.equal(inbox.list()[0]?.status, 'INVALIDATED');
   assert.equal(inbox.list()[0]?.failureCode, 'THREAD_CHANGED');
   assert.equal(inbox.list()[0]?.thread, null);
-  assert.equal(inbox.list()[0]?.text, event().text, '별도 요청 본문은 유지하고 변경된 스레드만 제거합니다.');
+  assert.equal(inbox.list()[0]?.text, '');
   assert.equal(tasks.find('cached_thread')?.status, 'CANCELLED');
   assert.equal(tasks.find('cached_thread')?.plan, null);
   assert.equal(inbox.pending().length, 0);
@@ -313,7 +314,7 @@ test('root를 추론할 수 없는 삭제는 같은 채널의 진행 중 수집�
   }
   assert.equal(tasks.find('completed_other')?.status, 'AWAITING_APPROVAL');
   assert.equal(inbox.find(completed.workspaceId, completed.channelId, completed.messageTs)?.status, 'RECORDED');
-  assert.deepEqual(inbox.find(completed.workspaceId, completed.channelId, completed.messageTs)?.thread, thread);
+  assert.deepEqual(inbox.find(completed.workspaceId, completed.channelId, completed.messageTs)?.thread, { ...thread, messages: [] });
   assert.equal((await readFile(path)).includes(Buffer.from('DELETED_REPLY_MUST_NOT_RETURN')), false);
   const connection = new DatabaseSync(path);
   context.after(() => connection.close());
@@ -369,9 +370,9 @@ test('본문·스레드·연결 reason을 방어 마스킹하며 문맥 상한�
     { ts: '1700000001.000001', user: input.requesterId, text: '상한 초과 합성 문맥' },
   ], complete: true, reason: null }, now);
   inbox.setConnection({ state: 'gap', at: now.toISOString(), reason: `Bearer ${'a'.repeat(20)}` });
-  assert.equal(inbox.list()[0]?.text, '<@U_OWNER> [REDACTED] [REDACTED] [REDACTED_EMAIL] [REDACTED_PHONE]');
-  assert.equal(inbox.list()[0]?.thread?.messages[0]?.text, '[REDACTED] [REDACTED] [REDACTED_EMAIL] [REDACTED_PHONE]');
-  assert.equal(inbox.list()[0]?.thread?.messages.length, 1);
+  assert.equal(inbox.list()[0]?.text, '');
+  assert.deepEqual(inbox.list()[0]?.thread?.messages, []);
+  assert.equal(inbox.list()[0]?.messageCount, 1);
   assert.equal(inbox.list()[0]?.thread?.complete, false);
   assert.equal(inbox.list()[0]?.thread?.reason, 'THREAD_LIMIT_REACHED');
   assert.equal(inbox.connection()?.reason, '[REDACTED]');

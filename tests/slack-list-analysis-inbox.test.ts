@@ -51,8 +51,9 @@ for (const source of ['export', 'direct'] as const) {
       const request = inbox.findListAnalysisRequest(listId, ts);
       assert.equal(request?.status, round === 0 ? 'RECORDED' : 'INVALIDATED');
       if (round === 0) {
-        assert.equal(request?.thread?.messages[0]?.text, '[REDACTED_EMAIL]');
-        assert.equal(request?.text, reply(ts).text);
+        assert.deepEqual(request?.thread?.messages, []);
+        assert.equal(request?.messageCount, 2);
+        assert.equal(request?.text, '');
         assert.equal(request?.requesterId, 'UAUTHOR');
       } else {
         assert.equal(request?.thread, null);

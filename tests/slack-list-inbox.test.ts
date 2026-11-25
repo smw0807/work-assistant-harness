@@ -51,7 +51,7 @@ test('첫 스냅샷에 있는 댓글은 건너뛰고 새 댓글의 직접 멘션
   const result = restarted.applyListSnapshot(listId, current, now + 1);
   assert.deepEqual(result, {
     baseline: false, mentions: [{
-      listId, itemId: 'RecTEST', commentId: '2.000001', text: '<@U_OWNER> [REDACTED_EMAIL]',
+      listId, itemId: 'RecTEST', commentId: '2.000001',
       detectedAt: new Date(now + 1).toISOString(),
     }],
   });
@@ -131,7 +131,8 @@ test('완료된 스냅샷에서 수정과 삭제를 반영해도 기존 댓글�
   assert.equal(inbox.listMentions(now + 2).length, 4);
   const updated = [comment('A'), comment('B', 'UPDATED <@U_OWNER>'), comment('C', 'UNTAGGED_TEXT', false)];
   assert.deepEqual(inbox.applyListSnapshot(listId, updated, now + 3).mentions, []);
-  assert.deepEqual(inbox.listMentions(now + 3).map(row => row.text), ['UPDATED <@U_OWNER>']);
+  assert.deepEqual(inbox.listMentions(now + 3).map(row => row.commentId), ['B']);
+  assert.ok(!(await readFile(db.path)).includes('UPDATED <@U_OWNER>'));
   assert.deepEqual(inbox.applyListSnapshot(listId, second, now + 4).mentions, []);
   assert.deepEqual(inbox.listMentions(now + 4).map(row => row.commentId), ['B']);
 });
@@ -173,7 +174,7 @@ test('기존 DB의 마지막 댓글부터 누락 답글을 복구하며 더 최�
   assert.deepEqual(applyExport(inbox, now + 1).mentions.map(mention => mention.commentId), [duplicate.commentId]);
   assert.equal(inbox.getListThreadCursor(listId, thread.itemId, thread.threadTs), saved.commentId);
   const notices = inbox.applyListThreadReplies(listId, thread.itemId, thread.threadTs, saved.commentId, [missing, duplicate], now + 2);
-  assert.deepEqual(notices.map(row => [row.commentId, row.text]), [[missing.commentId, '<@U_OWNER> [REDACTED_EMAIL]']]);
+  assert.deepEqual(notices.map(row => row.commentId), [missing.commentId]);
   db.close(inbox);
 
   const restored = db.open();

@@ -176,7 +176,7 @@ test('리스트 단독 수신 worker의 첫 조회·재시작·실패 복구와 
   assert.equal(listMentions.length, 1);
   assert.equal(listMentions[0].listId, 'FTEST');
   assert.equal(listMentions[0].commentId, fresh.ts);
-  assert.equal(listMentions[0].text, '<@UOWNER> 확인 [REDACTED_EMAIL]');
+  assert.equal('text' in listMentions[0], false);
 
   // 저장된 댓글 이후의 직접 조회에 누락 답글과 내보내기의 최신 답글이 함께 들어온다.
   const threadTs = '1699999999.000001';

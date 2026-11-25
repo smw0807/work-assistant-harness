@@ -21,6 +21,36 @@ const readPages = (pages: unknown[], bounds = limits) => {
   return { urls, result: client.readListAnalysisThread(listId, itemId, root.ts, target, bounds, signal) };
 };
 
+test('채널과 리스트는 반복 루트를 한 번 세어 200건을 전부 읽고 누락이나 201번째 메시지를 차단한다', async () => {
+  for (const list of [false, true]) {
+    for (const total of [199, 200, 201]) {
+      const parent = { ...root, channel: 'CSYNTH', reply_count: 199 };
+      // 한 페이지가 15건일 때 서버가 다음 페이지의 첫 위치에 부모를 다시 포함할 수 있다.
+      const rows = Array.from({ length: total - 1 }, (_, i) => ({
+        ...reply, ts: `11.${String(i + 2).padStart(6, '0')}`, text: i === 198 ? '<@UOWNER> 확인' : '대화',
+      }));
+      let page = 0;
+      const client = new SlackReadClient({ webToken: 'offline', allowedListIds: [listId] }, { fetch: async (input) => {
+        const params = new URL(String(input)).searchParams;
+        assert.equal(params.get('cursor'), page ? String(page) : null);
+        assert.equal(params.get('limit'), list ? '15' : '100');
+        const batch = rows.slice(page * 14, (page + 1) * 14);
+        const hasMore = ++page * 14 < rows.length;
+        return Response.json({ ok: true, messages: [parent, ...batch], has_more: hasMore,
+          response_metadata: { next_cursor: hasMore ? String(page) : '' } });
+      } });
+      const result = list
+        ? (await client.readListAnalysisThread(listId, itemId, root.ts, target, { maxMessages: 200, maxPages: 20, maxBytes: 65_536 }, signal)).thread
+        : await client.readThread('CSYNTH', root.ts);
+      assert.equal(result.complete, total === 200);
+      if (total === 200) {
+        assert.equal(result.messages.length, total);
+        assert.equal(result.messages.at(-1)!.ts, '11.000200');
+      } else assert.equal(result.reason, total === 199 ? 'SLACK_INVALID_RESPONSE' : 'SLACK_THREAD_MESSAGE_LIMIT');
+    }
+  }
+});
+
 test('등록한 파일 대화의 루트와 모든 답글을 순서대로 보존하고 직접 멘션만 식별한다', async () => {
   const parent = { ...root, reply_count: 5, latest_reply: '11.000006',
     list_record: { record: { record_id: itemId, fields: [{ text: '비공개 열 내용' }] } } };

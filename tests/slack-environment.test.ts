@@ -39,7 +39,7 @@ test('환경 설정은 명시된 Slack 키와 기존 자료 상한만 선택한�
   const settings = parseSlackEnvironment(input);
   assert.deepEqual(settings.config, {
     workspaceId: 'W_LOCAL', targetUserId: 'U_OWNER', channelIds: ['C_ALLOWED', 'C_SECOND'], liveReadEnabled: false,
-    retentionHours: 24, maxPending: 100, thread: { maxMessages: 30, maxPages: 3, maxBytes: 16_384 },
+    retentionHours: 24, maxPending: 100, thread: { maxMessages: 200, maxPages: 20, maxBytes: 65_536 },
   });
   assert.equal(settings.appToken, 'synthetic-app-value');
   assert.equal(settings.webToken, 'synthetic-web-value');

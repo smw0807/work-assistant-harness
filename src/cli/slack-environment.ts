@@ -4,7 +4,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { parseEnv, types } from 'node:util';
 import type { SlackReceiverConfig } from '../domain/slack.js';
 import { HarnessError } from '../domain/errors.js';
-import { parseSlackReceiverConfig } from '../policy/slack-ingestion.js';
+import { parseSlackReceiverConfig, SLACK_THREAD_LIMITS } from '../policy/slack-ingestion.js';
 
 export const SLACK_ENV_FILE_MAX_BYTES = 64_000;
 export interface SlackEnvironmentSettings {
@@ -53,7 +53,7 @@ export const parseSlackEnvironment = (input: Record<string, string | undefined>)
       ...(lists !== undefined ? { listIds: lists.split(',').map(value => value.trim()) } : {}),
       ...(analysisEnabled && listAnalysisEnabled ? { listAnalysisEnabled: true } : {}),
       liveReadEnabled: booleanValue(values['SLACK_LIVE_READ_ENABLED']),
-      retentionHours: 24, maxPending: 100, thread: { maxMessages: 30, maxPages: 3, maxBytes: 16_384 } });
+      retentionHours: 24, maxPending: 100, thread: SLACK_THREAD_LIMITS });
     const settings: SlackEnvironmentSettings = { config, appToken: tokenValue(values['SLACK_APP_TOKEN']), webToken: tokenValue(values['SLACK_WEB_TOKEN']) };
     const listUserToken = tokenValue(values['SLACK_LIST_USER_TOKEN']);
     if (listUserToken) settings.listUserToken = listUserToken;

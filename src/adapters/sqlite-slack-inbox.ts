@@ -1,4 +1,5 @@
 import { chmodSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { HarnessError } from '../domain/errors.js';
 import { invalidateTaskRequest } from '../domain/state.js';
@@ -14,12 +15,12 @@ import { assertRuntimeFile } from '../policy/runtime-path.js';
 import type { SlackListComment, SlackListThread } from '../policy/slack-list-export.js';
 import { compareSlackTimestamps, isSlackTimestamp, slackTimestampTicks } from '../policy/slack-timestamp.js';
 import { SqliteSlackListAnalysis, type ListScope } from './sqlite-slack-list-analysis.js';
+import { hasSlackSourceMigration, migrateSlackSourceStorage, slackEventMetadata, slackRequestMetadata, slackTextHash, slackThreadTimestamps } from './slack-source-metadata.js';
 
 export interface SlackListMention {
   listId: string;
   itemId: string;
   commentId: string;
-  text: string;
   detectedAt: string;
 }
 
@@ -39,10 +40,12 @@ const parsePayload = <T>(payload: unknown): T => {
 
 export class SqliteSlackInbox implements SlackInbox {
   private readonly database: DatabaseSync;
-  private readonly config: SlackReceiverConfig & { listIds: string[] };
+  private readonly config: SlackReceiverConfig;
+  private readonly listIds: readonly string[];
+  private readonly sessionId = randomUUID();
   private readonly listAnalysis: SqliteSlackListAnalysis;
 
-  constructor(filePath: string, config: SlackReceiverConfig) {
+  constructor(filePath: string, config: SlackReceiverConfig, private readonly onSnapshot?: (request: SlackCollectedRequest) => boolean | void) {
     if (!Number.isSafeInteger(config.maxPending) || config.maxPending < 1
       || !Number.isSafeInteger(config.retentionHours) || config.retentionHours < 1
       || config.retentionHours > 8_760
@@ -50,9 +53,8 @@ export class SqliteSlackInbox implements SlackInbox {
         .every((value) => Number.isSafeInteger(value) && value > 0)) {
       throw new HarnessError('INVALID_SLACK_CONFIG');
     }
-    this.config = {
-      ...config, channelIds: [...config.channelIds], listIds: [...getSlackListIds(config)], thread: { ...config.thread },
-    };
+    this.config = structuredClone(config);
+    this.listIds = getSlackListIds(this.config);
     for (const suffix of ['', '-journal', '-wal', '-shm']) assertRuntimeFile(`${filePath}${suffix}`);
     this.database = new DatabaseSync(filePath, { enableForeignKeyConstraints: true });
     chmodSync(filePath, 0o600);
@@ -106,18 +108,17 @@ export class SqliteSlackInbox implements SlackInbox {
         item_id TEXT NOT NULL, thread_ts TEXT NOT NULL, last_reply_ts TEXT NOT NULL,
         PRIMARY KEY(workspace_id, list_id, target_id, item_id)
       ) STRICT;
-      CREATE INDEX IF NOT EXISTS slack_list_mentions_expiry ON slack_list_comments(expires_at)
-        WHERE text IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS slack_list_mentions_scope ON slack_list_comments(workspace_id, list_id, target_id, detected_at DESC)
-        WHERE text IS NOT NULL;
     `);
-    this.listAnalysis = new SqliteSlackListAnalysis(this.database);
+    this.listAnalysis = new SqliteSlackListAnalysis(this.database, this.config, this.sessionId);
     const hasExportFlag = (): boolean => this.database.prepare('PRAGMA table_info(slack_list_comments)').all()
       .some(column => column.name === 'pending_export');
     if (!hasExportFlag()) this.transaction(() => {
       // 조회 CLI와 수신기가 이전 스키마를 동시에 열더라도 열은 한 번만 추가한다.
       if (!hasExportFlag()) this.database.exec('ALTER TABLE slack_list_comments ADD COLUMN pending_export INTEGER NOT NULL DEFAULT 0');
     });
+    if (!hasSlackSourceMigration(this.database)) {
+      this.transaction(() => migrateSlackSourceStorage(this.database, this.config));
+    }
   }
 
   /** 내보내기의 기준점, 항목/스레드 연결, 댓글 중복 키는 함께 커밋한다. */
@@ -173,7 +174,7 @@ export class SqliteSlackInbox implements SlackInbox {
   }
 
   private listScope(listId: string): ListScope {
-    if (!isId(listId) || !this.config.listIds.includes(listId)) throw new HarnessError('SLACK_LIST_DENIED');
+    if (!isId(listId) || !this.listIds.includes(listId)) throw new HarnessError('SLACK_LIST_DENIED');
     return [this.config.workspaceId, listId, this.config.targetUserId];
   }
 
@@ -189,8 +190,11 @@ export class SqliteSlackInbox implements SlackInbox {
   refreshListAnalysisThread(listId: string, itemId: string, threadTs: string, snapshot: SlackListAnalysisThread, now: number): void {
     const scope = this.listScope(listId);
     if (!this.config.listAnalysisEnabled) return;
-    this.transaction(() => this.listAnalysis.refresh(scope, itemId, threadTs,
+    const eligible = this.transaction(() => this.listAnalysis.refresh(scope, itemId, threadTs,
       { ...snapshot, thread: this.safeThread(snapshot.thread)! }, now));
+    for (const request of eligible) {
+      if (this.onSnapshot?.(request) === false) this.listAnalysis.blockDelivery(scope, request);
+    }
   }
 
   invalidateListAnalysis(listId: string, reason: string, now: number, itemId?: string): void {
@@ -208,8 +212,8 @@ export class SqliteSlackInbox implements SlackInbox {
     const old = new Map(registered.map(row => [String(row.item_id), String(row.thread_ts)]));
     const seenItems = new Set<string>();
     const seenThreads = new Set<bigint>();
-    const clearDirectBodies = this.database.prepare(`
-      UPDATE slack_list_comments SET text = NULL, pending_export = 0
+    const removeDirectMentions = this.database.prepare(`
+      UPDATE slack_list_comments SET detected_at = NULL, expires_at = NULL, pending_export = 0
       WHERE workspace_id = ? AND list_id = ? AND target_id = ? AND item_id = ? AND pending_export = 1
     `);
     const history = this.database.prepare(`
@@ -229,7 +233,7 @@ export class SqliteSlackInbox implements SlackInbox {
       old.delete(itemId);
       if (oldThread === threadTs) continue;
       if (oldThread !== undefined) {
-        clearDirectBodies.run(...scope, itemId);
+        removeDirectMentions.run(...scope, itemId);
         this.listAnalysis.invalidate(scope, 'SLACK_LIST_THREAD_REBOUND', now, itemId);
       }
       let saved: string | null = null;
@@ -247,7 +251,7 @@ export class SqliteSlackInbox implements SlackInbox {
       DELETE FROM slack_list_threads WHERE workspace_id = ? AND list_id = ? AND target_id = ? AND item_id = ?
     `);
     for (const itemId of old.keys()) {
-      clearDirectBodies.run(...scope, itemId);
+      removeDirectMentions.run(...scope, itemId);
       this.listAnalysis.invalidate(scope, 'SLACK_LIST_THREAD_REMOVED', now, itemId);
       remove.run(...scope, itemId);
     }
@@ -259,14 +263,15 @@ export class SqliteSlackInbox implements SlackInbox {
     const expiresAt = now + this.config.retentionHours * 3_600_000;
     this.pruneListMentions(now);
     const activeRows = source === 'direct' ? [] : this.database.prepare(`
-      SELECT rowid, item_id, comment_id, text, pending_export FROM slack_list_comments
-      WHERE workspace_id = ? AND list_id = ? AND target_id = ? AND text IS NOT NULL
+      SELECT rowid, item_id, comment_id, pending_export FROM slack_list_comments
+      WHERE workspace_id = ? AND list_id = ? AND target_id = ? AND expires_at IS NOT NULL
     `).all(...scope);
     const active = new Map(activeRows.map(row => [`${row.item_id}/${row.comment_id}`, row]));
-    const update = this.database.prepare('UPDATE slack_list_comments SET text = ?, pending_export = 0 WHERE rowid = ?');
+    const remove = this.database.prepare('UPDATE slack_list_comments SET detected_at = NULL, expires_at = NULL, pending_export = 0 WHERE rowid = ?');
+    const confirmed = this.database.prepare('UPDATE slack_list_comments SET pending_export = 0 WHERE rowid = ?');
     const insert = this.database.prepare(`
-      INSERT INTO slack_list_comments(workspace_id, list_id, target_id, item_id, comment_id, text, detected_at, expires_at, pending_export)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
+      INSERT INTO slack_list_comments(workspace_id, list_id, target_id, item_id, comment_id, detected_at, expires_at, pending_export)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
     `);
     const mentions: SlackListMention[] = [];
     for (const comment of comments) {
@@ -275,48 +280,51 @@ export class SqliteSlackInbox implements SlackInbox {
         || Buffer.byteLength(comment.text) > 16_384) throw new HarnessError('SLACK_LIST_COMMENT_INVALID');
       const key = `${comment.itemId}/${comment.commentId}`;
       const current = active.get(key);
-      const text = source !== 'baseline' && comment.mentionsTarget ? redactSlackText(comment.text) : null;
+      const mentioned = source !== 'baseline' && comment.mentionsTarget;
       if (current) {
         // 내보내기와 직접 조회의 발췌 표기는 달라질 수 있다. 본문 편집은 전체 스레드 재조회에서 비교한다.
-        if (text === null) this.listAnalysis.invalidate(scope, 'REQUEST_MENTION_REMOVED', now, comment.itemId, comment.commentId);
-        if (current.text !== text || current.pending_export !== 0) update.run(text, current.rowid!);
+        if (!mentioned) {
+          this.listAnalysis.invalidate(scope, 'REQUEST_MENTION_REMOVED', now, comment.itemId, comment.commentId);
+          remove.run(current.rowid!);
+        } else if (current.pending_export !== 0) confirmed.run(current.rowid!);
         active.delete(key);
         continue;
       }
       const inserted = insert.run(...scope, comment.itemId, comment.commentId,
-        text, text === null ? null : now, text === null ? null : expiresAt, Number(source === 'direct' && text !== null));
-      if (text !== null && inserted.changes === 1) {
+        mentioned ? now : null, mentioned ? expiresAt : null, Number(source === 'direct' && mentioned));
+      if (mentioned && inserted.changes === 1) {
         if (captureAnalysis && this.config.listAnalysisEnabled) this.listAnalysis.register(scope, comment.itemId, comment.commentId, now, expiresAt);
-        mentions.push({ listId: scope[1], itemId: comment.itemId, commentId: comment.commentId, text, detectedAt });
+        mentions.push({ listId: scope[1], itemId: comment.itemId, commentId: comment.commentId, detectedAt });
       }
     }
-    // 직접 조회에서 먼저 확인한 본문은 내보내기가 따라잡거나 보관 기한이 끝날 때까지 유지한다.
+    // 직접 조회에서 먼저 확인한 멘션은 내보내기가 따라잡거나 보관 기한이 끝날 때까지 목록에 남긴다.
     for (const row of active.values()) {
       if (row.pending_export !== 0) continue;
-      update.run(null, row.rowid!);
+      remove.run(row.rowid!);
       this.listAnalysis.invalidate(scope, 'SLACK_LIST_COMMENT_REMOVED', now, String(row.item_id), String(row.comment_id));
     }
     return mentions;
   }
 
   listMentions(now = Date.now()): SlackListMention[] {
-    const { workspaceId, listIds, targetUserId } = this.config;
+    const { workspaceId, targetUserId } = this.config;
+    const listIds = this.listIds;
     if (listIds.length === 0) return [];
     this.pruneListMentions(now);
     const placeholders = listIds.map(() => '?').join(', ');
     return this.database.prepare(`
-      SELECT list_id, item_id, comment_id, text, detected_at FROM slack_list_comments
-      WHERE workspace_id = ? AND target_id = ? AND list_id IN (${placeholders}) AND text IS NOT NULL AND expires_at > ?
+      SELECT list_id, item_id, comment_id, detected_at FROM slack_list_comments
+      WHERE workspace_id = ? AND target_id = ? AND list_id IN (${placeholders}) AND expires_at > ?
       ORDER BY detected_at DESC, rowid DESC LIMIT 100
     `).all(workspaceId, targetUserId, ...listIds, now).map(row => ({
       listId: String(row.list_id), itemId: String(row.item_id), commentId: String(row.comment_id),
-      text: String(row.text), detectedAt: new Date(Number(row.detected_at)).toISOString(),
+      detectedAt: new Date(Number(row.detected_at)).toISOString(),
     }));
   }
 
   private pruneListMentions(now: number): number {
     return Number(this.database.prepare(`
-      UPDATE slack_list_comments SET text = NULL, pending_export = 0 WHERE text IS NOT NULL AND expires_at <= ?
+      UPDATE slack_list_comments SET detected_at = NULL, expires_at = NULL, pending_export = 0 WHERE expires_at <= ?
     `).run(now).changes);
   }
 
@@ -342,7 +350,7 @@ export class SqliteSlackInbox implements SlackInbox {
       const accepted = tracked || (event.kind !== 'deleted' && event.mentionsTarget);
       let needsCollection = accepted && event.kind !== 'deleted' && event.mentionsTarget;
       let queueFull = false;
-      // 본문 제거와 무효화는 후속 수집이 없으므로 포화된 조사 큐 때문에 거부하지 않는다.
+      // 멘션 제거와 무효화는 후속 수집이 없으므로 포화된 조사 큐 때문에 거부하지 않는다.
       if (needsCollection && this.queueIsFull(event)) {
         if (event.kind === 'created') throw new HarnessError('SLACK_INBOX_FULL');
         // 편집을 되돌릴 수 없으므로 기존 계획을 먼저 무효화하고 새 문맥 수집만 차단한다.
@@ -355,7 +363,7 @@ export class SqliteSlackInbox implements SlackInbox {
         this.invalidateTasks(event, affectedThreads, now);
       }
       this.database.prepare(`
-        UPDATE slack_inbox SET payload = NULL, state = 'done'
+        UPDATE slack_inbox SET payload = NULL, state = 'done', text_hash = NULL, receiver_session = NULL
         WHERE workspace_id = ? AND channel_id = ? AND message_ts = ?
       `).run(event.workspaceId, event.channelId, event.messageTs);
 
@@ -365,7 +373,7 @@ export class SqliteSlackInbox implements SlackInbox {
         requesterId: request?.requesterId ?? event.requesterId,
         revision: event.revision, eventId: event.eventId,
         status: event.kind === 'deleted' || !event.mentionsTarget ? 'INVALIDATED' : queueFull ? 'BLOCKED' : 'RECEIVED',
-        text: event.kind === 'deleted' || !event.mentionsTarget ? '' : event.text,
+        text: '',
         thread: null, updatedAt: now.toISOString(),
         failureCode: queueFull ? 'SLACK_INBOX_FULL' : event.kind === 'deleted' ? 'REQUEST_DELETED'
           : !event.mentionsTarget ? 'REQUEST_MENTION_REMOVED' : null,
@@ -375,11 +383,11 @@ export class SqliteSlackInbox implements SlackInbox {
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(workspace_id, channel_id, message_ts) DO UPDATE SET
           revision = excluded.revision, deleted = excluded.deleted,
-          payload = excluded.payload, expires_at = excluded.expires_at
+          payload = excluded.payload, expires_at = excluded.expires_at, thread_timestamps = NULL
       `).run(event.workspaceId, event.channelId, event.messageTs, event.revision,
         event.kind === 'deleted' ? 1 : 0, collected ? JSON.stringify(collected) : null, this.expiresAt(now));
       this.insertInbox(event, needsCollection ? {
-        ...event, text: collected?.text ?? '', threadTs: collected?.threadTs ?? event.threadTs,
+        ...event, threadTs: collected?.threadTs ?? event.threadTs,
       } : null, now, queueFull ? 'SLACK_INBOX_FULL' : null);
       return accepted ? 'accepted' : 'ignored';
     });
@@ -423,7 +431,7 @@ export class SqliteSlackInbox implements SlackInbox {
           : request);
       }
       return Number(this.database.prepare(`
-        UPDATE slack_inbox SET state = 'blocked', failure_code = ? WHERE state = 'processing'
+        UPDATE slack_inbox SET state = 'blocked', failure_code = ?, text_hash = NULL, receiver_session = NULL WHERE state = 'processing'
       `).run(interruptedCode).changes);
     });
   }
@@ -468,13 +476,13 @@ export class SqliteSlackInbox implements SlackInbox {
   prune(now: Date): number {
     return this.transaction(() => {
       const inbox = this.database.prepare(`
-        UPDATE slack_inbox SET payload = NULL, state = 'done'
+        UPDATE slack_inbox SET payload = NULL, state = 'done', text_hash = NULL, receiver_session = NULL
         WHERE payload IS NOT NULL AND expires_at <= ?
       `).run(now.toISOString()).changes;
       const requests = this.database.prepare(`
-        UPDATE slack_requests SET payload = NULL WHERE payload IS NOT NULL AND expires_at <= ?
+        UPDATE slack_requests SET payload = NULL, thread_timestamps = NULL WHERE payload IS NOT NULL AND expires_at <= ?
       `).run(now.toISOString()).changes;
-      // 본문은 보관 기간 후 지우고, event 중복 키와 revision/삭제 marker는 DB 수명 동안 유지한다.
+      // 조회용 메타데이터는 기한 후 지우고, event 중복 키와 revision/삭제 marker는 DB 수명 동안 유지한다.
       // 이 최소 marker를 지우면 오래된 Slack 재전달을 새 요청으로 받아들일 수 있다.
       return Number(inbox) + Number(requests) + this.pruneListMentions(now.getTime()) + this.listAnalysis.prune(now.getTime());
     });
@@ -504,11 +512,12 @@ export class SqliteSlackInbox implements SlackInbox {
   ): void {
     this.database.prepare(`
       INSERT INTO slack_inbox(
-        workspace_id, event_id, channel_id, message_ts, state, payload, received_at, expires_at, failure_code
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        workspace_id, event_id, channel_id, message_ts, state, payload, received_at, expires_at, failure_code, text_hash, receiver_session
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(event.workspaceId, event.eventId, event.channelId, event.messageTs,
       payload ? 'pending' : failureCode ? 'blocked' : 'done',
-      payload ? JSON.stringify(payload) : null, now.toISOString(), this.expiresAt(now), failureCode);
+      payload ? JSON.stringify(slackEventMetadata(payload)) : null, now.toISOString(), this.expiresAt(now), failureCode,
+      payload ? slackTextHash(payload.text) : null, payload ? this.sessionId : null);
   }
 
   private queueIsFull(event: SlackMessageChange): boolean {
@@ -535,42 +544,57 @@ export class SqliteSlackInbox implements SlackInbox {
       messages.push(safe);
       bytes += messageBytes;
     }
-    return { messages, complete: thread.complete, reason: thread.reason === null
-      ? null : redactSlackText(thread.reason).slice(0, 512) };
+    return { messages, complete: thread.complete, reason: thread.reason === null ? null
+      : /^[A-Z][A-Z0-9_]{1,80}$/.test(thread.reason) ? thread.reason : 'SLACK_THREAD_INCOMPLETE' };
   }
 
   private finish(
     event: SlackMessageChange, state: 'done' | 'blocked', failureCode: string | null,
     now: Date, thread: SlackThreadSnapshot | null,
   ): void {
-    this.transaction(() => {
+    const eligible = this.transaction((): SlackCollectedRequest | undefined => {
       const item = this.database.prepare(`
-        SELECT expires_at FROM slack_inbox
+        SELECT expires_at, text_hash, receiver_session FROM slack_inbox
         WHERE workspace_id = ? AND event_id = ? AND state = 'processing' AND payload IS NOT NULL
       `).get(event.workspaceId, event.eventId);
       if (!item) return;
       if (String(item.expires_at) <= now.toISOString()) {
         this.database.prepare(`
-          UPDATE slack_inbox SET state = 'done', payload = NULL, failure_code = 'RETENTION_EXPIRED'
+          UPDATE slack_inbox SET state = 'done', payload = NULL, text_hash = NULL, receiver_session = NULL, failure_code = 'RETENTION_EXPIRED'
           WHERE workspace_id = ? AND event_id = ?
         `).run(event.workspaceId, event.eventId);
         this.database.prepare(`
-          UPDATE slack_requests SET payload = NULL
+          UPDATE slack_requests SET payload = NULL, thread_timestamps = NULL
           WHERE workspace_id = ? AND channel_id = ? AND message_ts = ? AND revision = ? AND expires_at <= ?
         `).run(event.workspaceId, event.channelId, event.messageTs, event.revision, now.toISOString());
         return;
       }
       const changed = this.database.prepare(`
-        UPDATE slack_inbox SET state = ?, failure_code = ?
+        UPDATE slack_inbox SET state = ?, failure_code = ?, text_hash = NULL, receiver_session = NULL
         WHERE workspace_id = ? AND event_id = ? AND state = 'processing' AND payload IS NOT NULL
       `).run(state, failureCode, event.workspaceId, event.eventId).changes;
       if (changed !== 1) return;
-      this.updateRequest(event, (request) => request.status === 'RECEIVED' ? {
-        ...request, status: state === 'done' ? 'RECORDED' : 'BLOCKED',
-        thread: state === 'done' ? this.safeThread(thread) : null,
-        failureCode, updatedAt: now.toISOString(),
-      } : request);
+      const request = this.find(event.workspaceId, event.channelId, event.messageTs);
+      if (!request || request.eventId !== event.eventId || request.revision !== event.revision || request.status !== 'RECEIVED') return;
+      const safeThread = state === 'done' ? this.safeThread(thread) : null;
+      const message = safeThread?.messages.find(candidate => candidate.ts === request.messageTs && candidate.user === request.requesterId);
+      const matches = message !== undefined && item.text_hash === slackTextHash(message.text);
+      const full: SlackCollectedRequest = { ...request, status: state === 'done' ? 'RECORDED' : 'BLOCKED',
+        text: matches ? message.text : '', thread: safeThread, failureCode, updatedAt: now.toISOString() };
+      const metadata = slackRequestMetadata(full, this.config, matches);
+      this.database.prepare(`UPDATE slack_requests SET payload = ?, thread_timestamps = ?
+        WHERE workspace_id = ? AND channel_id = ? AND message_ts = ?`)
+        .run(JSON.stringify(metadata), slackThreadTimestamps(safeThread), event.workspaceId, event.channelId, event.messageTs);
+      if (metadata.sourceHash && item.receiver_session === this.sessionId) return full;
     });
+    if (eligible && this.onSnapshot?.(eligible) === false) {
+      this.database.prepare(`UPDATE slack_requests SET thread_timestamps = NULL,
+        payload = json_set(json_remove(payload, '$.sourceHash', '$.receiverHash', '$.messageCount'), '$.status', 'BLOCKED',
+          '$.failureCode', 'SLACK_ANALYSIS_QUEUE_FULL', '$.thread', NULL)
+        WHERE workspace_id = ? AND channel_id = ? AND message_ts = ? AND revision = ?
+        AND json_extract(payload, '$.eventId') = ? AND json_extract(payload, '$.status') = 'RECORDED'`)
+        .run(event.workspaceId, event.channelId, event.messageTs, event.revision, event.eventId);
+    }
   }
 
   private invalidateThreadContexts(
@@ -578,13 +602,14 @@ export class SqliteSlackInbox implements SlackInbox {
   ): Set<string> {
     const affectedThreads = new Set([threadTs]);
     const rows = this.database.prepare(`
-      SELECT payload FROM slack_requests WHERE workspace_id = ? AND channel_id = ? AND payload IS NOT NULL
+      SELECT payload, thread_timestamps FROM slack_requests WHERE workspace_id = ? AND channel_id = ? AND payload IS NOT NULL
     `).all(event.workspaceId, event.channelId);
-    const requests = rows.map((row) => parsePayload<SlackCollectedRequest>(row.payload));
+    const requests = rows.map((row) => ({ request: parsePayload<SlackCollectedRequest>(row.payload),
+      timestamps: parsePayload<string[]>(row.thread_timestamps ?? '[]') }));
     // previous_message 없는 삭제도 snapshot에서 root를 찾은 뒤 같은 스레드의 진행 중 수집까지 막는다.
-    for (const request of requests) {
+    for (const { request, timestamps } of requests) {
       if (request.threadTs === threadTs) knownThread = true;
-      if (request.thread?.messages.some((message) => message.ts === event.messageTs)) {
+      if (timestamps.includes(event.messageTs)) {
         affectedThreads.add(request.threadTs);
         knownThread = true;
       }
@@ -597,17 +622,17 @@ export class SqliteSlackInbox implements SlackInbox {
       `).all(event.workspaceId, event.channelId);
       for (const row of active) activeRequests.add(String(row.event_id));
     }
-    for (const request of requests) {
+    for (const { request } of requests) {
       if (request.messageTs === event.messageTs) continue;
       const unknownRoot = !knownThread && request.status === 'RECEIVED' && activeRequests.has(request.eventId);
       if (!unknownRoot && (!knownThread || !affectedThreads.has(request.threadTs))) continue;
       if (unknownRoot) affectedThreads.add(request.threadTs);
-      const invalidated: SlackCollectedRequest = {
+      const invalidated = slackRequestMetadata({
         ...request, status: 'INVALIDATED', thread: null,
         failureCode: 'THREAD_CHANGED', updatedAt: now.toISOString(),
-      };
+      }, this.config);
       this.database.prepare(`
-        UPDATE slack_requests SET payload = ? WHERE workspace_id = ? AND channel_id = ? AND message_ts = ?
+        UPDATE slack_requests SET payload = ?, thread_timestamps = NULL WHERE workspace_id = ? AND channel_id = ? AND message_ts = ?
       `).run(JSON.stringify(invalidated), request.workspaceId, request.channelId, request.messageTs);
       this.database.prepare(`
         UPDATE slack_inbox SET state = 'blocked', failure_code = ?

@@ -3,6 +3,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { HarnessError } from '../domain/errors.js';
 import { getSlackListIds, type SlackCollectedRequest, type SlackConnectionState, type SlackReceiverConfig } from '../domain/slack.js';
 import { assertRuntimeFile } from '../policy/runtime-path.js';
+import type { SlackAnalysisRecord } from './sqlite-slack-analysis.js';
+import { hashSlackAnalysisReceiver } from '../policy/slack-analysis.js';
 
 export interface SlackAnalysisSourceItem {
   request: SlackCollectedRequest;
@@ -17,6 +19,11 @@ export interface SlackAnalysisSource {
 const fail = (): never => { throw new HarnessError('SLACK_ANALYSIS_SOURCE_INVALID'); };
 const timestamp = (value: unknown): value is string => typeof value === 'string'
   && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+const isHash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
+export const matchesReportedSource = (request: SlackCollectedRequest, record: SlackAnalysisRecord, config: SlackReceiverConfig): boolean =>
+  request.status === 'RECORDED' && request.thread?.complete === true && request.thread.reason === null && request.failureCode === null
+  && request.revision === record.revision && request.receiverHash === hashSlackAnalysisReceiver(config, request.listItemId)
+  && (request.sourceHash === record.sourceHash || request.legacySourceHash === record.sourceHash);
 const channelRows = `SELECT r.workspace_id, r.channel_id, NULL AS item_id, NULL AS thread_ts, r.message_ts, r.payload, r.expires_at, i.received_at
   FROM slack_requests r JOIN slack_inbox i ON i.workspace_id = r.workspace_id AND i.event_id = json_extract(r.payload, '$.eventId')
   WHERE r.payload IS NOT NULL AND r.workspace_id = ? AND r.expires_at > ?`;
@@ -24,9 +31,7 @@ const listRows = `SELECT workspace_id, list_id AS channel_id, item_id, thread_ts
   FROM slack_list_analysis_requests WHERE payload IS NOT NULL AND workspace_id = ? AND expires_at > ? AND target_id = ?`;
 const readRecord = (row: Record<string, unknown> | undefined): SlackAnalysisSourceItem | null => {
   if (!row) return null;
-  // 목록 스냅샷은 제한된 전체 스레드와 그 안의 멘션 원문을 함께 저장한다.
-  const maxPayloadBytes = row.item_id === null ? 131_072 : 2 * 65_536 + 4_096;
-  if (typeof row.payload !== 'string' || Buffer.byteLength(row.payload) > maxPayloadBytes
+  if (typeof row.payload !== 'string' || Buffer.byteLength(row.payload) > 8192
     || !timestamp(row.expires_at) || !timestamp(row.received_at)) return fail();
   try {
     const request = JSON.parse(row.payload) as SlackCollectedRequest;
@@ -37,6 +42,11 @@ const readRecord = (row: Record<string, unknown> | undefined): SlackAnalysisSour
       || ![request.messageTs, request.threadTs, request.revision].every(value => typeof value === 'string' && /^\d{1,20}\.\d{1,10}$/u.test(value))
       || row.workspace_id !== request.workspaceId || row.channel_id !== request.channelId || row.message_ts !== request.messageTs
       || (row.item_id === null ? Object.hasOwn(request, 'listItemId') : row.item_id !== request.listItemId || row.thread_ts !== request.threadTs)
+      || request.text !== '' || (request.thread !== null && (!Array.isArray(request.thread?.messages) || request.thread.messages.length !== 0))
+      || (request.sourceHash !== undefined && !isHash(request.sourceHash))
+      || (request.receiverHash !== undefined && !isHash(request.receiverHash))
+      || (request.legacySourceHash !== undefined && !isHash(request.legacySourceHash))
+      || (request.messageCount !== undefined && (!Number.isSafeInteger(request.messageCount) || request.messageCount < 0))
       || !['RECEIVED', 'RECORDED', 'INVALIDATED', 'BLOCKED'].includes(request.status)
       || !timestamp(request.updatedAt)) return fail();
     return { request, receivedAt: row.received_at, expiresAt: row.expires_at };
@@ -68,7 +78,8 @@ export class SqliteSlackAnalysisSource implements SlackAnalysisSource {
     const params: string[] = [];
     if (channelIds.length) {
       queries.push(`${channelRows} AND i.received_at >= ? AND r.channel_id IN (${channelIds.map(() => '?').join(',')})
-        AND json_extract(r.payload, '$.status') = 'RECORDED'`);
+        AND (json_extract(r.payload, '$.status') = 'RECORDED' OR
+          (json_extract(r.payload, '$.status') = 'BLOCKED' AND json_extract(r.payload,'$.failureCode') = 'SLACK_ANALYSIS_QUEUE_FULL'))`);
       params.push(workspaceId, now.toISOString(), since.toISOString(), ...channelIds);
     }
     if (listIds.length) {

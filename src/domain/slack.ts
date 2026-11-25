@@ -59,6 +59,11 @@ export interface SlackCollectedRequest {
   thread: SlackThreadSnapshot | null;
   updatedAt: string;
   failureCode: string | null;
+  /** 수신 기록에만 보관하는 검증값과 수집 건수. 모델로 보내는 스냅샷에는 넣지 않는다. */
+  sourceHash?: string;
+  receiverHash?: string;
+  legacySourceHash?: string;
+  messageCount?: number;
 }
 
 export interface SlackConnectionState {

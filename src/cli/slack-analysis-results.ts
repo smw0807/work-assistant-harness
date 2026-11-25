@@ -1,9 +1,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { SqliteSlackAnalysisStore } from '../adapters/sqlite-slack-analysis.js';
-import { SqliteSlackAnalysisSource } from '../adapters/slack-analysis-source.js';
+import { matchesReportedSource, SqliteSlackAnalysisSource } from '../adapters/slack-analysis-source.js';
 import { getSlackListIds } from '../domain/slack.js';
-import { hashSlackAnalysisSource } from '../policy/slack-analysis.js';
 import type { SlackWorkerOptions } from './slack.js';
 
 /** Read existing local results without opening the model configuration or loading credentials. */
@@ -27,9 +26,7 @@ export const appendSlackAnalysisResults = (output: string, options: SlackWorkerO
         ? source!.find(record.workspaceId, record.channelId, record.messageTs, now) : null;
       if (listSource && !current) return [];
       if (record.status === 'REPORTED') {
-        let valid = false;
-        try { valid = current !== null && hashSlackAnalysisSource(current.request, config) === record.sourceHash; }
-        catch { /* Edited, expired, or incomplete source invalidates a stored draft. */ }
+        const valid = current !== null && matchesReportedSource(current.request, record, config);
         if (!valid) record = store.invalidate(record.runId, now);
       }
       return [{ ...record, ...(listSource ? { listId: record.channelId, itemId: current?.request.listItemId, commentId: record.messageTs } : {}),

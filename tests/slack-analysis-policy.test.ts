@@ -39,6 +39,32 @@ const envelopeFor = (body: string): ReadonlyRelayDispatch => {
   return { requestEnvelope, requestBodyHash: hashReadonlyValue(body), requestEnvelopeHash: hashReadonlyRelayEnvelope(requestEnvelope) };
 };
 
+test('채널과 리스트의 200번째 메시지를 전송 및 답변 근거로 검증하고 201건과 바이트 초과 입력은 차단한다', () => {
+  for (const list of [false, true]) {
+    const scope: SlackReceiverConfig = { ...receiver, thread: { maxMessages: 200, maxPages: 20, maxBytes: 65_536 },
+      ...(list ? { listId: 'FTEST', listAnalysisEnabled: true } : {}) };
+    const input = request();
+    if (list) { input.channelId = 'FTEST'; input.listItemId = 'RecTEST'; }
+    const messages = input.thread!.messages;
+    for (let i = messages.length + 1; i <= 200; i++) {
+      messages.push({ ts: `1795000000.${String(i).padStart(6, '0')}`, user: 'U_SYNTH', text: '작업 일정 확인' });
+    }
+    const result = buildSlackAnalysisPayload(input, scope, config);
+    assert.equal(result.evidence.length, 200);
+    assert.equal(hashSlackAnalysisSource(input, scope), result.sourceHash);
+    assertSlackAnalysisDispatch(result.dispatch, config);
+    const response = report();
+    response.facts[0]!.references[0]!.evidenceId = result.evidence[199]!.evidenceId;
+    assert.deepEqual(parseSlackAnalysisResponse(JSON.stringify(response), result), response);
+    const extra = { ts: '1795000000.000201', user: 'U_SYNTH', text: '추가' };
+    messages.push(extra);
+    failure(() => buildSlackAnalysisPayload(input, scope, config));
+    messages.pop();
+    messages[199]!.text = '가'.repeat(22_000);
+    failure(() => buildSlackAnalysisPayload(input, scope, config));
+  }
+});
+
 test('Slack-only payload binds current source, fixed relay profile and virtual message-line citations', () => {
   const result = payload(); assertSlackAnalysisDispatch(result.dispatch, config);
   assert.equal(result.source.revision, request().revision); assert.equal(result.evidence[1]!.endLine, 2);

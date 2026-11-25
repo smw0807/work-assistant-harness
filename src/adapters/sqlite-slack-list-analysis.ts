@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import type { SlackCollectedRequest, SlackListAnalysisThread } from '../domain/slack.js';
+import type { SlackCollectedRequest, SlackListAnalysisThread, SlackReceiverConfig } from '../domain/slack.js';
 import { isSlackTimestamp } from '../policy/slack-timestamp.js';
+import { slackRequestMetadata, slackThreadHash, slackThreadTimestamps } from './slack-source-metadata.js';
 
 export type ListScope = readonly [workspaceId: string, listId: string, targetUserId: string];
 
 /** 수신함의 트랜잭션에 참여해 새 멘션과 분석 요청을 함께 기록한다. */
 export class SqliteSlackListAnalysis {
-  constructor(private readonly database: DatabaseSync) {
+  constructor(private readonly database: DatabaseSync, private readonly config: SlackReceiverConfig, private readonly sessionId: string) {
     database.exec(`
       CREATE TABLE IF NOT EXISTS slack_list_analysis_requests (
         workspace_id TEXT NOT NULL, list_id TEXT NOT NULL, target_id TEXT NOT NULL,
@@ -33,9 +34,9 @@ export class SqliteSlackListAnalysis {
       text: '', thread: null, updatedAt: nowIso,
     };
     this.database.prepare(`INSERT INTO slack_list_analysis_requests
-      (workspace_id, list_id, target_id, item_id, message_ts, thread_ts, received_at, expires_at, payload)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
-      .run(...scope, itemId, messageTs, request.threadTs, nowIso, new Date(expires).toISOString(), JSON.stringify(request));
+      (workspace_id, list_id, target_id, item_id, message_ts, thread_ts, received_at, expires_at, payload, receiver_session)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
+      .run(...scope, itemId, messageTs, request.threadTs, nowIso, new Date(expires).toISOString(), JSON.stringify(request), binding ? this.sessionId : null);
   }
 
   find(scope: ListScope, messageTs: string, now: number): SlackCollectedRequest | null {
@@ -53,27 +54,30 @@ export class SqliteSlackListAnalysis {
   }
 
   invalidateUnseenReplies(scope: ListScope, itemId: string, threadTs: string, replyTimestamps: readonly string[], now: number): void {
-    const rows = this.database.prepare(`SELECT message_ts, json_extract(payload, '$.thread.messages') AS messages
+    const rows = this.database.prepare(`SELECT message_ts, thread_timestamps
       FROM slack_list_analysis_requests WHERE workspace_id = ? AND list_id = ? AND target_id = ?
       AND item_id = ? AND thread_ts = ? AND expires_at > ? AND json_extract(payload, '$.status') = 'RECORDED'`)
       .all(...scope, itemId, threadTs, new Date(now).toISOString());
     for (const row of rows) {
-      const messages = JSON.parse(String(row.messages)) as { ts: string }[];
-      const known = new Set(messages.map(message => message.ts));
+      const known = new Set(JSON.parse(String(row.thread_timestamps ?? '[]')) as string[]);
       if (replyTimestamps.some(ts => !known.has(ts))) {
         this.invalidate(scope, 'SLACK_LIST_THREAD_CHANGED', now, itemId, String(row.message_ts));
       }
     }
   }
 
-  refresh(scope: ListScope, itemId: string, threadTs: string, snapshot: SlackListAnalysisThread, now: number): void {
-    const rows = this.database.prepare(`SELECT rowid, payload FROM slack_list_analysis_requests
+  refresh(scope: ListScope, itemId: string, threadTs: string, snapshot: SlackListAnalysisThread, now: number): SlackCollectedRequest[] {
+    const rows = this.database.prepare(`SELECT rowid, payload, thread_hash, receiver_session FROM slack_list_analysis_requests
       WHERE workspace_id = ? AND list_id = ? AND target_id = ? AND item_id = ? AND thread_ts = ? AND expires_at > ?
       AND json_extract(payload, '$.status') IN ('RECEIVED','RECORDED')`).all(...scope, itemId, threadTs, new Date(now).toISOString());
     const { thread, mentionTs } = snapshot;
     const mentions = new Set(mentionTs);
     const messages = new Map(thread.messages.map(message => [message.ts, message]));
-    const update = this.database.prepare('UPDATE slack_list_analysis_requests SET payload = ? WHERE rowid = ?');
+    const digest = slackThreadHash(thread);
+    const timestamps = slackThreadTimestamps(thread);
+    const update = this.database.prepare(`UPDATE slack_list_analysis_requests
+      SET payload = ?, thread_hash = ?, thread_timestamps = ?, receiver_session = NULL WHERE rowid = ?`);
+    const eligible: SlackCollectedRequest[] = [];
     for (const row of rows) {
       const request = JSON.parse(String(row.payload)) as SlackCollectedRequest;
       const message = messages.get(request.messageTs);
@@ -82,7 +86,7 @@ export class SqliteSlackListAnalysis {
       else if (thread.messages[0]?.ts !== threadTs) reason = 'SLACK_LIST_THREAD_MISMATCH';
       else if (!mentions.has(request.messageTs) || !message || message.user === scope[2]) reason = 'REQUEST_MENTION_REMOVED';
       else if (request.status === 'RECORDED') {
-        if (JSON.stringify(request.thread) === JSON.stringify(thread)) continue;
+        if (row.thread_hash === digest) continue;
         reason = 'SLACK_LIST_THREAD_CHANGED';
       }
       if (reason || !message) {
@@ -97,18 +101,32 @@ export class SqliteSlackListAnalysis {
         request.thread = thread;
       }
       request.updatedAt = new Date(now).toISOString();
-      update.run(JSON.stringify(request), row.rowid!);
+      const metadata = slackRequestMetadata(request, this.config);
+      update.run(JSON.stringify(metadata), request.thread ? digest : null, request.thread ? timestamps : null, row.rowid!);
+      if (metadata.sourceHash && row.receiver_session === this.sessionId) eligible.push(request);
     }
+    return eligible;
   }
 
   invalidate(scope: ListScope, reason: string, now: number, itemId?: string, messageTs?: string, pendingOnly = false): void {
-    this.database.prepare(`UPDATE slack_list_analysis_requests SET payload = json_set(payload,
+    this.database.prepare(`UPDATE slack_list_analysis_requests SET thread_hash = NULL, thread_timestamps = NULL, receiver_session = NULL,
+      payload = json_set(json_remove(payload, '$.sourceHash', '$.legacySourceHash', '$.receiverHash', '$.messageCount'),
       '$.status', CASE WHEN json_extract(payload, '$.status') = 'RECEIVED' THEN 'BLOCKED' ELSE 'INVALIDATED' END,
       '$.failureCode', ?, '$.thread', NULL, '$.text', '', '$.updatedAt', ?)
       WHERE workspace_id = ? AND list_id = ? AND target_id = ? AND (? IS NULL OR item_id = ?)
       AND (? IS NULL OR message_ts = ?) AND json_extract(payload, '$.status') IN ('RECEIVED', ?)`)
       .run(reason, new Date(now).toISOString(), ...scope, itemId ?? null, itemId ?? null, messageTs ?? null, messageTs ?? null,
         pendingOnly ? 'RECEIVED' : 'RECORDED');
+  }
+
+  blockDelivery(scope: ListScope, request: SlackCollectedRequest): void {
+    this.database.prepare(`UPDATE slack_list_analysis_requests SET thread_hash = NULL, thread_timestamps = NULL,
+      payload = json_set(json_remove(payload, '$.sourceHash', '$.receiverHash', '$.messageCount'), '$.status', 'BLOCKED',
+        '$.failureCode', 'SLACK_ANALYSIS_QUEUE_FULL', '$.thread', NULL)
+      WHERE workspace_id = ? AND list_id = ? AND target_id = ? AND item_id = ? AND message_ts = ?
+      AND json_extract(payload, '$.eventId') = ? AND json_extract(payload, '$.revision') = ?
+      AND json_extract(payload, '$.status') = 'RECORDED'`)
+      .run(...scope, request.listItemId!, request.messageTs, request.eventId, request.revision);
   }
 
   prune(now: number): number {

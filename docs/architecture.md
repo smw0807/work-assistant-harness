@@ -33,7 +33,7 @@
   → private 분석 DB → slack-list / slack-inspect 로컬 조회
 ```
 
-Slack 자동 분석은 `slack-listen --env` 또는 `--env-file <private-env>`에서 명시적으로 켠다. 부모가 기존 runtime lease를 유지하고 수신 worker와 분석 controller를 함께 감독한다. 분석 controller의 설정·native 바이너리 정적 검사가 끝난 뒤 수신을 시작하며, Slack 토큰은 수신 worker에만 전달한다. 분석은 inbox의 읽기 전용 연결로 현재 세션의 완전한 문맥을 읽고 별도 `slack-analysis.sqlite`에서 revision별 단건 claim·하루 시도 한도·보고서·무효화를 관리한다. ACK 경로와 모델 호출은 분리된다.
+Slack 자동 분석은 `slack-listen --env` 또는 `--env-file <private-env>`에서 명시적으로 켠다. 부모가 기존 runtime lease를 유지하고 수신 worker와 분석 controller를 함께 감독한다. 분석 controller의 설정·native 바이너리 정적 검사가 끝난 뒤 수신을 시작하며, Slack 토큰은 수신 worker에만 전달한다. 분석은 현재 세션의 마스킹된 전체 문맥을 메모리로 전달받는다. 읽기 전용 inbox 연결로 수신 상태·입력 해시를 대조하고 별도 `slack-analysis.sqlite`에서 revision별 단건 claim·하루 시도 한도·보고서·무효화를 관리한다. ACK 경로와 모델 호출은 분리된다.
 
 새 `slack-mention-analysis-v1` 입력 계약은 Slack 메시지·timestamp 근거만 전달한다. 기존 Codex relay의 고정 profile·예산·native sandbox·broker를 재사용하고 기존 회사/합성 입력 계약은 변경하지 않는다. native 전용 환경에 Slack 토큰을 넘기지 않으며 모델에게 회사 경로·도구·실행·Slack 답장 권한을 주지 않는다. 로컬 조회는 Codex 없이 저장된 결과를 현재 수신 기록과 대조한다. 지원 native 버전과 읽기 권한·한도는 [자동 분석 보안 경계](security-and-approval.md#멘션스레드의-자동-codex-분석), 실제 검증과 미실행 범위는 [Slack 자동 분석 결과](history/slack-mention-analysis-result.md)를 따른다.
 
@@ -93,13 +93,13 @@ private 등록·수정안 → company-apply-plan → 소유자의 별도 승인
 
 위 조사 흐름과 별도로 단계 2는 수집만 처리한다. 실제 형식의 메시지를 기존 fixture 모델·합성 저장소 조사에 자동 연결하지 않는다.
 
-수신 worker는 설정한 순서대로 최대 10개 리스트를 내보내고, 첫 성공 시 리스트별 기준점을 만든다. 다음 내보내기까지 5분 동안 등록된 항목의 스레드를 한 페이지씩 순회한다. 항목별로 마지막으로 저장한 답글 다음부터 조회하며, SQLite에 페이지의 댓글과 마지막 답글 시각을 함께 기록한다. 두 경로가 같은 댓글 식별자를 사용해 새 직접 멘션을 한 번만 알린다. 리스트 분석을 켜면 새 멘션이 속한 항목의 전체 스레드를 같은 토큰으로 수집한다. 분석기는 채널 소켓 연결 여부와 독립적으로 해당 리스트의 수신 기록을 읽고, 채널 분석과 같은 실행 한도와 결과 저장소를 사용한다. [리스트 댓글 멘션 감시](guides/slack.md#리스트-댓글-멘션-감시)
+수신 worker는 설정한 순서대로 최대 10개 리스트를 내보내고, 첫 성공 시 리스트별 기준점을 만든다. 다음 내보내기까지 5분 동안 등록된 항목의 스레드를 한 페이지씩 순회한다. 항목별로 마지막으로 저장한 답글 다음부터 조회하며, SQLite에 해당 페이지의 댓글 ID와 마지막 답글 시각을 함께 기록한다. 두 경로가 같은 댓글 식별자를 사용해 새 직접 멘션을 한 번만 알린다. 리스트 분석을 켜면 새 멘션이 속한 항목의 전체 스레드를 같은 토큰으로 수집한다. 분석기는 채널 소켓 연결 여부와 독립적으로 전체 문맥과 수신 기록을 대조하고, 채널 분석과 같은 실행 한도와 결과 저장소를 사용한다. [리스트 댓글 멘션 감시](guides/slack.md#리스트-댓글-멘션-감시)
 
 ```text
 실수신: auth.test workspace 확인 → Socket Mode
 합성 입력: 로컬 Socket 프레임
   → 크기·구조·workspace·channel·이벤트 유형 확인
-  → 저장 전 비밀·지원 개인정보 패턴 마스킹
+  → 메모리에서 비밀·지원 개인정보 패턴 마스킹
   → SQLite inbox·이벤트 중복 키 commit
   → envelope_id ACK
   → 제한된 스레드 수집
@@ -112,7 +112,7 @@ Socket Mode의 `envelope_id`는 전달별 ACK에만 쓰고, `event_id`는 중복
 
 수신부만 토큰과 네트워크를 가진다. 기존 조사 worker의 네트워크·child process 차단은 유지한다. `liveReadEnabled` 기본값은 `false`이며 실제 계정·채널·자료 정책이 별도로 승인된 뒤에만 연결한다. `fetch`·`WebSocket`을 사용하는 읽기 어댑터를 두며 Slack 쓰기 API·외부 모델·대상 코드 실행 포트는 연결하지 않는다.
 
-스레드 페이지·메시지·바이트·시간과 재시도에 한도를 적용하고, 부분 조회·권한 오류·재연결 공백을 로컬 결과에 표시한다. 연결·공백 이력은 최근 100개를 DB에 보관하며 재연결이 메시지 전량 보존을 보장하지는 않는다. 마스킹한 본문·문맥 payload는 기한 후 제거하고 중복 키·revision·tombstone은 DB 수명 동안 유지한다. DB 폐기 후에는 과거 중복·순서 보존을 보장하지 않는다. 종료 시 후속 I/O를 정리한 뒤 DB를 닫는다. 상세 조건은 [단계 2 계획](implementation-plan.md#단계-2-slack-읽기-연결)을 따른다.
+스레드 페이지·메시지·바이트·시간과 재시도에 한도를 적용하고, 부분 조회·권한 오류·재연결 공백을 로컬 결과에 표시한다. 연결·공백 이력은 최근 100개를 DB에 보관하며 재연결이 메시지 전량 보존을 보장하지는 않는다. 메시지 본문과 전체 문맥은 메모리에서만 처리한다. 수신 기록에는 ID·시각·메시지 수·해시를 보관하고 중복 키·revision·tombstone은 DB 수명 동안 유지한다. DB 폐기 후에는 과거 중복·순서 보존을 보장하지 않는다. 종료 시 후속 I/O를 정리한 뒤 DB를 닫는다. 상세 조건은 [단계 2 계획](implementation-plan.md#단계-2-slack-읽기-연결)을 따른다.
 
 ### 분류와 조사
 
@@ -477,7 +477,7 @@ work-assistant-harness/
 - **Plan:** 버전, 요청 메시지 revision, 목적, 허용 파일·동작·검사와 계획 해시.
 - **Approval:** OS 소유자, 작업, 불변 계획 스냅샷·해시·요청 revision·저장소·기준 커밋, 실행 정책, 생성·만료·사용·취소 기록. 단계 3-A의 실행 정책은 `approval-only-v1`, 사용 시각은 `null`이다.
 - **Evidence / Run:** 파일 근거, 실제 diff, 검사별 결과와 실패·미실행 사유.
-- **Slack inbox / collection:** 이벤트 중복 키, 원본 메시지·revision, 수집 상태, 마스킹한 최소 문맥, 보관 만료와 분석 미실행 사유. 기존 Task의 조사 상태와 구분한다.
+- **Slack inbox / collection:** 이벤트 중복 키, 원본 메시지·revision, 수집 상태, 메시지 수·시각·검증 해시, 보관 만료와 분석 미실행 사유. 기존 Task의 조사 상태와 구분한다.
 - **Slack analysis:** 별도 `slack-analysis.sqlite`의 메시지/revision·입력/설정 hash·시도·보고서·무효화 기록. 원문 본문을 중복 저장하지 않고 보관 기한과 중복 방지 metadata를 구분한다. 호출 중 active marker와 정리 불확실 시 시작 차단은 [자동 분석 보안 경계](security-and-approval.md#멘션스레드의-자동-codex-분석)를 따른다.
 - **Company apply:** 전용 private runtime의 위치 binding·계획·승인·claim·worker marker·본문 없는 journal. 부분 기록은 소비를 되돌리지 않으며 자동 재개·정리를 하지 않는다.
 - **Sandbox verification:** 정책·daemon·이미지 identity, probe별 결과와 실패 사유, 보호 영역 전후 상태와 종료·제거 확인. `sandbox-checks/<verificationId>/report.json`에 저장하며 Task·Approval·Run과 연결하지 않는다.

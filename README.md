@@ -60,7 +60,7 @@ pnpm harness slack-listen --env-file /absolute/private/slack.env --data-dir /abs
 
 터미널에서 실행 상태를 유지하며 `Ctrl+C`로 종료합니다. `pnpm start`는 `package.json`의 `--env-file`에 지정된 `slack.env`만 읽습니다. 같은 파일에 `SLACK_LIST_ID`를 여러 줄 쓰면 마지막 값이 적용되므로 모든 ID를 한 줄에 넣고 재시작하세요.
 
-시작 로그의 `listIds`에서 감시 대상을 확인하세요. 수신기는 지정한 순서로 리스트를 조회하며, 한 리스트에서 오류가 나도 다음 리스트로 진행합니다. 첫 내보내기에 성공하면 해당 리스트의 기준점을 기록합니다. 이후 내보내기 순회 사이의 5분 동안 항목별 스레드에서 마지막으로 저장한 답글 이후를 직접 조회합니다. 새 답글이 `SLACK_TARGET_USER_ID`를 직접 멘션하면 두 경로를 통틀어 한 번만 `slack-list-poll`의 `mention` 이벤트를 출력합니다. 직접 조회에서 발견한 이벤트에는 `source: "thread"`가 표시되며, `slack-list`의 `listMentions`에서 마스킹한 발췌문을 볼 수 있습니다. [권한과 오류 확인 방법](docs/guides/slack.md#리스트-댓글-멘션-감시)
+시작 로그의 `listIds`에서 감시 대상을 확인하세요. 수신기는 지정한 순서로 리스트를 조회하며, 한 리스트에서 오류가 나도 다음 리스트로 진행합니다. 첫 내보내기에 성공하면 해당 리스트의 기준점을 기록합니다. 이후 내보내기 순회 사이의 5분 동안 항목별 스레드에서 마지막으로 저장한 답글 이후를 직접 조회합니다. 새 답글이 `SLACK_TARGET_USER_ID`를 직접 멘션하면 두 경로를 통틀어 한 번만 `slack-list-poll`의 `mention` 이벤트를 출력합니다. 직접 조회에서 발견한 이벤트에는 `source: "thread"`가 표시되며, `slack-list`의 `listMentions`에서 항목·댓글 ID와 감지 시각을 볼 수 있습니다. [권한과 오류 확인 방법](docs/guides/slack.md#리스트-댓글-멘션-감시)
 
 ### 3. 로컬 결과 확인
 
@@ -72,7 +72,7 @@ pnpm harness slack-inspect <channel-id> <message-ts> --env-file /absolute/privat
 pnpm harness slack-inspect <list-id> <comment-ts> --env-file /absolute/private/slack.env --data-dir /absolute/private/slack-data
 ```
 
-`slack-list`는 요청별 분석 상태를, `slack-inspect`는 수집 문맥과 분석 결과를 보여 줍니다. 이번 세션에 받은 완전한 스레드만 분석하며 같은 revision은 한 번만 시도합니다. 동시 분석은 1건, runtime별 UTC 하루 최대 20시도이고 실패 후 자동 재시도는 없습니다. 과거 메시지나 연결이 끊긴 동안의 누락을 자동으로 채우지 않습니다.
+`slack-list`는 요청별 분석 상태를, `slack-inspect`는 ID·수집 상태와 유효한 분석 보고서를 보여 줍니다. 새 수신부터 Slack 메시지 본문과 스레드는 메모리에서만 처리하며, DB에는 시각·메시지 수·검증 해시 등 수신 기록을 남깁니다. 기본 스레드 상한은 루트 포함 200건, 20페이지, 65,536바이트입니다. 이전 수신 DB를 새 버전에서 처음 열면 기존 메시지 본문과 댓글 발췌문을 제거합니다. 이번 세션에 받은 완전한 스레드만 분석하며 같은 revision은 한 번만 시도합니다. 동시 분석은 1건, runtime별 UTC 하루 최대 20시도이고 실패 후 자동 재시도는 없습니다. 과거 메시지나 연결이 끊긴 동안의 누락을 자동으로 채우지 않습니다.
 
 본문 보관·중단 복구·수신 제한은 [Slack 가이드](docs/guides/slack.md), DB와 보고서 위치는 [로컬 데이터 가이드](docs/guides/local-runtime.md)를 참고하세요. 결과는 검토용 초안이며 의미적 정확성을 보장하지 않습니다.
 

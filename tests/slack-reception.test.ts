@@ -48,7 +48,8 @@ test('Slack 설정은 채널·자료 상한·명시적 live 설정만 받는다'
   for (const input of [null, { ...config, token: 'synthetic' }, { ...config, maxPending: 0 },
     { ...config, retentionHours: 169 }, { ...config, channelIds: [] }, { ...config, channelIds: ['C_ALLOWED', 'C_ALLOWED'] },
     { ...config, workspaceId: 'xapp-1-synthetic0123456789' },
-    { ...config, liveReadEnabled: 'true' }, { ...config, thread: { ...config.thread, maxPages: 11 } }]) {
+    { ...config, liveReadEnabled: 'true' }, { ...config, thread: { ...config.thread, maxPages: 21 } },
+    { ...config, thread: { ...config.thread, maxMessages: 201 } }, { ...config, thread: { ...config.thread, maxBytes: 65_537 } }]) {
     assert.throws(() => parseSlackReceiverConfig(input), { code: 'SLACK_INVALID_CONFIG' });
   }
 });
@@ -116,6 +117,26 @@ test('수신함이 가득 차면 ACK하지 않으며 중복 이벤트는 ACK하�
   await assert.rejects(service.receive(overflow, ack), { code: 'SLACK_INBOX_FULL' });
   assert.equal(acknowledgements, 2);
   assert.equal(inbox.pending().length, 1);
+});
+
+test('reader가 완료로 표시해도 수신기가 잘라낸 스레드는 분석기로 전달하지 않는다', async context => {
+  const directory = await temporaryDirectory(context);
+  const limited = { ...config, thread: { ...config.thread, maxMessages: 1 } };
+  const inbox = new SqliteSlackInbox(join(directory, 'tasks.sqlite'), limited, () => assert.fail('잘린 문맥 전달'));
+  context.after(() => inbox.close());
+  const entry = created('Ev_truncated', '<@U_OWNER> 합성 문의');
+  const message = entry.payload.event;
+  const service = new SlackReceptionService(limited, inbox, {
+    readThread: async () => ({ complete: true, reason: null, messages: [
+      { ts: message.ts, user: message.user, text: message.text },
+      { ts: '1700000001.000001', user: 'U_OTHER', text: '잘리는 답글' },
+    ] }),
+  }, () => now);
+  await service.receive(entry, async () => {});
+  await service.drain();
+  assert.equal(inbox.list()[0]?.thread?.complete, false);
+  assert.equal(inbox.list()[0]?.thread?.reason, 'SLACK_THREAD_MESSAGE_LIMIT');
+  assert.equal(inbox.list()[0]?.sourceHash, undefined);
 });
 
 test('분석 대신 문맥 수집 중 편집된 요청에 오래된 조회 결과를 덮어쓰지 않는다', async (context) => {

@@ -1,6 +1,8 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { HarnessError } from '../domain/errors.js';
 import { getSlackListIds, type SlackReceiverConfig } from '../domain/slack.js';
@@ -9,6 +11,7 @@ import { acquireRuntimeLease, assertSafeEventFile, defaultDataDirectory, prepare
 import { parseSlackEnvironment, readSlackEnvironmentFile, type SlackEnvironmentSettings } from './slack-environment.js';
 import { runSlackAnalysisPair } from './slack-analysis-supervisor.js';
 import { appendSlackAnalysisResults } from './slack-analysis-results.js';
+import { hasSlackSourceMigration } from '../adapters/slack-source-metadata.js';
 
 export interface SlackWorkerOptions {
   command: 'slack-replay' | 'slack-list' | 'slack-inspect' | 'slack-listen';
@@ -19,6 +22,7 @@ export interface SlackWorkerOptions {
   messageTs: string;
   config: SlackReceiverConfig;
   analysisConfigPath?: string;
+  analysisHandoff?: true;
 }
 
 export const slackUsage = 'pnpm harness slack-replay [--events <synthetic-json>] [--config <json> | --env | --env-file <private-env>] [--data-dir <private-directory>]\npnpm harness slack-list [--config <json> | --env | --env-file <private-env>] [--data-dir <private-directory>]\npnpm harness slack-inspect <channel-or-list-id> <message-ts> [--config <json> | --env | --env-file <private-env>] [--data-dir <private-directory>]\npnpm harness slack-listen (--config <json> | --env | --env-file <private-env>) [--data-dir <private-directory>]';
@@ -87,13 +91,23 @@ export const runSlackCommand = async (args: string[]): Promise<void> => {
     }
   }
   const readOnly = options.command === 'slack-list' || options.command === 'slack-inspect';
-  const releaseLease = readOnly ? () => {} : acquireRuntimeLease(options.dataDirectory);
+  // 기존 수신기가 본문을 쓰는 도중 조회 CLI가 스키마를 교체하지 않도록 이관 때만 실행 잠금을 공유한다.
+  let requiresLease = !readOnly;
+  if (readOnly) {
+    const file = join(options.dataDirectory, 'tasks.sqlite');
+    if (existsSync(file)) {
+      const database = new DatabaseSync(file, { readOnly: true });
+      try { requiresLease = !hasSlackSourceMigration(database); } finally { database.close(); }
+    } else requiresLease = true;
+  }
+  const releaseLease = requiresLease ? acquireRuntimeLease(options.dataDirectory) : () => {};
   try {
     const executable = await realpath(process.execPath);
     const permissions = ['--permission', safeReadFlag(sourceRoot), safeReadFlag(options.dataDirectory), `--allow-fs-write=${options.dataDirectory}`];
     if (options.eventsPath) permissions.push(safeReadFlag(options.eventsPath));
     if (live) permissions.push('--allow-net');
     const { analysisConfigPath, ...receiverOptions } = options;
+    if (live && analysisConfigPath) receiverOptions.analysisHandoff = true;
     const workerArgs = [...permissions, join(sourceRoot, 'dist', 'src', 'cli', 'slack-worker.js'), JSON.stringify(receiverOptions)];
     if (!live) {
       const output = execFileSync(executable, workerArgs, {

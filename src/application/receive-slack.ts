@@ -55,9 +55,12 @@ export class SlackReceptionService {
           }
           const read = await this.threads.readThread(event.channelId, event.threadTs, this.config.thread);
           if (this.signal?.aborted) throw new HarnessError('SLACK_COLLECTION_INTERRUPTED');
+          const truncated = read.messages.length > this.config.thread.maxMessages;
+          const reason = read.reason && /^[A-Z][A-Z0-9_]{1,80}$/.test(read.reason) ? read.reason
+            : read.complete && read.reason === null ? null : 'SLACK_THREAD_INCOMPLETE';
           snapshot = {
-            complete: read.complete,
-            reason: read.reason && /^[A-Z][A-Z0-9_]{1,80}$/.test(read.reason) ? read.reason : read.complete ? null : 'SLACK_THREAD_INCOMPLETE',
+            complete: read.complete && !truncated && reason === null,
+            reason: truncated ? 'SLACK_THREAD_MESSAGE_LIMIT' : reason,
             messages: read.messages.slice(0, this.config.thread.maxMessages).map((message) => ({
               ts: message.ts, user: message.user, text: redactSlackText(message.text),
             })),

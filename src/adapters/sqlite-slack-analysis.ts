@@ -13,7 +13,7 @@ import { assertRuntimeFile, runtimePathMetadata } from '../policy/runtime-path.j
 export const SLACK_ANALYSIS_FAILURE_CODES = ['SLACK_ANALYSIS_FAILED', 'SLACK_ANALYSIS_BLOCKED', 'SLACK_ANALYSIS_INVALIDATED',
   'SLACK_ANALYSIS_INTERRUPTED', 'SLACK_ANALYSIS_EXPIRED', 'SLACK_ANALYSIS_INCOMPLETE_THREAD', 'SLACK_ANALYSIS_SOURCE_CHANGED',
   'SLACK_ANALYSIS_CONNECTION_GAP', 'SLACK_ANALYSIS_INVALID_INPUT', 'SLACK_ANALYSIS_MODEL_FAILED', 'SLACK_ANALYSIS_INVALID_RESPONSE',
-  'SLACK_ANALYSIS_CANCELLED', 'SLACK_ANALYSIS_SCOPE_CHANGED'] as const;
+  'SLACK_ANALYSIS_CANCELLED', 'SLACK_ANALYSIS_SCOPE_CHANGED', 'SLACK_ANALYSIS_QUEUE_FULL'] as const;
 export type SlackAnalysisFailureCode = typeof SLACK_ANALYSIS_FAILURE_CODES[number];
 export type SlackAnalysisStatus = 'RUNNING' | 'REPORTED' | 'FAILED' | 'INVALIDATED' | 'INTERRUPTED' | 'BLOCKED';
 export interface SlackAnalysisBeginInput {
@@ -62,7 +62,8 @@ const nowIso = (now: Date): string => {
 };
 const sameIdentity = (a: Stats, b: Stats): boolean => a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.uid === b.uid && a.gid === b.gid;
 const normalizeTs = (value: string): string => { const [seconds, fraction] = value.split('.'); return `${BigInt(seconds!)}.${fraction!.padEnd(10, '0')}`; };
-const dedup = (input: SlackAnalysisBeginInput): string => hash([input.workspaceId, input.channelId, normalizeTs(input.messageTs), normalizeTs(input.revision)]);
+type RevisionKey = Pick<SlackAnalysisBeginInput, 'workspaceId' | 'channelId' | 'messageTs' | 'revision'>;
+const dedup = (input: RevisionKey): string => hash([input.workspaceId, input.channelId, normalizeTs(input.messageTs), normalizeTs(input.revision)]);
 const requestKey = (input: SlackAnalysisBeginInput): string => hash([input.workspaceId, input.channelId, input.messageTs, input.revision, input.sourceHash]);
 
 /** Check data descriptors before serialization so supplied getters or proxies cannot run inside a transaction. */
@@ -210,6 +211,13 @@ export class SqliteSlackAnalysisStore {
         return { kind: 'started', record: { ...record, report: null } };
       });
     } catch (error) { throw safeError(error); }
+  }
+
+  hasAttempt(input: RevisionKey, now: Date): boolean {
+    safeJson(input);
+    if (!readonlyExactKeys(input, ['workspaceId', 'channelId', 'messageTs', 'revision'])) fail('INVALID_INPUT');
+    if (!isId(input.workspaceId) || !isId(input.channelId) || !isTs(input.messageTs) || !isTs(input.revision)) fail('INVALID_INPUT');
+    return this.transaction(nowIso(now), () => !!this.database.prepare('SELECT 1 FROM slack_analysis_runs WHERE dedup_key = ?').get(dedup(input)));
   }
 
   finish(runId: string, input: SlackAnalysisFinishInput, now: Date): SlackAnalysisRecord {

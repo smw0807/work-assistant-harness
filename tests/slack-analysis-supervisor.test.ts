@@ -32,6 +32,9 @@ const fixture = async (context: TestContext): Promise<Fixture> => {
     process.on('disconnect', stop);
     mark('started');
     if (role === 'analysis') {
+      process.on('message', snapshot => {
+        if (snapshot.type === 'slack-analysis-snapshot' && snapshot.request.thread.messages[0].text === 'SYNTHETIC_IPC_BODY') mark('received');
+      });
       if (behavior === 'no-ready-exit') setTimeout(() => process.exit(0), 50);
       else if (behavior !== 'no-ready') setTimeout(() => {
         mark('ready'); process.send(behavior === 'invalid-ready' ? {ready:true, extra:true} : {ready:true});
@@ -41,6 +44,17 @@ const fixture = async (context: TestContext): Promise<Fixture> => {
           if (existsSync(join(directory, 'receiver.started'))) { clearInterval(wait); process.exit(19); }
         }, 20);
       }
+    } else if (behavior === 'snapshot' || behavior === 'invalid-snapshot') {
+      process.on('message', ack => {
+        if (ack.type === 'slack-analysis-forwarded') mark('ack');
+      });
+      process.send(behavior === 'invalid-snapshot' ? {type:'wrong'} : {type:'slack-analysis-snapshot',
+        request:{status:'RECORDED', thread:{complete:true, reason:null, messages:[{user:'UA',ts:'1.0',text:'SYNTHETIC_IPC_BODY'}]}}});
+      const wait = setInterval(() => {
+        if (existsSync(join(directory, 'analysis.received')) && existsSync(join(directory, 'receiver.ack'))) {
+          clearInterval(wait); process.exit(0);
+        }
+      }, 10);
     } else if (behavior === 'exit-normal' || behavior === 'exit-failure') {
       setTimeout(() => process.exit(behavior === 'exit-normal' ? 0 : 17), 80);
     }
@@ -95,6 +109,16 @@ test('분석 ready 이후에만 수신기를 시작하고 각 child에 필요한
   });
   const terminated = Number(await mark(setup, 'analysis', 'term'));
   assert.ok(Number(await mark(setup, 'analysis', 'closed')) - terminated >= 100);
+});
+
+test('준비된 분석기로 메모리 스냅샷을 보내고 수신기에 전달 완료를 알린다', async context => {
+  const setup = await fixture(context);
+  assert.equal(invoke(setup, 'snapshot', 'wait').outcome, 'resolved');
+  await mark(setup, 'analysis', 'received');
+  await mark(setup, 'receiver', 'ack');
+  const invalid = await fixture(context);
+  assert.equal(invoke(invalid, 'invalid-snapshot', 'wait').code, 'SLACK_ANALYSIS_PAIR_FAILED');
+  await assert.rejects(mark(invalid, 'analysis', 'received'), { code: 'ENOENT' });
 });
 
 test('수신기 비정상 종료는 분석기도 멈추고 close를 기다린 뒤 고정 실패를 반환한다', async context => {

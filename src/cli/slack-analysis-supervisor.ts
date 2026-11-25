@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { HarnessError } from '../domain/errors.js';
+import { isSlackSnapshotMessage } from './slack-analysis-ipc.js';
 
 const shutdownGraceMs = 6500;
 const readyTimeoutMs = 15_000;
@@ -91,7 +92,20 @@ export const runSlackAnalysisPair = async (
       }
       if (readyTimer) clearTimeout(readyTimer);
       try {
-        startChild(receiverArgs, receiverEnv);
+        const receiver = startChild(receiverArgs, receiverEnv);
+        receiver?.process.on('message', (snapshot: unknown) => {
+          if (stopping) return;
+          if (!isSlackSnapshotMessage(snapshot) || !analysis.process.connected) {
+            failed = true; stopChildren(); return;
+          }
+          analysis.process.send(snapshot, error => {
+            if (stopping) return;
+            if (error || !receiver.process.connected) { failed = true; stopChildren(); return; }
+            receiver.process.send({ type: 'slack-analysis-forwarded' }, ackError => {
+              if (ackError && !stopping) { failed = true; stopChildren(); }
+            });
+          });
+        });
         receiverStarted = true;
       } catch { failed = true; stopChildren(); }
     });

@@ -12,7 +12,7 @@ import { LocalReportSink } from '../adapters/local-report-sink.js';
 import { SlackReceptionService, type SlackThreadReader } from '../application/receive-slack.js';
 import { pollSlackLists } from '../application/poll-slack-list.js';
 import { HarnessError } from '../domain/errors.js';
-import { getSlackListIds, type SlackInbox } from '../domain/slack.js';
+import { getSlackListIds, type SlackCollectedRequest, type SlackInbox } from '../domain/slack.js';
 import { parseSlackReceiverConfig } from '../policy/slack-ingestion.js';
 import type { SlackWorkerOptions } from './slack.js';
 import { assertSlackReceiverPermissions } from './runtime.js';
@@ -49,10 +49,28 @@ const run = async (): Promise<void> => {
     readThread: async () => ({ messages: [], complete: false, reason: 'OFFLINE_NO_THREAD_SOURCE' }),
   };
   const databasePath = join(options.dataDirectory, 'tasks.sqlite');
+  let inFlight = 0;
+  const forwarded = (message: unknown): void => {
+    if (message && typeof message === 'object' && 'type' in message && message.type === 'slack-analysis-forwarded' && inFlight > 0) {
+      inFlight--;
+    }
+  };
+  const handoff = live && options.analysisHandoff && process.send ? (request: SlackCollectedRequest): boolean => {
+    if (!process.connected || controller.signal.aborted || inFlight >= options.config.maxPending) return false;
+    inFlight++;
+    process.send!({ type: 'slack-analysis-snapshot', request }, error => {
+      if (error) {
+        process.exitCode = 1;
+        controller.abort();
+      }
+    });
+    return true;
+  } : undefined;
+  if (handoff) process.on('message', forwarded);
   const application = await NestFactory.createApplicationContext({
     module: SlackReceiverModule,
     providers: [
-      { provide: INBOX, useFactory: () => new SqliteSlackInbox(databasePath, options.config) },
+      { provide: INBOX, useFactory: () => new SqliteSlackInbox(databasePath, options.config, handoff) },
       {
         provide: SlackReceptionService, inject: [INBOX],
         useFactory: (inbox: SlackInbox) => new SlackReceptionService(options.config, inbox, threads, () => new Date(), controller.signal),
@@ -72,7 +90,7 @@ const run = async (): Promise<void> => {
     process.stdout.write(`${JSON.stringify({
       ...value, dataDirectory: options.dataDirectory,
       checks: [
-        { name: 'analysis', status: 'not_run', reason: '이 수신 프로세스는 Slack 문맥만 기록합니다. 별도 Codex 분석 상태는 slack-analysis 이벤트와 slack-inspect 결과에서 확인합니다.' },
+        { name: 'analysis', status: 'not_run', reason: '수신기는 처리 기록을 저장하고 분석용 본문을 메모리로 전달합니다. 분석 상태는 slack-analysis 이벤트와 slack-inspect 결과에서 확인합니다.' },
         { name: 'external_message_delivery', status: 'not_run', reason: 'Slack 메시지·DM·Git 원격 전송 경로가 없습니다.' },
         { name: 'approval_and_execution', status: 'not_run', reason: '수집 경로는 승인과 실행을 제공하지 않으며 실행 포트는 계속 거부합니다.' },
       ],
@@ -174,6 +192,7 @@ const run = async (): Promise<void> => {
       if (drainFailure) throw drainFailure;
     } else throw new HarnessError('UNKNOWN_COMMAND');
   } finally {
+    if (handoff) process.off('message', forwarded);
     process.off('disconnect', parentDisconnected);
     tasks.close();
     inbox.close();

@@ -4,6 +4,6 @@
   "targetUserId": "U_OWNER",
   "retentionHours": 24,
   "maxPending": 100,
-  "thread": { "maxMessages": 30, "maxPages": 3, "maxBytes": 16384 },
+  "thread": { "maxMessages": 200, "maxPages": 20, "maxBytes": 65536 },
   "liveReadEnabled": false
 }

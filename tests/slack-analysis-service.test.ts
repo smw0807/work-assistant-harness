@@ -14,7 +14,7 @@ import type { SlackWorkerOptions } from '../src/cli/slack.js';
 import { HarnessError } from '../src/domain/errors.js';
 import type { ReadonlyReport } from '../src/domain/readonly-investigation.js';
 import type { ReadonlyRelayConfig, ReadonlyRelayDispatch } from '../src/domain/readonly-relay.js';
-import type { SlackReceiverConfig, SlackThreadSnapshot } from '../src/domain/slack.js';
+import type { SlackCollectedRequest, SlackReceiverConfig, SlackThreadSnapshot } from '../src/domain/slack.js';
 import type { ReadonlyRelayPort, ReadonlyRelayTransmissionResult } from '../src/ports/readonly-relay.js';
 import { hashReadonlyValue } from '../src/policy/readonly-investigation-policy.js';
 
@@ -65,7 +65,9 @@ const fixture = async (context: TestContext, settings: SlackReceiverConfig = rec
   await chmod(directory, 0o700);
   let clock = new Date(startedAt.getTime() + 2000), calls = 0, credentials = 0, transmissions = 0, acknowledgements = 0;
   const now = () => new Date(clock);
-  const inbox = new SqliteSlackInbox(join(directory, 'tasks.sqlite'), settings);
+  let listeningService: SlackAnalysisService | null = null;
+  let forwardSnapshot = (request: SlackCollectedRequest) => listeningService?.acceptSnapshot(request);
+  const inbox = new SqliteSlackInbox(join(directory, 'tasks.sqlite'), settings, request => forwardSnapshot(request));
   if (settings.channelIds.length) inbox.setConnection({ state: 'connected', reason: 'SYNTHETIC_CONNECTED', at: new Date(startedAt.getTime() + 1000).toISOString() });
   const store = new SqliteSlackAnalysisStore(join(directory, 'slack-analysis.sqlite'));
   const source = new SqliteSlackAnalysisSource(join(directory, 'tasks.sqlite'), settings);
@@ -89,6 +91,7 @@ const fixture = async (context: TestContext, settings: SlackReceiverConfig = rec
     const currentStore = reopened ? new SqliteSlackAnalysisStore(join(directory, 'slack-analysis.sqlite')) : store;
     if (reopened) closers.push(() => { currentSource.close(); currentStore.close(); });
     const service = new SlackAnalysisService(currentSource, currentStore, settings, config, model, sessionStart, notice => notices.push(notice), now);
+    listeningService = service;
     services.push(service); return service;
   };
   const service = serviceFor();
@@ -110,6 +113,7 @@ const fixture = async (context: TestContext, settings: SlackReceiverConfig = rec
   return { directory, now, inbox, store, source, reception, service, serviceFor, receive, assertReportRemoved, notices,
     setNow: (value: Date) => { clock = value; }, advance: () => { clock = new Date(clock.getTime() + 1000); },
     setSnapshot: (value: (ts: string) => SlackThreadSnapshot) => { snapshot = value; },
+    setHandoff: (value: (request: SlackCollectedRequest) => void) => { forwardSnapshot = value; },
     setBehavior: (value: ModelBehavior) => { behavior = value; },
     counts: () => ({ calls, credentials, transmissions, acknowledgements }) };
 };
@@ -128,6 +132,52 @@ test('complete reception runs one fake analysis and duplicate delivery or reopen
   const reopened = value.serviceFor(startedAt, true);
   assert.equal(reopened.recover(), 0); reopened.tick(); await reopened.waitForIdle();
   assert.equal(value.store.list(value.now()).length, 1); assert.equal(value.counts().calls, 1);
+});
+
+test('수신 메타데이터가 먼저 보이면 본문 도착을 기다리고 변조·중복·늦은 IPC를 처리하지 않는다', async context => {
+  const value = await fixture(context);
+  const messages: SlackCollectedRequest[] = [];
+  value.setHandoff(request => messages.push(request));
+  await value.receive();
+  const [snapshot] = messages;
+  assert.ok(snapshot);
+  const metadata = value.source.find(receiver.workspaceId, receiver.channelIds[0]!, messageTs, value.now())!.request;
+  assert.equal(metadata.text, ''); assert.deepEqual(metadata.thread?.messages, []); assert.equal(metadata.messageCount, 1);
+  value.service.tick(); assert.equal(value.store.list(value.now()).length, 0);
+  const forged = structuredClone(snapshot);
+  forged.text += ' 변경된 원문'; forged.thread!.messages[0]!.text = forged.text;
+  value.service.acceptSnapshot(forged); value.service.tick();
+  assert.equal(value.counts().calls, 0);
+  value.service.acceptSnapshot(snapshot); value.service.acceptSnapshot(snapshot);
+  value.service.tick(); await value.service.waitForIdle();
+  value.service.acceptSnapshot(snapshot); value.service.tick();
+  assert.equal(value.counts().calls, 1); assert.equal(value.store.list(value.now())[0]?.status, 'REPORTED');
+});
+
+test('메모리 큐의 상한을 초과한 멘션은 원문 없이 차단 상태를 남긴다', async context => {
+  const value = await fixture(context, { ...receiver, maxPending: 1 });
+  await value.receive(); await value.receive(created('1795000002.000001', 'Ev_OVERFLOW'));
+  assert.equal(value.store.list(value.now())[0]?.failureCode, 'SLACK_ANALYSIS_QUEUE_FULL');
+  value.service.tick(); await value.service.waitForIdle();
+  assert.equal(value.counts().calls, 1); assert.equal(value.store.list(value.now()).length, 2);
+});
+
+test('UTC 일일 한도에 도달하면 대기 본문을 버리고 다음 날 DB에서 복원하지 않는다', async context => {
+  const value = await fixture(context);
+  for (let index = 0; index < 20; index++) {
+    const result = value.store.begin({ workspaceId: receiver.workspaceId, channelId: receiver.channelIds[0]!,
+      messageTs: `1795100000.${String(index).padStart(6, '0')}`, revision: '1795100001.000000',
+      sourceHash: 'a'.repeat(64), policyHash: 'b'.repeat(64), scopeHash: 'c'.repeat(64),
+      expiresAt: new Date(value.now().getTime() + 86_400_000).toISOString() }, value.now());
+    assert.equal(result.kind, 'started');
+    value.store.finish(result.record.runId, { status: 'BLOCKED', failureCode: 'SLACK_ANALYSIS_INCOMPLETE_THREAD' }, value.now());
+  }
+  const delivered: SlackCollectedRequest[] = [];
+  value.setHandoff(request => { delivered.push(request); value.service.acceptSnapshot(request); });
+  await value.receive(); value.service.tick();
+  assert.equal(value.notices.at(-1)?.status, 'DAILY_LIMIT');
+  value.setNow(new Date(startedAt.getTime() + 86_400_000)); value.service.acceptSnapshot(delivered[0]!); value.service.tick();
+  assert.equal(value.counts().calls, 0); assert.equal(value.store.list(value.now()).length, 20);
 });
 
 const listId = 'FTESTLIST', itemId = 'RecSynthetic', threadTs = '1795000000.000000';
@@ -321,4 +371,15 @@ test('list and inspect read stored analysis without a model config and invalidat
   const stale = JSON.parse(appendSlackAnalysisResults('{}', options, value.now()));
   assert.equal(stale.analysis.results[0].status, 'INVALIDATED'); assert.equal(stale.analysis.results[0].report, null);
   value.assertReportRemoved(stale.analysis.results[0].runId); assert.equal(value.counts().calls, 1);
+});
+
+test('다른 멘션 대상의 설정으로 같은 채널을 조회해도 이전 사용자의 초안은 표시하지 않는다', async context => {
+  const value = await fixture(context);
+  await value.receive(); value.service.tick(); await value.service.waitForIdle();
+  const options: SlackWorkerOptions = { command: 'slack-inspect', sourceRoot: resolve('.'), dataDirectory: value.directory,
+    eventsPath: '', channelId: receiver.channelIds[0]!, messageTs, config: { ...receiver, targetUserId: 'U_DIFFERENT' } };
+  const output = appendSlackAnalysisResults('{}', options, value.now());
+  const result = JSON.parse(output).analysis.results[0];
+  assert.equal(result.status, 'INVALIDATED'); assert.equal(result.report, null);
+  assert.equal(output.includes(report().answerDraft), false);
 });

@@ -10,7 +10,7 @@ import { buildAnyReadonlyRelayRequestEnvelope, getAnyReadonlyRelayConfigHash, ge
 import { hashReadonlyRelayEnvelope } from './readonly-relay-policy.js';
 import { parseReadonlyTransportJson } from './readonly-transport-protocol.js';
 import { containsSensitiveText, redactSlackText } from './redaction.js';
-import { parseSlackReceiverConfig } from './slack-ingestion.js';
+import { parseSlackReceiverConfig, SLACK_THREAD_LIMITS } from './slack-ingestion.js';
 
 const fail: (suffix: string) => never = suffix => { throw new HarnessError(`SLACK_ANALYSIS_${suffix}`); };
 const sourceKeys = ['workspaceId', 'channelId', 'messageTs', 'threadTs', 'requesterId', 'targetUserId', 'revision', 'eventId', 'updatedAt'];
@@ -74,7 +74,7 @@ const validateSource: (value: unknown) => asserts value is SlackAnalysisSource =
     || tick(value.revision) < tick(value.messageTs)) fail('INVALID_SOURCE');
 };
 const validateEvidence: (value: unknown, source: SlackAnalysisSource) => asserts value is SlackAnalysisEvidence[] = (value, source) => {
-  if (!array(value, 100, 1)) fail('INVALID_EVIDENCE');
+  if (!array(value, SLACK_THREAD_LIMITS.maxMessages, 1)) fail('INVALID_EVIDENCE');
   let previous = -1n;
   for (const entry of value) {
     if (!record(entry, evidenceKeys) || !ts(entry.ts) || !id(entry.user)
@@ -123,6 +123,16 @@ const dispatchWire = (input: unknown) => {
   return { ...parseWire(inputText), body };
 };
 
+/** 채널 문맥은 채널 설정에, 리스트 문맥은 해당 항목과 리스트 설정에 묶는다. */
+export const hashSlackAnalysisReceiver = (config: SlackReceiverConfig, listItemId?: string): string => {
+  const receiver = receiverSnapshot(config);
+  if (listItemId !== undefined) return hashReadonlyValue(canonicalReadonlyJson({ receiver, listItemId }));
+  delete receiver.listId;
+  delete receiver.listIds;
+  delete receiver.listAnalysisEnabled;
+  return hashReadonlyValue(canonicalReadonlyJson(receiver));
+};
+
 /** Accepts only a recorded, complete and internally consistent current mention snapshot; never reads a repository. */
 const prepareSource = (request: SlackCollectedRequest, receiverInput: SlackReceiverConfig) => {
   try {
@@ -154,14 +164,7 @@ const prepareSource = (request: SlackCollectedRequest, receiverInput: SlackRecei
     validateEvidence(evidence, source);
     if (evidence.find(entry => entry.ts === source.messageTs)!.excerpt !== redactSlackText(request.text)
       || Buffer.byteLength(JSON.stringify(evidence.map(entry => ({ ts: entry.ts, user: entry.user, text: entry.excerpt })))) > receiver.thread.maxBytes) fail('SOURCE_MISMATCH');
-    // 채널의 기존 hash를 유지하고 리스트 항목 ID는 전송하는 대신 로컬 범위 hash에 결합한다.
-    const scope = isList ? { receiver, listItemId: request.listItemId } : receiver;
-    if (!isList) {
-      delete receiver.listId;
-      delete receiver.listIds;
-      delete receiver.listAnalysisEnabled;
-    }
-    const receiverHash = hashReadonlyValue(canonicalReadonlyJson(scope)), input = wireInput(source, evidence, receiverHash);
+    const receiverHash = hashSlackAnalysisReceiver(receiver, request.listItemId), input = wireInput(source, evidence, receiverHash);
     const inputText = canonicalReadonlyJson(input);
     if (Buffer.byteLength(inputText) > READONLY_LIMITS.inputBytes || containsSensitiveText(inputText)) fail('INPUT_LIMIT');
     return { source, evidence, receiverHash, sourceHash: input.sourceHash, inputText };

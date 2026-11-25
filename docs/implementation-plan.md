@@ -147,15 +147,15 @@ TypeScript와 NestJS로 집에서 만들고 회사에서 연결하는 승인 중
 - `message_changed`·`message_deleted`, 멘션 제거와 내용 변경은 연결된 기존 작업을 `CANCELLED`로 만들고 기존 계획·보고 자료를 제거한다. 승인 기능이 붙기 전에도 오래된 계획이 유효한 결과로 남지 않게 한다. [편집 이벤트](https://docs.slack.dev/reference/events/message/message_changed/), [삭제 이벤트](https://docs.slack.dev/reference/events/message/message_deleted/)
 - 같은 스레드의 다른 reply가 편집·삭제되면 확인된 cached·pending·진행 중 문맥과 연결된 기존 작업도 무효화한다. root를 알 수 없으면 같은 채널의 `RECEIVED`이면서 pending·processing인 수집을 보수적으로 차단하며, 관련성이 확인되지 않은 완료 수집은 유지한다. 이 때문에 무관한 진행 중 수집도 중단될 수 있다. 큐가 가득 차도 삭제·멘션 제거와 편집의 기존 계획 무효화는 반영한다. 보고서 파일은 DB의 취소 상태로 다시 쓰며, 쓰기 중 종료되면 다음 명령에서 복구한다.
 - 삭제·멘션 제거가 원문보다 먼저 도착해도 필요한 최소 tombstone을 남겨 오래된 원문을 거부한다. 변경 전 revision으로 시작한 스레드 수집의 늦은 결과도 최신 기록을 덮어쓰지 못하게 한다.
-- 마스킹한 본문·스레드 payload는 보관 기한 후 제거하되 이벤트 중복 키, 메시지 identity·revision과 삭제 marker는 DB 수명 동안 유지한다. 만료 뒤 같은 이벤트가 재전달되어도 본문을 되살리지 않는다. 최소 marker까지 삭제하거나 DB를 교체한 뒤에는 과거 이벤트의 중복 제거·순서 보존을 보장하지 않는다.
+- 메시지 본문과 스레드는 메모리에서 처리한다. 수신 DB에는 상태·ID·시각·해시를 기록하고 이벤트 중복 키, 메시지 identity·revision과 삭제 marker는 DB 수명 동안 유지한다. 같은 이벤트가 재전달되어도 중복 수집하지 않는다. 최소 marker까지 삭제하거나 DB를 교체한 뒤에는 과거 이벤트의 중복 제거·순서 보존을 보장하지 않는다.
 
 #### 문맥·개인정보·운영 한도
 
 - 스레드는 허용된 채널과 해당 thread만 조회한다. 페이지 수, 메시지 수, 본문·응답 바이트, 요청 시간과 재시도 횟수에 상한을 둔다. 한도·권한 부족·오류로 중단하면 불완전 수집임을 로컬 결과에 남긴다. [스레드 조회와 cursor](https://docs.slack.dev/reference/methods/conversations.replies/)
 - `429`의 `Retry-After`를 지키고 무한 재시도를 하지 않는다. 허용된 대기 한도보다 길거나 헤더가 잘못되면 안전하게 중단하여 사유를 기록한다. [Slack 속도 제한](https://docs.slack.dev/apis/web-api/rate-limits/)
 - 재연결에는 횟수·대기 한도를 둔다. 최근 100개 연결·공백 상태를 DB에 보관하고 disconnect부터 재연결까지는 누락 가능 구간으로 기록하며 전량 수집을 주장하지 않는다. 채널 전체 history를 자동 backfill하지 않는다. 종료 시 HTTP·대기·Socket·후속 작업을 취소·정리한 뒤 DB를 닫는다.
-- 알려진 비밀 패턴과 이메일·전화번호 등 지원하는 개인정보 패턴을 저장 전에 마스킹한다. 원문 프레임 전체나 불필요한 blocks·첨부파일은 보관하지 않는다. 패턴 마스킹을 모든 개인정보 판별이나 회사 정책 준수 검증으로 설명하지 않는다.
-- 마스킹한 메시지·스레드의 보관 기간은 `retentionHours` 1~168시간, 기본 24시간으로 제한하고 수신·조회·정리 시 만료 payload를 제거한다. 최소 marker는 계속 남으므로 DB 전체 크기는 보관 기한만으로 제한되지 않는다. 실제 보관 값과 DB 폐기 정책은 회사 정책에 맞추며, 예시 설정값을 운영 정책으로 간주하지 않는다. SQLite의 논리적 삭제는 백업·파일시스템·디스크에서의 물리적 완전 삭제를 보장하지 않는다. 별도로 내보내 저장한 CLI 출력은 사용자의 보관 정책을 따른다.
+- 알려진 비밀 패턴과 이메일·전화번호 등 지원하는 개인정보 패턴을 메모리에서 마스킹한다. 원문 프레임 전체나 불필요한 blocks·첨부파일은 보관하지 않는다. 패턴 마스킹을 모든 개인정보 판별이나 회사 정책 준수 검증으로 설명하지 않는다.
+- 수신 상태와 분석 원본 대조용 메타데이터의 보관 기간은 `retentionHours` 1~168시간, 기본 24시간으로 제한하고 수신·조회·정리 시 만료 payload를 제거한다. 최소 marker는 계속 남으므로 DB 전체 크기는 보관 기한만으로 제한되지 않는다. 실제 보관 값과 DB 폐기 정책은 회사 정책에 맞추며, 예시 설정값을 운영 정책으로 간주하지 않는다. SQLite의 논리적 삭제는 백업·파일시스템·디스크에서의 물리적 완전 삭제를 보장하지 않는다. 별도로 내보내 저장한 CLI 출력은 사용자의 보관 정책을 따른다.
 
 #### 앱 권한과 연결 전 확인
 
@@ -171,11 +171,11 @@ Socket Mode의 app-level 토큰에는 연결용 `connections:write`를 사용한
 
 2026-11-20의 명시 요청에 따라 기존 Codex 연결/native 실행으로 본인 멘션과 해당 스레드만 분석한다. 회사 코드 조사와 실제 파일 적용은 이번 범위에 포함하지 않는다.
 
-- 기존 JSON 수신 설정에 환경변수/명시적 private env-file을 추가한다. 허용 workspace·사용자·채널 ID를 정확히 지정하고 기존 상한을 유지한다. native 연결은 기존 private relay config를 재사용한다.
+- 기존 JSON 수신 설정에 환경변수/명시적 private env-file을 추가한다. 허용 workspace·사용자·채널 ID를 정확히 지정하고 스레드 기본 상한은 루트 포함 200건, 20페이지, 65,536바이트로 둔다. native 연결은 기존 private relay config를 재사용한다.
 - 수신과 분석 controller를 분리하고 설정/바이너리 정적 준비가 완료된 뒤 Socket 수신을 시작한다. 분석 controller에 Slack 토큰을 상속하지 않고 ACK는 모델 호출을 기다리지 않는다.
 - 현재 세션에 수신한 완전한 문맥만 새로운 `slack-mention-analysis-v1` 계약에 넣는다. 기존 Codex profile·예산·입출력 schema·격리/broker를 재사용하며 tools·repo access·실행·답장은 제공하지 않는다.
 - 별도 SQLite에서 revision별 1회·동시 1건·runtime별 UTC 하루 20시도·기간/범위/본문 hash·중단 상태를 관리한다. 편집/삭제/연결 공백은 진행 중 분석을 취소하고 오래된 결과를 무효화한다. 원본이 바뀌거나 분석이 실패해도 같은 revision을 자동 재전송하지 않는다.
-- 기존 `slack-list/inspect`에서 상태/보고서를 조회한다. 결과 본문은 원본 TTL과 최대24시간 중 짧은 기간만 보존하고 최소 중복 marker는 유지한다. 보고서에는 근거·불확실성과 답변 초안을 구분한다.
+- 기존 `slack-list/inspect`에서 상태/보고서를 조회한다. 결과 본문은 수신 기록의 보관 기한과 최대24시간 중 짧은 기간만 보존하고 최소 중복 marker는 유지한다. 보고서에는 근거·불확실성과 답변 초안을 구분한다.
 - 실제 receiver/inbox/store와 가짜 relay의 합성 통합, 환경/권한·native 입력 계약·중복·편집/삭제·만료·종료·재시작을 검증한다. 실제 Slack/native/모델 연결이 실행되지 않았다면 별도 `not_run`으로 보고한다. 결과는 [Slack 자동 분석 결과](history/slack-mention-analysis-result.md)에 둔다.
 
 2026-11-25 후속 요청은 리스트에서 직접 멘션된 항목의 스레드 전체 분석이다. 두 감지 경로의 중복, 기준점·재시작, 부분 조회, 후속 수정·삭제, 리스트 단독 실행 및 로컬 초안 조회를 합성 데이터로 검증한다. 설정과 사용법은 [Slack 실행 가이드](guides/slack.md#slack-본인-멘션-자동-분석)에 둔다.
@@ -1074,7 +1074,7 @@ MessageSource, ModelPort, RepoReadPort, ExecutionPort, ApprovalPort, ReportSink�
 ### 최소 데이터
 
 - Task: taskId, eventId, workspaceId, channelId, threadTs, requesterId, 분류, 상태, repoId, baseCommit, createdAt.
-- Slack inbox와 메시지 수집 기록: eventId, 원본 messageTs, revision, 수집 상태, 마스킹한 최소 본문·스레드, 보관 기한. envelopeId는 ACK용이며 이벤트나 원본 메시지의 식별자를 대신하지 않는다.
+- Slack inbox와 메시지 수집 기록: eventId, 원본 messageTs, revision, 수집 상태, 메시지 수·스레드 시각·입력 해시, 보관 기한. envelopeId는 ACK용이며 이벤트나 원본 메시지의 식별자를 대신하지 않는다.
 - 기존 Plan: planId, version, 원문 revision, 목적, allowedFiles, 변경 제안, testCommandIds, 위험, planHash. 구형 조사 계약의 allowedFiles는 읽기 근거에서 만들어지며 실행 권한으로 재사용하지 않는다.
 - 신규 읽기 전용 조사 Plan(4-C-5): repo/baseCommit/manifest, requestRevision, readAllowedFiles·readRanges, transferEvidenceIds·contextHash·inputHash, writeAllowedFiles=[], testCommandIds=[], executionAllowed=false, 모드·모델·목적지·정책·보관 기한·planHash. 내용 payload와 본문 없는 승인/감사 기록을 분리한다.
 - 후속 수정 계획의 설계 원칙: 읽기 범위에서 수정 범위를 복사하지 않고 소유자가 정한 writeAllowedFiles·정확한 patch·등록 명령을 별도 hash와 실행 승인에 묶는다. 이는 4-C-5에 실행 기능을 추가한다는 뜻이 아니다.

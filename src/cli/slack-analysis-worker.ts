@@ -15,6 +15,7 @@ import { parseReadonlyTransportJson } from '../policy/readonly-transport-protoco
 import { prepareDataDirectory } from './runtime.js';
 import { readSlackPrivateFile } from './slack-environment.js';
 import type { SlackWorkerOptions } from './slack.js';
+import { isSlackSnapshotMessage } from './slack-analysis-ipc.js';
 
 const run = async (): Promise<void> => {
   process.umask(0o077);
@@ -27,6 +28,12 @@ const run = async (): Promise<void> => {
   const controller = new AbortController(), stop = (): void => controller.abort();
   process.on('SIGTERM', stop); process.on('SIGINT', stop); process.on('disconnect', stop);
   let service: SlackAnalysisService | null = null;
+  let snapshotFailure: unknown;
+  const receiveSnapshot = (message: unknown): void => {
+    if (controller.signal.aborted || !isSlackSnapshotMessage(message)) return;
+    try { service?.acceptSnapshot(message.request); }
+    catch (error) { snapshotFailure = error; controller.abort(); }
+  };
   let source: SqliteSlackAnalysisSource | null = null;
   let store: SqliteSlackAnalysisStore | null = null;
   try {
@@ -56,6 +63,7 @@ const run = async (): Promise<void> => {
       notice => process.stdout.write(`${JSON.stringify(notice)}\n`));
     const recovered = service.recover();
     assertSlackAnalysisIdle(directory);
+    process.on('message', receiveSnapshot);
     process.stdout.write(`${JSON.stringify({ event: 'slack-analysis', status: 'ready', recovered,
       scope: 'mention-and-thread', maximumDailyAttempts: 20, concurrency: 1, retries: 0 })}\n`);
     process.send({ ready: true });
@@ -64,7 +72,9 @@ const run = async (): Promise<void> => {
       try { await delay(250, undefined, { signal: controller.signal }); }
       catch { if (!controller.signal.aborted) throw new HarnessError('SLACK_ANALYSIS_WAIT_FAILED'); }
     }
+    if (snapshotFailure) throw snapshotFailure;
   } finally {
+    process.off('message', receiveSnapshot);
     try { await service?.close(); }
     finally {
       source?.close(); store?.close();
